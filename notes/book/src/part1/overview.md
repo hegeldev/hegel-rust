@@ -145,8 +145,9 @@ replays a blob as a full run. [The C ABI and the frontend](abi-frontend.md)
 covers the break, the capture contract, and how the frontend builds reports.
 
 The code sits in six places: decision arithmetic in
-`hegel-c/src/native/nd/mod.rs` (pure, no engine state), the origin state
-machine in `nd/lifecycle.rs`, run orchestration with history and backtrack in
+`hegel-c/src/native/nd/mod.rs` (pure, no engine state), the per-origin failing
+test case — incumbent, pool, standing, evidence, history, budgets — in
+`counterexample.rs` (decision 73), run orchestration with the backtrack in
 `test_runner.rs`, persistence formats in `blob.rs`, the tree replacements in
 `exec_cache.rs`, and frontend reporting in `src/run_lifecycle.rs`.
 

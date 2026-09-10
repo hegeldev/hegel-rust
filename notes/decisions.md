@@ -804,3 +804,35 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     mFDR, not the per-origin rate, and needs its own calibration), a
     count-based doubling schedule (terminal stage still leaks unboundedly and
     it overcharges mid-anchor proposals). (DRM directed; review-refined.)
+
+## 2026-09-10
+
+73. **One type for a failing test case: `Counterexample`** (`native/counterexample.rs`).
+    The abstract algorithm's object — an origin's example is a pool of realized
+    executions plus the evidence about it — had no type: the incumbent lived in
+    `Engine.interesting` (as nodes, for the shrinker), the pool, standing, and
+    evidence in `OriginLifecycle` (`nd/lifecycle.rs`, as values), the pre-flip
+    history in `Engine.history`, the alpha budget in `Engine.gauntlet_spend`, the
+    first-check flag in `Engine.first_checked`, and `nd_state_for` glued incumbent
+    and pool together at every persist point (25 node→value conversions in
+    `test_runner.rs`). All of it is now one `Counterexample` per origin in
+    `Engine.origins: Counterexamples`: `incumbent: Option<Vec<ChoiceNode>>` (None
+    after a bar rejection evicted it; the record keeps standing, evidence, and
+    budgets so a re-sighting resumes and the caveat-only report can quote them),
+    `pool` (as captured at confirm/trust, confirm-time incumbent first),
+    `standing: Unconfirmed | Trusted | Confirmed { anchor, witness }`, the
+    evidence counters, `history`, `seed`, `first_checked`, and the three budgets.
+    The type owns the admission rules (`adopt` founds or shortlex-displaces;
+    `replace` installs a validated result; `reject` evicts unconfirmed origins
+    only; `confirm`/`trust` are the pool's only writers and `confirm` drops the
+    history) and builds the stored form (`repro_state` → `NdReproState`), which
+    stays the wire format unchanged. The execution-level representation
+    (`Vec<ChoiceNode>` / `Vec<ChoiceValue>`) is untouched. Behaviour-preserving by
+    intent: the engine tests are the oracle; the one semantic difference is that
+    per-origin iteration (first-check and discovery sweeps, persistence) now runs in
+    origin order rather than hash order. Deliberately not done here: making the
+    shrinker write through the record during a shrink (it still owns
+    `current_nodes` and hands the result back at the end; `record_nd_incumbent`
+    takes explicit nodes for that reason), folding the Persister's `last_saved`
+    into the record, and span-aware splicing. (DRM directed: "come up with a clean
+    test case representation and move this branch over to it.")

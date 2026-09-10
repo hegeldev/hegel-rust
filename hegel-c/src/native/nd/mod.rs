@@ -305,8 +305,8 @@ fn gauntlet_alpha(seed: Evidence, threshold: f64, min_fails: u64) -> f64 {
 
 /// Total stored timelines per origin, incumbent included — the invariant
 /// every stored, persisted, or replayed pool obeys
-/// (`test_runner::pooled_timelines` builds them; the lifecycle's writers
-/// truncate incoming pools). Decision 22 measured K=5 as near-ceiling and
+/// (`counterexample::pooled_timelines` builds them; `Counterexample`'s
+/// `confirm` and `trust` truncate incoming pools). Decision 22 measured K=5 as near-ceiling and
 /// K=10 as the plateau, so incumbent-plus-nine sits inside the measured
 /// range. The decode-side format bound
 /// ([`crate::native::blob::ND_STATE_MAX_TIMELINES`]) is deliberately
@@ -488,8 +488,6 @@ pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 /// against v2's 100% at p = 0.9 (009a); four continuation attempts bound
 /// the worst-case joint escape-then-miss at 1.2e-3 (seam plan).
 pub(crate) const V1_BLOB_REPLAYS: u64 = 4;
-
-pub(crate) mod lifecycle;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/nd/mod_tests.rs"]

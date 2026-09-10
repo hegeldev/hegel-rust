@@ -25,7 +25,6 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use hashbrown::hash_map::Entry;
 
 use rand::RngExt;
 
@@ -35,6 +34,7 @@ use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
     Status, sort_key,
 };
+use crate::native::counterexample::{Counterexample, Counterexamples, pooled_timelines};
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
@@ -42,7 +42,6 @@ use crate::native::database::{
 };
 use crate::native::exec_cache::{ExecCache, KindLedger};
 use crate::native::nd;
-use crate::native::nd::lifecycle::OriginLifecycle;
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, SweepMode, absorb_stop};
 use crate::settings::{
@@ -282,12 +281,11 @@ pub(crate) async fn reproduce_blob(
                 .await?;
             let failures = match run.and_then(|run| run.origin) {
                 Some(origin) => {
-                    engine.nd_origins.trust(
-                        &origin,
-                        state.timelines,
-                        (evidence.fails(), evidence.runs()),
-                    );
-                    let caveat = engine.nd_origins.caveat(&origin);
+                    engine
+                        .origins
+                        .entry(&origin)
+                        .trust(state.timelines, (evidence.fails(), evidence.runs()));
+                    let caveat = engine.origins.caveat(&origin);
                     Vec::from([Failure {
                         origin,
                         reproduce_blob: None,
@@ -433,8 +431,9 @@ impl<'a> Engine<'a> {
                     };
                     if let Some(run) = run {
                         if let Some(o) = run.origin.as_deref() {
-                            self.nd_origins.trust(o, stored.clone(), reuse_evidence);
-                            self.first_checked.insert(o.to_string());
+                            let trusted = self.origins.entry(o);
+                            trusted.trust(stored.clone(), reuse_evidence);
+                            trusted.mark_first_checked();
                         }
                         let incumbent = &stored[0];
                         if i < primary_count {
@@ -465,7 +464,7 @@ impl<'a> Engine<'a> {
                         }
                     }
                 }
-                if self.interesting.is_empty() {
+                if !self.origins.any_live() {
                     replay_aligned = false;
                 }
                 log_phase("Reuse", "End");
@@ -473,7 +472,7 @@ impl<'a> Engine<'a> {
         }
 
         let shrink_phase = settings.phases.contains(&Phase::Shrink);
-        let found_in_reuse = !self.interesting.is_empty();
+        let found_in_reuse = self.origins.any_live();
 
         let actually_generate =
             settings.phases.contains(&Phase::Generate) && !found_in_reuse && !self.test_is_trivial;
@@ -513,7 +512,7 @@ impl<'a> Engine<'a> {
             && self.within_invalid_budget(invalid_budget)
             && !(self.valid_test_cases == 0 && self.consecutive_duplicates >= DUPLICATE_STOP)
             && should_generate_more(
-                self.interesting.is_empty(),
+                !self.origins.any_live(),
                 self.calls,
                 self.first_bug_at,
                 self.last_bug_at,
@@ -528,7 +527,7 @@ impl<'a> Engine<'a> {
                     || !self.within_invalid_budget(invalid_budget)
                     || (self.valid_test_cases == 0 && self.consecutive_duplicates >= DUPLICATE_STOP)
                     || !should_generate_more(
-                        self.interesting.is_empty(),
+                        !self.origins.any_live(),
                         self.calls,
                         self.first_bug_at,
                         self.last_bug_at,
@@ -561,7 +560,7 @@ impl<'a> Engine<'a> {
                     ));
                 }
 
-                if self.interesting.is_empty() {
+                if !self.origins.any_live() {
                     if run.status == Status::Invalid
                         && self.invalid_test_cases >= FILTER_TOO_MUCH_THRESHOLD
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
@@ -602,7 +601,7 @@ impl<'a> Engine<'a> {
                 }
 
                 if target_phase
-                    && self.interesting.is_empty()
+                    && !self.origins.any_live()
                     && !self.targeting.is_empty()
                     && target_schedule.should_fire(self.valid_test_cases)
                 {
@@ -619,8 +618,7 @@ impl<'a> Engine<'a> {
                 }
 
                 if run.status == Status::Valid
-                    && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID
-                        || !self.interesting.is_empty())
+                    && (self.valid_test_cases >= HEALTH_CHECK_MAX_VALID || self.origins.any_live())
                 {
                     self.try_span_mutation(&run.nodes, &run.spans).await?;
                 }
@@ -636,7 +634,7 @@ impl<'a> Engine<'a> {
 
         if self.consecutive_duplicates >= DUPLICATE_STOP
             && self.valid_test_cases == 0
-            && self.interesting.is_empty()
+            && !self.origins.any_live()
             && !self.test_is_trivial
             && !settings
                 .suppress_health_check
@@ -659,13 +657,13 @@ impl<'a> Engine<'a> {
         self.collect_statistics = false;
 
         let mut shrink_deadline: Option<crate::sys::Instant> = None;
-        if !self.interesting.is_empty() && !replay_aligned && shrink_phase {
+        if self.origins.any_live() && !replay_aligned && shrink_phase {
             log_phase("Shrink", "Start");
             if verbosity == Verbosity::Debug {
-                let total: usize = self.interesting.values().map(|n| n.len()).sum();
+                let total: usize = self.origins.live().map(|(_, n)| n.len()).sum();
                 output.line(&format!(
                     "Shrinking: {} origin(s), initial total length = {}",
-                    self.interesting.len(),
+                    self.origins.live().count(),
                     total
                 ));
             }
@@ -679,9 +677,9 @@ impl<'a> Engine<'a> {
                         .unwrap_or_default();
                     entries.sort_by(|a, b| shortlex(a, b));
                     let primary_max: Option<Vec<u8>> = self
-                        .interesting
-                        .values()
-                        .map(|nodes| {
+                        .origins
+                        .live()
+                        .map(|(_, nodes)| {
                             let choices: Vec<ChoiceValue> =
                                 nodes.iter().map(|n| n.value()).collect();
                             serialize_choices(&choices)
@@ -727,17 +725,21 @@ impl<'a> Engine<'a> {
                 crate::native::HashSet::default();
             loop {
                 let mut pending: Vec<String> = self
-                    .interesting
-                    .keys()
+                    .origins
+                    .live_origins()
+                    .into_iter()
                     .filter(|o| !shrunk_origins.contains(o.as_str()))
-                    .cloned()
                     .collect();
                 if pending.is_empty() {
                     break;
                 }
                 pending.sort();
                 let origin = pending.remove(0);
-                let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
+                let initial = self
+                    .origins
+                    .incumbent(&origin)
+                    .map(<[ChoiceNode]>::to_vec)
+                    .unwrap_or_default();
                 shrink_timed_out |= self
                     .shrink_origin(
                         origin,
@@ -755,10 +757,10 @@ impl<'a> Engine<'a> {
             }
 
             if verbosity == Verbosity::Debug {
-                let total: usize = self.interesting.values().map(|n| n.len()).sum();
+                let total: usize = self.origins.live().map(|(_, n)| n.len()).sum();
                 output.line(&format!(
                     "Shrinking complete: {} origin(s), final total length = {}",
-                    self.interesting.len(),
+                    self.origins.live().count(),
                     total
                 ));
             }
@@ -776,23 +778,16 @@ impl<'a> Engine<'a> {
             let key_bytes = key.as_bytes();
             let secondary_key = crate::native::database::sub_key(key_bytes, b"secondary");
             let new_entries: crate::native::HashSet<Vec<u8>> = if self.nd_handling() {
-                let persistable: Vec<(String, Vec<ChoiceValue>)> = self
-                    .interesting
+                self.origins
                     .iter()
-                    .filter(|(o, _)| !self.nd_origins.needs_confirmation(o))
-                    .map(|(o, nodes)| (o.clone(), nodes.iter().map(|n| n.value()).collect()))
-                    .collect();
-                persistable
-                    .into_iter()
-                    .map(|(origin, choices)| {
-                        let state = self.nd_state_for(&origin, choices);
-                        crate::native::blob::encode_nd_state(&state)
-                    })
+                    .filter(|(_, c)| !c.needs_confirmation())
+                    .filter_map(|(_, c)| c.incumbent_values().map(|v| c.repro_state(v)))
+                    .map(|state| crate::native::blob::encode_nd_state(&state))
                     .collect()
             } else {
-                self.interesting
-                    .values()
-                    .map(|nodes| {
+                self.origins
+                    .live()
+                    .map(|(_, nodes)| {
                         let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                         serialize_choices(&choices)
                     })
@@ -826,7 +821,7 @@ impl<'a> Engine<'a> {
         if verbosity == Verbosity::Debug {
             output.line(&format!(
                 "Test done. interesting_test_cases={}",
-                self.interesting.len()
+                self.origins.live().count()
             ));
         }
 
@@ -850,11 +845,12 @@ impl<'a> Engine<'a> {
     /// trusted survived (decision 3).
     fn build_report(&mut self) -> TestRunResult {
         let nd_blobs = self.nd_handling();
-        let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> =
-            core::mem::take(&mut self.interesting)
-                .into_iter()
-                .filter(|(origin, _)| !nd_blobs || !self.nd_origins.needs_confirmation(origin))
-                .collect();
+        let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = self
+            .origins
+            .iter_mut()
+            .filter(|(_, c)| !nd_blobs || !c.needs_confirmation())
+            .filter_map(|(origin, c)| c.evict().map(|nodes| (origin.to_string(), nodes)))
+            .collect();
         origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
         if !self.settings.report_multiple_failures {
@@ -871,7 +867,7 @@ impl<'a> Engine<'a> {
                 let state = self.nd_state_for(&origin, choices);
                 (
                     Some(crate::native::blob::encode_nd_failure(&state)),
-                    self.nd_origins.caveat(&origin),
+                    self.origins.caveat(&origin),
                 )
             } else {
                 (Some(crate::native::blob::encode_failure(&choices)), None)
@@ -884,13 +880,13 @@ impl<'a> Engine<'a> {
         }
         if failures.is_empty() && nd_blobs {
             let mut unconfirmed: Vec<String> =
-                self.nd_origins.unconfirmed().map(str::to_string).collect();
+                self.origins.unconfirmed().map(str::to_string).collect();
             if !self.settings.report_multiple_failures {
                 unconfirmed.truncate(1);
             }
             for origin in unconfirmed {
                 failures.push(Failure {
-                    caveat: self.nd_origins.caveat(&origin),
+                    caveat: self.origins.caveat(&origin),
                     origin,
                     reproduce_blob: None,
                 });
@@ -1130,84 +1126,6 @@ fn should_generate_more(
     calls < MIN_TEST_CALLS || calls < heuristic
 }
 
-/// Insert a fresh shrunk-result for `origin` if it's the first sighting,
-/// or replace the existing one if `nodes` shortlex-precedes it.
-/// Returns whether `nodes` became the origin's incumbent — founding it or
-/// shortlex-displacing the previous one.
-fn update_interesting(
-    interesting: &mut HashMap<String, Vec<ChoiceNode>>,
-    origin: String,
-    nodes: Vec<ChoiceNode>,
-) -> bool {
-    match interesting.entry(origin) {
-        Entry::Vacant(e) => {
-            e.insert(nodes);
-            true
-        }
-        Entry::Occupied(mut e) => {
-            if sort_key(&nodes) < sort_key(e.get()) {
-                e.insert(nodes);
-                true
-            } else {
-                false
-            }
-        }
-    }
-}
-
-/// One pre-flip interesting execution retained for the backtrack scan.
-struct HistoryEntry {
-    nodes: Vec<ChoiceNode>,
-    /// Whether this entry became the incumbent when recorded (founding
-    /// sighting or shortlex displacement). Accepts strictly shrink, so the
-    /// accept entries form the shortlex-sorted segment the scan probes
-    /// geometrically; the rest are raw sightings, probed individually.
-    accept: bool,
-}
-
-/// Everything a never-confirmed origin failed with before any flip: raw
-/// sightings and shrink accepts alike, in execution order, deduped by
-/// serialized choices, unbounded (G24: a recency bound evicts exactly the
-/// entries an early slip-in needs). A late flip backtracks over these to
-/// find the reproduction boundary; the tree this replaces interned every
-/// execution, so history is the smaller structure. Dropped when the origin
-/// confirms — the pool takes over — which also keeps the accept segment
-/// sorted: no post-restore accept is ever recorded.
-#[derive(Default)]
-struct OriginHistory {
-    entries: Vec<HistoryEntry>,
-    seen: crate::native::HashSet<Vec<u8>>,
-}
-
-impl OriginHistory {
-    fn record(&mut self, nodes: &[ChoiceNode], accept: bool) {
-        let key = serialize_nodes(nodes);
-        if self.seen.insert(key) {
-            self.entries.push(HistoryEntry {
-                nodes: nodes.to_vec(),
-                accept,
-            });
-        }
-    }
-}
-
-/// The stored-timeline set for one origin: the incumbent first, then
-/// deduplicated pool entries, capped at [`nd::POOL_CAP`] timelines in
-/// total, incumbent included. Every pool the engine stores, persists, or
-/// replays is built here, so the cap comparison is written once.
-fn pooled_timelines(
-    incumbent: Vec<ChoiceValue>,
-    rest: impl IntoIterator<Item = Vec<ChoiceValue>>,
-) -> Vec<Vec<ChoiceValue>> {
-    let mut timelines = Vec::from([incumbent]);
-    for timeline in rest {
-        if timelines.len() < nd::POOL_CAP && !timelines.contains(&timeline) {
-            timelines.push(timeline);
-        }
-    }
-    timelines
-}
-
 /// Incremental database-save bookkeeping. Every time a new interesting
 /// result is found (or an existing one is shortlex-improved), the realised
 /// choice sequence is saved to the primary key, then the bytes it
@@ -1387,10 +1305,12 @@ pub(crate) struct Engine<'a> {
     /// (at zero) under `nd_active`.
     pub(crate) consecutive_duplicates: u64,
     /// Per-origin tracking: each distinct panic site (file:line:col captured
-    /// by [`crate::run_lifecycle::run_test_case`]) gets its own shrunk
-    /// counterexample. This is what makes a single test that fails with
-    /// several distinct bugs surface each one.
-    pub(crate) interesting: HashMap<String, Vec<ChoiceNode>>,
+    /// by [`crate::run_lifecycle::run_test_case`]) gets its own
+    /// [`Counterexample`](crate::native::counterexample::Counterexample) —
+    /// its incumbent, pool, standing, evidence, history, and budgets. This
+    /// is what makes a single test that fails with several distinct bugs
+    /// surface each one.
+    pub(crate) origins: Counterexamples,
     pub(crate) targeting: crate::native::targeting::TargetingState,
     /// Event statistics for the end-of-run report, folded in by
     /// [`Self::record_run`] while [`Self::collect_statistics`] is set.
@@ -1417,22 +1337,6 @@ pub(crate) struct Engine<'a> {
     /// ([`Self::optimise_targets_nd`], decision 68). Never cleared within a
     /// run.
     pub(crate) nd_active: bool,
-    /// Per-origin confirmation lifecycle under ND handling: admission,
-    /// trust, confirmation state (anchor/witness/pool), and the caveated
-    /// unconfirmed report. See [`OriginLifecycle`].
-    nd_origins: OriginLifecycle,
-    /// Per-origin gauntlet alpha-spending state (decision 72), on the
-    /// engine rather than the shrink probe so a re-shrink's rebuilt probe
-    /// keeps spending from the same budget.
-    gauntlet_spend: HashMap<String, nd::GauntletSpend>,
-    /// Per-origin pre-flip interesting history, the backtrack scan's
-    /// domain. See [`OriginHistory`].
-    history: HashMap<String, OriginHistory>,
-    /// Origins whose first-interesting determinism check has run (either
-    /// verdict — a miss flips the run, which handles everything after),
-    /// plus origins the check exempts: database-reuse reproductions
-    /// already replayed once.
-    first_checked: crate::native::HashSet<String>,
     /// Set while the first-interesting check's replays run: they count on
     /// the measurement statistics line despite running pre-flip (decision
     /// 51, amended), and a cache mismatch they trigger is the check's
@@ -1489,7 +1393,7 @@ impl<'a> Engine<'a> {
             exec_cache: ExecCache::default(),
             kind_ledger: KindLedger::default(),
             consecutive_duplicates: 0,
-            interesting: HashMap::default(),
+            origins: Counterexamples::default(),
             targeting: crate::native::targeting::TargetingState::new(),
             statistics: crate::native::events::RunStatistics::default(),
             collect_statistics: false,
@@ -1503,10 +1407,6 @@ impl<'a> Engine<'a> {
             last_bug_at: None,
             first_bug_time: None,
             nd_active: settings.nd_force,
-            nd_origins: OriginLifecycle::default(),
-            gauntlet_spend: HashMap::default(),
-            history: HashMap::default(),
-            first_checked: crate::native::HashSet::default(),
             check_window: false,
             reuse_replays: false,
             capture_replays: false,
@@ -1537,9 +1437,14 @@ impl<'a> Engine<'a> {
             site,
             calls: self.calls,
             incumbents: self
-                .interesting
-                .iter()
-                .map(|(origin, nodes)| (origin.clone(), nodes.iter().map(|n| n.value()).collect()))
+                .origins
+                .live()
+                .map(|(origin, nodes)| {
+                    (
+                        origin.to_string(),
+                        nodes.iter().map(|n| n.value()).collect(),
+                    )
+                })
                 .collect(),
         });
     }
@@ -1714,80 +1619,54 @@ impl<'a> Engine<'a> {
         };
         let verify = if let Some(verify) = deterministic_verify {
             verify
-        } else if let Some((witness, anchor)) = self.nd_origins.take_witness(&origin) {
+        } else if let Some((witness, anchor)) =
+            self.origins.get_mut(&origin).and_then(|c| c.take_witness())
+        {
             probe_anchor = anchor;
             witness
-        } else if !self.nd_origins.needs_confirmation(&origin) {
+        } else if !self.origins.needs_confirmation(&origin) {
             // For a trusted origin the bar arithmetic is only the batch's
             // stopping rule: admission happened at reuse (decision 24).
             let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if let Some(witness) = batch.witness {
                 probe_anchor = batch.evidence.lower_bound();
-                let stored = self.nd_origins.pool(&origin).to_vec();
-                let pool =
-                    pooled_timelines(choices.clone(), batch.captured.into_iter().chain(stored));
-                self.nd_origins
-                    .confirm(&origin, probe_anchor, None, pool, evidence)?;
-                self.history.remove(&origin);
+                let trusted = self.origins.entry(&origin);
+                let pool = pooled_timelines(
+                    choices.clone(),
+                    batch.captured.into_iter().chain(trusted.pool().to_vec()),
+                );
+                trusted.confirm(probe_anchor, None, pool, evidence)?;
                 self.record_nd_incumbent(&origin, &initial);
                 witness
             } else {
-                self.nd_origins.record_trusted_batch(&origin, evidence);
+                self.origins.entry(&origin).record_trusted_batch(evidence);
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
         } else {
-            if self
-                .history
-                .get(&origin)
-                .is_some_and(|h| !h.entries.is_empty())
-            {
+            if self.has_history(&origin) {
                 match self.backtrack(&origin).await? {
                     Backtrack::Restored { nodes } => {
-                        self.interesting.insert(origin, nodes);
+                        self.origins.entry(&origin).replace(nodes);
                         return Ok(false);
                     }
                     Backtrack::Exhausted { evidence } => {
-                        if self.nd_origins.reject(&origin, evidence) {
-                            #[cfg(feature = "__bench")]
-                            nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                                origin: origin.clone(),
-                                values: choices.clone(),
-                                at_final_replay: false,
-                            });
-                            self.interesting.remove(&origin);
-                        }
+                        self.reject_origin(&origin, evidence, false);
                         shrunk_origins.insert(origin);
                         return Ok(false);
                     }
                 }
             }
-            if !self.nd_origins.spend_bar_attempt(&origin) {
-                if self.nd_origins.reject(&origin, (0, 0)) {
-                    #[cfg(feature = "__bench")]
-                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                        origin: origin.clone(),
-                        values: choices.clone(),
-                        at_final_replay: false,
-                    });
-                    self.interesting.remove(&origin);
-                }
+            if !self.origins.entry(&origin).spend_bar_attempt() {
+                self.reject_origin(&origin, (0, 0), false);
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
             let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if !batch.bar_accepted {
-                if self.nd_origins.reject(&origin, evidence) {
-                    #[cfg(feature = "__bench")]
-                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                        origin: origin.clone(),
-                        values: choices.clone(),
-                        at_final_replay: false,
-                    });
-                    self.interesting.remove(&origin);
-                }
+                self.reject_origin(&origin, evidence, false);
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
@@ -1797,9 +1676,9 @@ impl<'a> Engine<'a> {
             );
             probe_anchor = batch.evidence.lower_bound();
             let pool = pooled_timelines(choices.clone(), batch.captured);
-            self.nd_origins
-                .confirm(&origin, probe_anchor, None, pool, evidence)?;
-            self.history.remove(&origin);
+            self.origins
+                .entry(&origin)
+                .confirm(probe_anchor, None, pool, evidence)?;
             self.record_nd_incumbent(&origin, &initial);
             witness
         };
@@ -1839,9 +1718,9 @@ impl<'a> Engine<'a> {
             (shrinker.current_nodes, shrinker.timed_out)
         };
         if !gauntleted && self.nd_handling() {
-            self.interesting.insert(origin, initial);
+            self.origins.entry(&origin).replace(initial);
         } else {
-            self.interesting.insert(origin.clone(), shrunk);
+            self.origins.entry(&origin).replace(shrunk);
             shrunk_origins.insert(origin);
         }
         Ok(timed_out)
@@ -1866,15 +1745,18 @@ impl<'a> Engine<'a> {
         shrink_deadline: Option<crate::sys::Instant>,
         reshrink: bool,
     ) -> Result<(), RunError> {
-        if self.interesting.is_empty() {
+        if !self.origins.any_live() {
             return Ok(());
         }
-        let mut pending: Vec<String> = self.interesting.keys().cloned().collect();
-        pending.sort();
+        let mut pending: Vec<String> = self.origins.live_origins();
         let mut replayed: Vec<String> = Vec::new();
         while !pending.is_empty() {
             let origin = pending.remove(0);
-            let nodes = self.interesting.get(&origin).cloned().unwrap_or_default();
+            let nodes = self
+                .origins
+                .incumbent(&origin)
+                .map(<[ChoiceNode]>::to_vec)
+                .unwrap_or_default();
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             if !self.nd_handling() {
                 self.capture_replays = true;
@@ -1907,15 +1789,10 @@ impl<'a> Engine<'a> {
                     #[cfg(feature = "__bench")]
                     self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
                     self.nd_flip();
-                    if self.nd_origins.needs_confirmation(&origin)
-                        && self
-                            .history
-                            .get(&origin)
-                            .is_some_and(|h| !h.entries.is_empty())
-                    {
+                    if self.origins.needs_confirmation(&origin) && self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
                             Backtrack::Restored { nodes } => {
-                                self.interesting.insert(origin.clone(), nodes.clone());
+                                self.origins.entry(&origin).replace(nodes.clone());
                                 if reshrink {
                                     let mut shrunk = crate::native::HashSet::default();
                                     self.shrink_origin(
@@ -1930,28 +1807,18 @@ impl<'a> Engine<'a> {
                                 }
                             }
                             Backtrack::Exhausted { evidence } => {
-                                self.nd_origins.observe(&origin);
-                                if self.nd_origins.reject(&origin, evidence) {
-                                    #[cfg(feature = "__bench")]
-                                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                                        origin: origin.clone(),
-                                        values: choices,
-                                        at_final_replay: true,
-                                    });
-                                    self.interesting.remove(&origin);
-                                }
+                                self.reject_origin(&origin, evidence, true);
                                 continue;
                             }
                         }
                     }
                 }
             }
-            let nodes = crate::control::hegel_internal_unwrap!(
-                self.interesting.get(&origin).cloned(),
-                "final_replay: {origin} left the interesting map without continuing"
+            crate::control::hegel_internal_assert!(
+                self.origins.incumbent(&origin).is_some(),
+                "final_replay: {origin} lost its incumbent without continuing"
             );
-            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-            let timelines = pooled_timelines(choices, self.nd_origins.pool(&origin).to_vec());
+            let timelines = self.origins.entry(&origin).timelines();
             self.capture_replays = true;
             let (reproduction, evidence) = self
                 .nd_reproduce(
@@ -1964,14 +1831,14 @@ impl<'a> Engine<'a> {
                 .await?;
             self.capture_replays = false;
             let batch = (evidence.fails(), evidence.runs());
-            if self.nd_origins.needs_confirmation(&origin) {
+            if self.origins.needs_confirmation(&origin) {
                 // A reproducing review run is a sighting, not a
                 // confirmation: it faces the standard bar on the origin's
                 // remaining attempt budget (decision 72).
                 let mut confirmed = false;
                 let mut review_evidence = (0, 0);
                 if let Some(run) = reproduction {
-                    if self.nd_origins.spend_bar_attempt(&origin) {
+                    if self.origins.entry(&origin).spend_bar_attempt() {
                         let reproduced: Vec<ChoiceValue> =
                             run.nodes.iter().map(|n| n.value()).collect();
                         let review = self
@@ -1983,32 +1850,25 @@ impl<'a> Engine<'a> {
                                 timelines[0].clone(),
                                 review.captured.into_iter().chain(timelines),
                             );
-                            let confirmed_origin = self.nd_origins.confirm(
-                                &origin,
+                            let reviewed = self.origins.entry(&origin);
+                            reviewed.confirm(
                                 review.evidence.lower_bound(),
                                 None,
                                 pool,
                                 review_evidence,
-                            );
-                            confirmed_origin?;
-                            self.history.remove(&origin);
-                            self.nd_origins.record_final_replay(&origin, batch);
+                            )?;
+                            reviewed.record_final_replay(batch);
                             confirmed = true;
                         }
                     }
                 }
                 if !confirmed {
-                    self.nd_origins.observe(&origin);
                     let mut reject_evidence =
                         (batch.0 + review_evidence.0, batch.1 + review_evidence.1);
-                    if self
-                        .history
-                        .get(&origin)
-                        .is_some_and(|h| !h.entries.is_empty())
-                    {
+                    if self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
                             Backtrack::Restored { nodes: restored } => {
-                                self.interesting.insert(origin.clone(), restored.clone());
+                                self.origins.entry(&origin).replace(restored.clone());
                                 if reshrink {
                                     let mut shrunk = crate::native::HashSet::default();
                                     self.shrink_origin(
@@ -2032,18 +1892,10 @@ impl<'a> Engine<'a> {
                             }
                         }
                     }
-                    if self.nd_origins.reject(&origin, reject_evidence) {
-                        #[cfg(feature = "__bench")]
-                        nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                            origin: origin.clone(),
-                            values: nodes.iter().map(|n| n.value()).collect(),
-                            at_final_replay: true,
-                        });
-                        self.interesting.remove(&origin);
-                    }
+                    self.reject_origin(&origin, reject_evidence, true);
                 }
             } else {
-                self.nd_origins.record_final_replay(&origin, batch);
+                self.origins.entry(&origin).record_final_replay(batch);
             }
         }
         Ok(())
@@ -2074,7 +1926,7 @@ impl<'a> Engine<'a> {
         choices: &[ChoiceValue],
         deadline: Option<crate::sys::Instant>,
     ) -> Result<NdBatch, RunError> {
-        let mut evidence = self.nd_origins.take_seed(origin).unwrap_or_default();
+        let mut evidence = self.origins.entry(origin).take_seed().unwrap_or_default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
         let capture_entry = self.capture_replays;
@@ -2144,16 +1996,21 @@ impl<'a> Engine<'a> {
     /// gauntlet (decision 2), a too-new one anchors low or gets rejected.
     async fn backtrack(&mut self, origin: &str) -> Result<Backtrack, RunError> {
         let entries: Vec<(Vec<ChoiceValue>, bool)> = self
-            .history
+            .origins
             .get(origin)
-            .map(|h| {
-                h.entries
+            .map(|c| {
+                c.history()
+                    .entries()
                     .iter()
                     .map(|e| (e.nodes.iter().map(|n| n.value()).collect(), e.accept))
                     .collect()
             })
             .unwrap_or_default();
-        if entries.is_empty() || !self.nd_origins.backtrack_attempts_left(origin) {
+        let attempts_left = self
+            .origins
+            .get(origin)
+            .is_some_and(|c| c.backtrack_attempts_left());
+        if entries.is_empty() || !attempts_left {
             return Ok(Backtrack::Exhausted { evidence: (0, 0) });
         }
         let accepts: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].1).collect();
@@ -2255,7 +2112,7 @@ impl<'a> Engine<'a> {
                 }
                 continue;
             };
-            if !self.nd_origins.spend_backtrack_attempt(origin) {
+            if !self.origins.entry(origin).spend_backtrack_attempt() {
                 return Ok(Backtrack::Exhausted {
                     evidence: (fails, runs),
                 });
@@ -2281,22 +2138,28 @@ impl<'a> Engine<'a> {
                 entries[candidate].0.clone(),
                 batch.captured.into_iter().chain(others),
             );
-            let confirmed = self.nd_origins.confirm(
-                origin,
+            #[cfg(feature = "__bench")]
+            let history_bytes: usize = self.origins.get(origin).map_or(0, |c| {
+                c.history()
+                    .entries()
+                    .iter()
+                    .map(|e| e.nodes.len() * core::mem::size_of::<ChoiceNode>())
+                    .sum()
+            });
+            let nodes = self
+                .origins
+                .get(origin)
+                .and_then(|c| c.history().entries().get(candidate))
+                .map(|e| e.nodes.clone())
+                .unwrap_or_default();
+            self.origins.entry(origin).confirm(
                 anchor,
                 Some(witness),
                 pool,
                 (batch.evidence.fails(), batch.evidence.runs()),
-            );
-            confirmed?;
+            )?;
             #[cfg(feature = "__bench")]
             {
-                let history_bytes = self.history.get(origin).map_or(0, |h| {
-                    h.entries
-                        .iter()
-                        .map(|e| e.nodes.len() * core::mem::size_of::<ChoiceNode>())
-                        .sum()
-                });
                 let best = accepts.last().copied().unwrap_or(candidate);
                 nd::seam_dump::record(nd::seam_dump::SeamEvent::Backtrack {
                     origin: origin.to_string(),
@@ -2305,12 +2168,6 @@ impl<'a> Engine<'a> {
                     history_bytes,
                 });
             }
-            let nodes = self
-                .history
-                .get(origin)
-                .map(|h| h.entries[candidate].nodes.clone())
-                .unwrap_or_default();
-            self.history.remove(origin);
             let incumbent: Vec<ChoiceValue> = entries[candidate].0.clone();
             let state = self.nd_state_for(origin, incumbent);
             self.persister.supersede_nd(origin, &nodes, &state);
@@ -2337,9 +2194,11 @@ impl<'a> Engine<'a> {
             ));
         }
         let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
-        for timeline in self.nd_origins.pool(origin) {
-            if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
-                candidates.push(timeline.clone());
+        if let Some(counterexample) = self.origins.get(origin) {
+            for timeline in counterexample.pool() {
+                if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
+                    candidates.push(timeline.clone());
+                }
             }
         }
         let mut attempts = 0;
@@ -2396,7 +2255,7 @@ impl<'a> Engine<'a> {
                         "nd boost: origin={origin} anchor {anchor:.3} -> {lcb:.3}"
                     ));
                 }
-                self.nd_origins.raise_anchor(origin, lcb);
+                self.origins.entry(origin).raise_anchor(lcb);
                 Some((witness, lcb))
             }
             _ => None,
@@ -2422,7 +2281,7 @@ impl<'a> Engine<'a> {
         loop {
             let mut adopted = false;
             for (label, best_score, best_choices) in &seeds {
-                if races >= nd::TARGET_ND_RACES || !self.interesting.is_empty() {
+                if races >= nd::TARGET_ND_RACES || self.origins.any_live() {
                     return Ok(());
                 }
                 if self.targeting.nd_target(label).is_none() {
@@ -2474,7 +2333,7 @@ impl<'a> Engine<'a> {
                 dead: false,
             },
             _ => {
-                if !self.interesting.is_empty() {
+                if self.origins.any_live() {
                     return Ok(());
                 }
                 crate::native::targeting::NdTarget {
@@ -2627,7 +2486,7 @@ impl<'a> Engine<'a> {
         &mut self,
         timeline: &[ChoiceValue],
     ) -> Result<Option<RunResult>, RunError> {
-        if !self.interesting.is_empty() {
+        if self.origins.any_live() {
             return Ok(None);
         }
         let budget = nd::continuation_budget(crate::native::core::flattened_values_len(timeline));
@@ -2671,7 +2530,7 @@ impl<'a> Engine<'a> {
             candidate[idx] = value;
             return Ok(Some(candidate));
         }
-        if !self.interesting.is_empty() {
+        if self.origins.any_live() {
             return Ok(None);
         }
         let cut = self.rng.random_range(0..=timeline.len());
@@ -2700,14 +2559,14 @@ impl<'a> Engine<'a> {
     async fn first_check_sweep(&mut self) -> Result<(), RunError> {
         while !self.nd_handling() {
             let Some((origin, nodes)) = self
-                .interesting
+                .origins
                 .iter()
-                .find(|(o, _)| !self.first_checked.contains(o.as_str()))
-                .map(|(o, n)| (o.clone(), n.clone()))
+                .find(|(_, c)| c.incumbent().is_some() && !c.first_checked())
+                .and_then(|(o, c)| c.incumbent().map(|n| (o.to_string(), n.to_vec())))
             else {
                 return Ok(());
             };
-            self.first_checked.insert(origin.clone());
+            self.origins.entry(&origin).mark_first_checked();
             let capture_entry = self.capture_replays;
             self.capture_replays = true;
             self.check_window = true;
@@ -2719,7 +2578,7 @@ impl<'a> Engine<'a> {
                 if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                     return Err(err);
                 }
-                self.nd_origins.seed_evidence(&origin, evidence);
+                self.origins.entry(&origin).seed_evidence(evidence);
                 #[cfg(feature = "__bench")]
                 self.seam_flip(nd::seam_dump::FlipSite::FirstCheck);
                 self.nd_flip();
@@ -2777,29 +2636,21 @@ impl<'a> Engine<'a> {
         }
         loop {
             let Some((origin, nodes)) = self
-                .interesting
-                .iter()
-                .find(|(o, _)| self.nd_origins.needs_confirmation(o.as_str()))
-                .map(|(o, n)| (o.clone(), n.clone()))
+                .origins
+                .live()
+                .find(|(o, _)| self.origins.needs_confirmation(o))
+                .map(|(o, n)| (o.to_string(), n.to_vec()))
             else {
                 return Ok(());
             };
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-            if !self.nd_origins.spend_bar_attempt(&origin) {
+            if !self.origins.entry(&origin).spend_bar_attempt() {
                 if verbosity == Verbosity::Debug {
                     output.line(&format!(
                         "nd discovery confirm: origin={origin} out of bar attempts"
                     ));
                 }
-                if self.nd_origins.reject(&origin, (0, 0)) {
-                    #[cfg(feature = "__bench")]
-                    nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                        origin: origin.clone(),
-                        values: choices,
-                        at_final_replay: false,
-                    });
-                    self.interesting.remove(&origin);
-                }
+                self.reject_origin(&origin, (0, 0), false);
                 continue;
             }
             let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
@@ -2814,24 +2665,15 @@ impl<'a> Engine<'a> {
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if batch.bar_accepted {
                 let pool = pooled_timelines(choices, batch.captured);
-                let confirmed = self.nd_origins.confirm(
-                    &origin,
+                self.origins.entry(&origin).confirm(
                     batch.evidence.lower_bound(),
                     batch.witness,
                     pool,
                     evidence,
-                );
-                confirmed?;
-                self.history.remove(&origin);
+                )?;
                 self.record_nd_incumbent(&origin, &nodes);
-            } else if self.nd_origins.reject(&origin, evidence) {
-                #[cfg(feature = "__bench")]
-                nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                    origin: origin.clone(),
-                    values: nodes.iter().map(|n| n.value()).collect(),
-                    at_final_replay: false,
-                });
-                self.interesting.remove(&origin);
+            } else {
+                self.reject_origin(&origin, evidence, false);
             }
         }
     }
@@ -2840,25 +2682,41 @@ impl<'a> Engine<'a> {
         self.persister.db.as_deref()
     }
 
-    /// The replay state persisted and emitted for `origin` with `incumbent`:
-    /// the incumbent first, then its captured pool, with content-hash
-    /// entropy (so identical state re-encodes identically across runs) and
-    /// the standard continuation extension.
+    /// The replay state persisted and emitted for `origin` with `incumbent`
+    /// in front of its captured pool
+    /// ([`Counterexample::repro_state`]); an origin the run never recorded
+    /// has an empty pool.
     fn nd_state_for(
         &self,
         origin: &str,
         incumbent: Vec<ChoiceValue>,
     ) -> crate::native::blob::NdReproState {
-        let len = crate::native::core::flattened_values_len(&incumbent);
-        let timelines = pooled_timelines(incumbent, self.nd_origins.pool(origin).to_vec());
-        let mut content = Vec::new();
-        for timeline in &timelines {
-            content.extend_from_slice(&serialize_choices(timeline));
+        match self.origins.get(origin) {
+            Some(counterexample) => counterexample.repro_state(incumbent),
+            None => Counterexample::default().repro_state(incumbent),
         }
-        crate::native::blob::NdReproState {
-            timelines,
-            entropy: crate::native::database::fnv1a(&content),
-            extension: (nd::continuation_budget(len) - len) as u32,
+    }
+
+    /// Whether `origin` has pre-flip history for a backtrack to scan.
+    fn has_history(&self, origin: &str) -> bool {
+        self.origins
+            .get(origin)
+            .is_some_and(|c| !c.history().is_empty())
+    }
+
+    /// The discovery bar rejected `origin` with `evidence`: record it and
+    /// evict the incumbent unless the origin is trusted or confirmed
+    /// ([`Counterexample::reject`]), logging an eviction for the seam dump.
+    #[cfg_attr(not(feature = "__bench"), allow(unused_variables))]
+    fn reject_origin(&mut self, origin: &str, evidence: (u64, u64), at_final_replay: bool) {
+        let evicted = self.origins.entry(origin).reject(evidence);
+        #[cfg(feature = "__bench")]
+        if let Some(nodes) = evicted {
+            nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
+                origin: origin.to_string(),
+                values: nodes.iter().map(|n| n.value()).collect(),
+                at_final_replay,
+            });
         }
     }
 
@@ -2992,19 +2850,12 @@ impl<'a> Engine<'a> {
             if !self.nd_active {
                 if !measurement || self.reuse_replays {
                     self.persister.record(&origin, &run.nodes);
-                    let accept = update_interesting(
-                        &mut self.interesting,
-                        origin.clone(),
-                        run.nodes.clone(),
-                    );
-                    self.history
-                        .entry(origin)
-                        .or_default()
-                        .record(&run.nodes, accept);
+                    let counterexample = self.origins.entry(&origin);
+                    let accept = counterexample.adopt(run.nodes.clone());
+                    counterexample.record_sighting(&run.nodes, accept);
                 }
-            } else if !self.interesting.contains_key(&origin) {
-                self.nd_origins.observe(&origin);
-                update_interesting(&mut self.interesting, origin, run.nodes.clone());
+            } else if self.origins.incumbent(&origin).is_none() {
+                self.origins.entry(&origin).adopt(run.nodes.clone());
             }
         }
         mismatch
@@ -3235,8 +3086,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
         if first_accept && accept.lower_bound > self.anchor {
             self.anchor = accept.lower_bound;
             self.engine
-                .nd_origins
-                .raise_anchor(&self.target_origin, accept.lower_bound);
+                .origins
+                .entry(&self.target_origin)
+                .raise_anchor(accept.lower_bound);
         }
         self.engine
             .record_nd_incumbent(&self.target_origin, &accept.nodes);
@@ -3276,9 +3128,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     });
                 let min_fails = self
                     .engine
+                    .origins
+                    .entry(&self.target_origin)
                     .gauntlet_spend
-                    .entry(self.target_origin.clone())
-                    .or_default()
                     .charge(&seed, self.anchor, self.sweep == SweepMode::Confirm, pinned);
                 self.ledger.entry(key.clone()).or_insert(CandidateLedger {
                     evidence: nd::Evidence::default(),

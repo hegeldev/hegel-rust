@@ -56,9 +56,41 @@ incumbent's failure rate; the **gauntlet** is the evidence bar a shrink candidat
 
 ## Architecture
 
-Engine-side everything lives under `hegel-c/src/native/`: the statistics and lifecycle in
-`nd/` (`mod.rs`, `lifecycle.rs`), the run orchestration in `test_runner.rs`, persistence
-formats in `blob.rs`.
+Engine-side everything lives under `hegel-c/src/native/`: the statistics in `nd/mod.rs`
+(pure arithmetic, no engine state), the per-origin failing test case in `counterexample.rs`
+(`Counterexample`: incumbent, pool, standing, evidence, history, budgets — decision 73), the
+run orchestration in `test_runner.rs`, persistence formats in `blob.rs`.
+
+### The counterexample (`counterexample.rs`)
+
+The engine's representation of a failing test case is one value per origin,
+`Counterexample`, held in `Engine.origins: Counterexamples` (a `BTreeMap` by origin). It
+owns everything the run knows about that failure:
+
+- the **incumbent**, `Option<Vec<ChoiceNode>>` — the best failing execution, with its
+  constraints because the shrinker works on nodes; `None` after a bar rejection evicted it
+  (the record survives so a re-sighting resumes against the same evidence and budgets, and
+  the caveat-only report can quote them). An origin is *live* while it holds one; "the run
+  has a failure" is `Counterexamples::any_live`.
+- the **pool**, `Vec<Vec<ChoiceValue>>` — the timelines captured at confirmation or trust,
+  the confirm-time incumbent first, truncated to `POOL_CAP`. Kept as captured: after
+  shrinking moves the incumbent, the confirm-time example stays pooled as a replay
+  fallback. `timelines()` composes the current incumbent ahead of it (`pooled_timelines`:
+  deduplicated, `POOL_CAP` total, incumbent included).
+- the **standing** (`Unconfirmed | Trusted | Confirmed { anchor, witness }`) and the
+  replay evidence behind it (fails/replays, with report-time counts kept apart) — the old
+  `OriginLifecycle` state machine, now per record.
+- the pre-flip **history** for the backtrack, dropped by `confirm`.
+- the per-run **budgets**: bar attempts, backtrack attempts, `gauntlet_spend`, and the
+  first-check flag.
+
+The stored form is `NdReproState` (`blob.rs`), produced by `Counterexample::repro_state`;
+nothing else builds it. Admission rules live on the type: `adopt` founds or
+shortlex-displaces (called only pre-flip or into a vacant origin — decision 20), `replace`
+installs a validated result (shrink, backtrack restore), `reject` evicts unconfirmed
+origins only, `confirm`/`trust` are the pool's only writers. Under deterministic handling
+every failure is a `Counterexample` too, standing `Unconfirmed` with an empty pool — the
+standing only matters once the run flips.
 
 ### Mode lifecycle and strictness
 
@@ -133,9 +165,9 @@ Flaky/NonDeterministic aborts verbatim for suites using determinism as a lint (d
 - Continuation budget for replaying a stored timeline: the timeline plus `max(4, len/8)`
   fresh draws (experiment 004).
 
-### Origin lifecycle (`nd/lifecycle.rs`)
+### Origin lifecycle (`Counterexample`'s standing, `counterexample.rs`)
 
-Per-origin state machine: `Unconfirmed -> Confirmed` (discovery bar),
+Per-origin state machine on the counterexample's standing: `Unconfirmed -> Confirmed` (discovery bar),
 `Unconfirmed -> Trusted` (database reproduction, decisions 24/47 — the prior run persisted
 only validated origins, so trusted origins are exempt from the bar's verdict), `Trusted ->
 Confirmed` (promotion by a failing shrink-time evidence batch, decision 47), monotone anchor
@@ -150,17 +182,17 @@ still reported and persisted. The promoting batch extends to `ANCHOR_SEED_RUNS` 
 like every anchor-seeding batch (decision 54). `Trusted` carries the reproducing batch's
 evidence, seeded by `trust()` on the database, blob, and deterministic replay paths. Confirmed and trusted
 origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
-every one, and the lifecycle's writers truncate incoming pools) harvested from
+every one, and `confirm`/`trust` truncate incoming pools) harvested from
 capture-at-confirmation (decision 10). A first-check miss deposits its evidence in a
 per-origin seed slot (`seed_evidence`/`take_seed`), consumed by the origin's next evidence
-batch so the bar starts partially filled (decision 64). The lifecycle also words each
+batch so the bar starts partially filled (decision 64). The counterexample also words its
 failure's **caveat** from the run's own evidence — confirmed, trusted, dry-at-report-time
 variants of both, or unconfirmed — quoting report-time replay counts apart from the
 confirmation or reuse counts.
 
-While the run is deterministic, `record_run` also appends every interesting execution to a
-per-origin **history** (`OriginHistory`: raw sightings and accepts, deduplicated by
-serialized nodes, unbounded, dropped on confirmation or run end). A never-confirmed origin
+While the run is deterministic, `record_run` also appends every interesting execution to the
+counterexample's **history** (`counterexample::History`: raw sightings and accepts,
+deduplicated by serialized nodes, unbounded, dropped on confirmation or run end). A never-confirmed origin
 that misses its shrink verify or final replay **backtracks** over that history to the
 reproduction boundary — geometric probes over the accept segment plus every raw sighting,
 binary refinement, then the full discovery bar on the candidate (up to

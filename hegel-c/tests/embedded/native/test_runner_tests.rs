@@ -691,7 +691,7 @@ fn span_mutation_re_executes_proposals_that_are_not_exact_repeats() {
             assert_eq!(count.get(), 5);
             assert_eq!(ctx.calls, 5);
             assert_eq!(ctx.valid_test_cases, 5);
-            assert!(ctx.interesting.is_empty());
+            assert!(!ctx.origins.any_live());
         },
     );
 }
@@ -726,12 +726,9 @@ fn span_mutation_returns_interesting_proposal() {
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
             assert_eq!(ctx.valid_test_cases, 0);
-            let origin = ctx
-                .interesting
-                .keys()
-                .next()
-                .expect("the first proposal should be Interesting");
-            assert!(origin.contains("Panic"));
+            let origins = ctx.origins.live_origins();
+            assert_eq!(origins.len(), 1, "the first proposal should be Interesting");
+            assert!(origins[0].contains("Panic"));
         },
     );
 }
@@ -2214,11 +2211,11 @@ fn history_records_raw_displacements_and_shrink_accepts() {
                 Duration::ZERO,
                 false,
             );
-            let history = ctx.history.get(origin).unwrap();
-            assert_eq!(history.entries.len(), 3);
-            assert!(history.entries[0].accept, "founding sighting");
-            assert!(!history.entries[1].accept, "non-displacing raw sighting");
-            assert!(history.entries[2].accept, "shortlex displacement");
+            let history = ctx.origins.get(origin).unwrap().history();
+            assert_eq!(history.entries().len(), 3);
+            assert!(history.entries()[0].accept, "founding sighting");
+            assert!(!history.entries()[1].accept, "non-displacing raw sighting");
+            assert!(history.entries()[2].accept, "shortlex displacement");
         },
     );
 }
@@ -2238,7 +2235,10 @@ fn history_dedupes_repeated_timelines() {
                     false,
                 );
             }
-            assert_eq!(ctx.history.get(origin).unwrap().entries.len(), 1);
+            assert_eq!(
+                ctx.origins.get(origin).unwrap().history().entries().len(),
+                1
+            );
         },
     );
 }
@@ -2267,13 +2267,17 @@ fn history_is_kept_only_while_deterministic() {
                 Duration::ZERO,
                 false,
             );
-            let history = ctx.history.get(origin).unwrap();
+            let history = ctx.origins.get(origin).unwrap().history();
             assert_eq!(
-                history.entries.len(),
+                history.entries().len(),
                 1,
                 "post-flip executions must not enter history"
             );
-            assert!(!ctx.history.contains_key("Panic: other"));
+            assert!(
+                ctx.origins
+                    .get("Panic: other")
+                    .is_none_or(|c| c.history().is_empty())
+            );
         },
     );
 }
@@ -2300,11 +2304,14 @@ fn a_measurement_run_neither_displaces_nor_persists() {
                 true,
             );
             assert_eq!(
-                ctx.interesting.get(origin).unwrap(),
-                &vec![bool_node(true)],
+                ctx.origins.incumbent(origin).unwrap(),
+                &[bool_node(true)],
                 "a measurement run must not displace the incumbent"
             );
-            assert_eq!(ctx.history.get(origin).unwrap().entries.len(), 1);
+            assert_eq!(
+                ctx.origins.get(origin).unwrap().history().entries().len(),
+                1
+            );
 
             ctx.reuse_replays = true;
             ctx.record_run(
@@ -2314,11 +2321,14 @@ fn a_measurement_run_neither_displaces_nor_persists() {
             );
             ctx.reuse_replays = false;
             assert_eq!(
-                ctx.interesting.get(origin).unwrap(),
-                &vec![bool_node(false)],
+                ctx.origins.incumbent(origin).unwrap(),
+                &[bool_node(false)],
                 "a reuse-phase replay must displace like a raw run"
             );
-            assert_eq!(ctx.history.get(origin).unwrap().entries.len(), 2);
+            assert_eq!(
+                ctx.origins.get(origin).unwrap().history().entries().len(),
+                2
+            );
         },
     );
 }
@@ -2342,15 +2352,21 @@ fn history_is_dropped_when_the_origin_confirms() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.history.contains_key(&origin));
+            assert!(
+                ctx.origins
+                    .get(&origin)
+                    .is_some_and(|c| !c.history().is_empty())
+            );
             ctx.nd_flip();
             let output = Settings::new().output;
             ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
                 .await
                 .unwrap();
-            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(!ctx.origins.needs_confirmation(&origin));
             assert!(
-                !ctx.history.contains_key(&origin),
+                ctx.origins
+                    .get(&origin)
+                    .is_none_or(|c| c.history().is_empty()),
                 "confirmation must drop the origin's history"
             );
         },
@@ -2378,11 +2394,11 @@ fn a_first_check_outcome_miss_flips_the_run_before_displacement() {
             ctx.first_check_sweep().await.unwrap();
             assert!(ctx.nd_active, "an outcome miss must flip the run");
             assert_eq!(
-                ctx.interesting.get(origin).unwrap(),
-                &vec![bool_node(true)],
+                ctx.origins.incumbent(origin).unwrap(),
+                &[bool_node(true)],
                 "the discovering sighting must still be the incumbent"
             );
-            assert!(ctx.first_checked.contains(origin));
+            assert!(ctx.origins.get(origin).is_some_and(|c| c.first_checked()));
         },
     );
 }
@@ -2435,7 +2451,7 @@ fn first_check_evidence_seeds_the_origins_ledger() {
                 false,
             );
             ctx.first_check_sweep().await.unwrap();
-            let seed = ctx.nd_origins.take_seed(&origin).unwrap();
+            let seed = ctx.origins.entry(&origin).take_seed().unwrap();
             assert_eq!(seed.fails(), 1, "the failing divergent replay is a fail");
             assert_eq!(seed.runs(), 1, "stop on first miss");
         },
@@ -2463,7 +2479,7 @@ fn the_discovery_bar_starts_from_the_first_check_seed() {
             for _ in 0..3 {
                 seed.record(true);
             }
-            ctx.nd_origins.seed_evidence(&origin, seed);
+            ctx.origins.entry(&origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
                 .nd_evidence_batch(&origin, &[ChoiceValue::Boolean(true)], None)
@@ -2512,8 +2528,16 @@ fn each_origin_gets_its_own_first_check() {
             );
             ctx.first_check_sweep().await.unwrap();
             assert!(!ctx.nd_active);
-            assert!(ctx.first_checked.contains("Panic: a"));
-            assert!(ctx.first_checked.contains("Panic: b"));
+            assert!(
+                ctx.origins
+                    .get("Panic: a")
+                    .is_some_and(|c| c.first_checked())
+            );
+            assert!(
+                ctx.origins
+                    .get("Panic: b")
+                    .is_some_and(|c| c.first_checked())
+            );
             assert_eq!(execs.load(Ordering::SeqCst) as u64, 2 * FIRST_CHECK_REPLAYS);
         },
     );
@@ -2543,10 +2567,14 @@ fn an_all_reproduce_first_check_keeps_the_run_deterministic() {
             );
             ctx.first_check_sweep().await.unwrap();
             assert!(!ctx.nd_active);
-            assert!(ctx.first_checked.contains(origin.as_str()));
+            assert!(
+                ctx.origins
+                    .get(origin.as_str())
+                    .is_some_and(|c| c.first_checked())
+            );
             assert_eq!(execs.load(Ordering::SeqCst) as u64, FIRST_CHECK_REPLAYS);
             assert!(
-                ctx.nd_origins.take_seed(&origin).is_none(),
+                ctx.origins.entry(&origin).take_seed().is_none(),
                 "an all-reproduce check seeds nothing"
             );
         },
@@ -2585,20 +2613,22 @@ fn a_final_replay_miss_backtracks_to_the_reproduction_boundary() {
         async |ctx| {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90, 40]);
-            assert_eq!(ctx.interesting.get(&origin).unwrap(), &vec![int_node(40)]);
+            assert_eq!(ctx.origins.incumbent(&origin).unwrap(), &[int_node(40)]);
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(ctx.nd_active);
             assert_eq!(
-                ctx.interesting.get(&origin).unwrap(),
-                &vec![int_node(90)],
+                ctx.origins.incumbent(&origin).unwrap(),
+                &[int_node(90)],
                 "the reproduction boundary is the incumbent again"
             );
-            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(!ctx.origins.needs_confirmation(&origin));
             assert!(
-                !ctx.history.contains_key(&origin),
+                ctx.origins
+                    .get(&origin)
+                    .is_none_or(|c| c.history().is_empty()),
                 "a restored origin's history is dropped"
             );
         },
@@ -2727,7 +2757,7 @@ fn a_spent_backtrack_budget_short_circuits_the_next_backtrack() {
             seed_history(ctx, origin, &[90, 80, 70]);
             ctx.nd_flip();
             for _ in 0..nd::BACKTRACK_BAR_ATTEMPTS {
-                assert!(ctx.nd_origins.spend_backtrack_attempt(origin));
+                assert!(ctx.origins.entry(origin).spend_backtrack_attempt());
             }
             let Backtrack::Exhausted { evidence } = ctx.backtrack(origin).await.unwrap() else {
                 panic!("expected exhaustion");
@@ -2765,7 +2795,7 @@ fn the_backtrack_stops_at_a_candidate_it_cannot_afford_to_bar() {
             seed_history(ctx, &origin, &[90, 80]);
             ctx.nd_flip();
             for _ in 0..nd::BACKTRACK_BAR_ATTEMPTS - 1 {
-                assert!(ctx.nd_origins.spend_backtrack_attempt(&origin));
+                assert!(ctx.origins.entry(&origin).spend_backtrack_attempt());
             }
             let Backtrack::Exhausted { evidence } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected exhaustion");
@@ -2802,18 +2832,18 @@ fn the_sweep_rejects_an_origin_out_of_bar_attempts() {
                 false,
             );
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
-                assert!(ctx.nd_origins.spend_bar_attempt(origin));
+                assert!(ctx.origins.entry(origin).spend_bar_attempt());
             }
             let output = Settings::new().output;
             ctx.nd_discovery_sweep(Verbosity::Debug, &output)
                 .await
                 .unwrap();
             assert!(
-                !ctx.interesting.contains_key(origin),
+                ctx.origins.incumbent(origin).is_none(),
                 "at the attempt cap the origin is evicted"
             );
             assert_eq!(execs.load(Ordering::SeqCst), 0, "no batch runs at the cap");
-            assert_eq!(ctx.nd_origins.unconfirmed().next(), Some(origin));
+            assert_eq!(ctx.origins.unconfirmed().next(), Some(origin));
         },
     );
 }
@@ -2839,9 +2869,9 @@ fn shrink_admission_rejects_an_origin_out_of_bar_attempts() {
                 Duration::ZERO,
                 false,
             );
-            ctx.history.remove(&origin);
+            ctx.origins.entry(&origin).clear_history();
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
-                assert!(ctx.nd_origins.spend_bar_attempt(&origin));
+                assert!(ctx.origins.entry(&origin).spend_bar_attempt());
             }
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
@@ -2858,7 +2888,7 @@ fn shrink_admission_rejects_an_origin_out_of_bar_attempts() {
                 .unwrap();
             assert!(!timed_out);
             assert!(shrunk.contains(&origin));
-            assert!(!ctx.interesting.contains_key(&origin));
+            assert!(ctx.origins.incumbent(&origin).is_none());
             assert_eq!(
                 execs.load(Ordering::SeqCst),
                 0,
@@ -2886,20 +2916,20 @@ fn the_final_replay_review_confirms_through_the_bar() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.nd_origins.needs_confirmation(origin));
+            assert!(ctx.origins.needs_confirmation(origin));
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(
-                !ctx.nd_origins.needs_confirmation(origin),
+                !ctx.origins.needs_confirmation(origin),
                 "the review's reproducing run passed the bar"
             );
             assert!(
-                ctx.interesting.contains_key(origin),
+                ctx.origins.incumbent(origin).is_some(),
                 "the map incumbent stays"
             );
-            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            let caveat = ctx.origins.caveat(origin).unwrap();
             assert!(caveat.contains("confirmed"), "{caveat}");
             assert!(
                 caveat.contains("report time"),
@@ -2934,17 +2964,17 @@ fn a_bar_rejected_review_falls_through_to_eviction() {
                 Duration::ZERO,
                 false,
             );
-            ctx.history.remove(origin);
+            ctx.origins.entry(origin).clear_history();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
-            assert!(ctx.nd_origins.needs_confirmation(origin));
+            assert!(ctx.origins.needs_confirmation(origin));
             assert!(
-                !ctx.interesting.contains_key(origin),
+                ctx.origins.incumbent(origin).is_none(),
                 "a bar-rejected review evicts"
             );
-            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            let caveat = ctx.origins.caveat(origin).unwrap();
             assert!(caveat.contains("below the confirmation bar"), "{caveat}");
         },
     );
@@ -2969,8 +2999,8 @@ fn a_dry_review_folds_the_exhausted_backtracks_evidence() {
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
-            assert!(!ctx.interesting.contains_key(origin));
-            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            assert!(ctx.origins.incumbent(origin).is_none());
+            let caveat = ctx.origins.caveat(origin).unwrap();
             assert!(
                 caveat.contains("failed 0 of 32 replays"),
                 "the review's 29 trials and the scan's 3 both count: {caveat}"
@@ -3000,16 +3030,16 @@ fn an_out_of_attempts_review_evicts_without_a_batch() {
                 Duration::ZERO,
                 false,
             );
-            ctx.history.remove(origin);
+            ctx.origins.entry(origin).clear_history();
             for _ in 0..nd::BAR_ATTEMPTS_PER_RUN {
-                assert!(ctx.nd_origins.spend_bar_attempt(origin));
+                assert!(ctx.origins.entry(origin).spend_bar_attempt());
             }
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(
-                !ctx.interesting.contains_key(origin),
+                ctx.origins.incumbent(origin).is_none(),
                 "a reproducing review at the attempt cap still evicts"
             );
             assert_eq!(
@@ -3074,7 +3104,7 @@ fn backtrack_pools_the_other_reproducing_entries() {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(85)]);
-            let pool = ctx.nd_origins.pool(&origin);
+            let pool = ctx.origins.get(&origin).unwrap().pool();
             assert_eq!(pool[0], vec![int_node(85).value()]);
             assert!(
                 pool.contains(&vec![int_node(90).value()]),
@@ -3107,7 +3137,7 @@ fn a_backtracked_incumbent_anchors_from_its_bar_batch() {
             let Backtrack::Restored { .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
-            let (witness, anchor) = ctx.nd_origins.take_witness(&origin).unwrap();
+            let (witness, anchor) = ctx.origins.entry(&origin).take_witness().unwrap();
             assert_eq!(witness.origin.as_deref(), Some(origin.as_str()));
             let mut expected = nd::Evidence::default();
             for _ in 0..nd::ANCHOR_SEED_RUNS {
@@ -3137,13 +3167,10 @@ fn an_exhausted_backtrack_reports_caveat_only() {
                 .await
                 .unwrap();
             assert!(
-                ctx.interesting.is_empty(),
+                !ctx.origins.any_live(),
                 "an exhausted backtrack rejects into the caveat-only path"
             );
-            assert_eq!(
-                ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
-                vec![origin]
-            );
+            assert_eq!(ctx.origins.unconfirmed().collect::<Vec<_>>(), vec![origin]);
         },
     );
 }
@@ -3212,15 +3239,15 @@ fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
             .await
             .unwrap();
             assert_eq!(
-                ctx.interesting.get(&origin).unwrap(),
-                &vec![int_node(90)],
+                ctx.origins.incumbent(&origin).unwrap(),
+                &[int_node(90)],
                 "the verify miss backtracks to the displaced incumbent"
             );
             assert!(
                 !shrunk.contains(&origin),
                 "a restored origin requeues for a gauntleted pass"
             );
-            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(!ctx.origins.needs_confirmation(&origin));
             ctx.shrink_origin(
                 origin.clone(),
                 vec![int_node(90)],
@@ -3232,7 +3259,7 @@ fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
             .await
             .unwrap();
             assert!(shrunk.contains(&origin));
-            assert_eq!(ctx.interesting.get(&origin).unwrap(), &vec![int_node(90)]);
+            assert_eq!(ctx.origins.incumbent(&origin).unwrap(), &[int_node(90)]);
         },
     );
 }
@@ -3261,11 +3288,11 @@ fn backtrack_resumes_gauntleted_shrinking_under_remaining_budget() {
                 .await
                 .unwrap();
             assert_eq!(
-                ctx.interesting.get(&origin).unwrap(),
-                &vec![int_node(50)],
+                ctx.origins.incumbent(&origin).unwrap(),
+                &[int_node(50)],
                 "the restored incumbent re-shrinks under the gauntlet"
             );
-            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(!ctx.origins.needs_confirmation(&origin));
         },
     );
 }
@@ -3299,15 +3326,15 @@ fn a_flip_during_final_replay_reviews_already_replayed_origins() {
                 .await
                 .unwrap();
             assert!(
-                !ctx.nd_origins.needs_confirmation("Panic: alpha"),
+                !ctx.origins.needs_confirmation("Panic: alpha"),
                 "the deterministically replayed origin re-entered the queue and confirmed"
             );
-            assert!(!ctx.nd_origins.needs_confirmation("Panic: zeta"));
+            assert!(!ctx.origins.needs_confirmation("Panic: zeta"));
             assert_eq!(
-                ctx.interesting.get("Panic: zeta").unwrap(),
-                &vec![int_node(90)]
+                ctx.origins.incumbent("Panic: zeta").unwrap(),
+                &[int_node(90)]
             );
-            assert!(ctx.interesting.contains_key("Panic: alpha"));
+            assert!(ctx.origins.incumbent("Panic: alpha").is_some());
         },
     );
 }
@@ -3391,8 +3418,8 @@ fn a_raw_sighting_can_be_the_restored_incumbent() {
         async |ctx| {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[60, 90, 40]);
-            let history = ctx.history.get(&origin).unwrap();
-            assert!(!history.entries[1].accept, "90 does not displace 60");
+            let history = ctx.origins.get(&origin).unwrap().history();
+            assert!(!history.entries()[1].accept, "90 does not displace 60");
             ctx.nd_flip();
             let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
@@ -3437,7 +3464,7 @@ fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
                 shrunk.contains(origin),
                 "an exhausted backtrack ends the origin's shrink pass"
             );
-            assert!(ctx.nd_origins.needs_confirmation(origin));
+            assert!(ctx.origins.needs_confirmation(origin));
         },
     );
 }
@@ -3469,7 +3496,11 @@ fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
                 Duration::ZERO,
                 false,
             );
-            assert!(!ctx.history.contains_key(&origin));
+            assert!(
+                ctx.origins
+                    .get(&origin)
+                    .is_none_or(|c| c.history().is_empty())
+            );
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
@@ -3482,9 +3513,9 @@ fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
             )
             .await
             .unwrap();
-            assert!(!ctx.nd_origins.needs_confirmation(&origin));
+            assert!(!ctx.origins.needs_confirmation(&origin));
             assert!(shrunk.contains(&origin));
-            assert_eq!(ctx.interesting.get(&origin).unwrap(), &vec![int_node(50)]);
+            assert_eq!(ctx.origins.incumbent(&origin).unwrap(), &[int_node(50)]);
         },
     );
 }
@@ -3540,8 +3571,8 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
                 "a mid-shrink flip requeues instead of marking shrunk"
             );
             assert_eq!(
-                ctx.interesting.get(origin).unwrap(),
-                &vec![int_node(70)],
+                ctx.origins.incumbent(origin).unwrap(),
+                &[int_node(70)],
                 "the requeue discards untrusted single-run progress"
             );
         },
@@ -3872,7 +3903,7 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
             let origin = "Panic: bug";
             let big = vec![bool_node(true), bool_node(true)];
             ctx.record_run(&interesting_at(origin, big), Duration::ZERO, false);
-            assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
+            assert_eq!(ctx.origins.incumbent(origin).unwrap().len(), 2);
 
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
@@ -3880,20 +3911,21 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
                 false,
             );
             assert_eq!(
-                ctx.interesting.get(origin).unwrap().len(),
+                ctx.origins.incumbent(origin).unwrap().len(),
                 2,
                 "a raw interesting run must not displace an occupied origin"
             );
 
-            ctx.nd_origins
-                .confirm(origin, 0.9, None, Vec::new(), (4, 4))
+            ctx.origins
+                .entry(origin)
+                .confirm(0.9, None, Vec::new(), (4, 4))
                 .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
                 Duration::ZERO,
                 false,
             );
-            assert_eq!(ctx.interesting.get(origin).unwrap().len(), 2);
+            assert_eq!(ctx.origins.incumbent(origin).unwrap().len(), 2);
         },
     );
 }
@@ -3910,8 +3942,8 @@ fn nd_admission_leaves_the_origin_unconfirmed() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.interesting.contains_key("Panic: bug"));
-            assert!(ctx.nd_origins.needs_confirmation("Panic: bug"));
+            assert!(ctx.origins.incumbent("Panic: bug").is_some());
+            assert!(ctx.origins.needs_confirmation("Panic: bug"));
         },
     );
 }
@@ -3941,9 +3973,9 @@ fn nd_discovery_sweep_evicts_an_unconfirmable_origin() {
             ctx.nd_discovery_sweep(Verbosity::Debug, &output)
                 .await
                 .unwrap();
-            assert!(ctx.interesting.is_empty());
+            assert!(!ctx.origins.any_live());
             assert_eq!(
-                ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
+                ctx.origins.unconfirmed().collect::<Vec<_>>(),
                 vec!["Panic: fluke"]
             );
         },
@@ -3978,15 +4010,15 @@ fn nd_discovery_sweep_confirms_a_real_failure() {
             ctx.nd_discovery_sweep(Verbosity::Quiet, &output)
                 .await
                 .unwrap();
-            assert!(!ctx.nd_origins.needs_confirmation("Panic: bug"));
+            assert!(!ctx.origins.needs_confirmation("Panic: bug"));
             assert!(
-                ctx.nd_origins.pool("Panic: bug").len() > 1,
+                ctx.origins.get("Panic: bug").unwrap().pool().len() > 1,
                 "confirmation replays realizing fresh continuations must be captured"
             );
-            let (witness, anchor) = ctx.nd_origins.take_witness("Panic: bug").unwrap();
+            let (witness, anchor) = ctx.origins.entry("Panic: bug").take_witness().unwrap();
             assert_eq!(witness.origin.as_deref(), Some("Panic: bug"));
             assert!(anchor > 0.0);
-            assert!(ctx.interesting.contains_key("Panic: bug"));
+            assert!(ctx.origins.incumbent("Panic: bug").is_some());
         },
     );
 }
@@ -4054,14 +4086,9 @@ fn nd_boost_raises_the_anchor_or_declines() {
         },
         async |ctx| {
             let incumbent = vec![ChoiceValue::Boolean(true)];
-            ctx.nd_origins
-                .confirm(
-                    "Panic: bug",
-                    0.1,
-                    None,
-                    vec![vec![ChoiceValue::Boolean(false)]],
-                    (4, 9),
-                )
+            ctx.origins
+                .entry("Panic: bug")
+                .confirm(0.1, None, vec![vec![ChoiceValue::Boolean(false)]], (4, 9))
                 .unwrap();
             let (witness, lcb) = ctx
                 .nd_boost("Panic: bug", &incumbent, 0.0)
@@ -4318,7 +4345,7 @@ fn an_exhausted_alpha_budget_pins_new_candidates_at_the_ceiling() {
         },
         async |ctx| {
             let origin = "Panic: bug".to_string();
-            let spend = ctx.gauntlet_spend.entry(origin.clone()).or_default();
+            let spend = &mut ctx.origins.entry(&origin).gauntlet_spend;
             while spend.charge(&nd::Evidence::default(), 0.0, true, None)
                 != nd::GAUNTLET_MIN_FAILS_CEILING
             {}
@@ -5043,10 +5070,10 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
             assert!(ctx.first_bug_at.is_none());
             assert!(ctx.last_bug_at.is_none());
             assert!(
-                ctx.interesting.contains_key("Panic: measured"),
+                ctx.origins.incumbent("Panic: measured").is_some(),
                 "a measurement run still admits a vacant origin"
             );
-            assert!(ctx.nd_origins.needs_confirmation("Panic: measured"));
+            assert!(ctx.origins.needs_confirmation("Panic: measured"));
 
             ctx.record_run(&valid, Duration::from_secs(1), false);
             assert_eq!(ctx.calls, 1);
@@ -5874,8 +5901,9 @@ fn nd_state_for_caps_stored_timelines_at_pool_cap() {
             let pool: Vec<Vec<ChoiceValue>> = (0..nd::POOL_CAP)
                 .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
                 .collect();
-            ctx.nd_origins
-                .confirm("Panic: bug", 0.5, None, pool, (4, 6))
+            ctx.origins
+                .entry("Panic: bug")
+                .confirm(0.5, None, pool, (4, 6))
                 .unwrap();
             let incumbent = vec![ChoiceValue::Boolean(false)];
             let state = ctx.nd_state_for("Panic: bug", incumbent.clone());
@@ -5902,17 +5930,17 @@ fn final_replay_evicts_a_dry_unconfirmed_origin() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.interesting.contains_key("Panic: bug"));
+            assert!(ctx.origins.incumbent("Panic: bug").is_some());
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(
-                ctx.interesting.is_empty(),
+                !ctx.origins.any_live(),
                 "a dry unconfirmed origin leaves the interesting map"
             );
             assert_eq!(
-                ctx.nd_origins.unconfirmed().collect::<Vec<_>>(),
+                ctx.origins.unconfirmed().collect::<Vec<_>>(),
                 vec!["Panic: bug"]
             );
         },
@@ -5936,16 +5964,16 @@ fn a_reproducing_final_replay_confirms_an_unconfirmed_origin() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.nd_origins.needs_confirmation("Panic: bug"));
+            assert!(ctx.origins.needs_confirmation("Panic: bug"));
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(
-                !ctx.nd_origins.needs_confirmation("Panic: bug"),
+                !ctx.origins.needs_confirmation("Panic: bug"),
                 "a reproducing final replay confirms the origin"
             );
-            assert!(ctx.interesting.contains_key("Panic: bug"));
+            assert!(ctx.origins.incumbent("Panic: bug").is_some());
             let report = ctx.build_report();
             assert_eq!(report.failures.len(), 1);
             assert!(report.failures[0].reproduce_blob.is_some());
@@ -5965,8 +5993,9 @@ fn report_blobs_only_confirmed_origins() {
                 Duration::ZERO,
                 false,
             );
-            ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+            ctx.origins
+                .entry("Panic: a")
+                .confirm(0.5, None, Vec::new(), (4, 6))
                 .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
@@ -6006,17 +6035,17 @@ fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
             }
         },
         async |ctx| {
-            ctx.interesting
-                .insert("Panic: a".to_string(), vec![bool_node(true)]);
-            ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+            ctx.origins.entry("Panic: a").replace(vec![bool_node(true)]);
+            ctx.origins
+                .entry("Panic: a")
+                .confirm(0.5, None, Vec::new(), (4, 6))
                 .unwrap();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await
                 .unwrap();
             assert!(
-                ctx.interesting.contains_key("Panic: b"),
+                ctx.origins.incumbent("Panic: b").is_some(),
                 "the report-time measurement run admits the new origin"
             );
             let report = ctx.build_report();
@@ -6039,8 +6068,8 @@ fn unconfirmed_origins_report_caveat_only_when_nothing_confirmed() {
                 Duration::ZERO,
                 false,
             );
-            assert!(ctx.nd_origins.reject("Panic: a", (0, 24)));
-            ctx.interesting.remove("Panic: a");
+            ctx.origins.entry("Panic: a").reject((0, 24));
+            assert!(ctx.origins.needs_confirmation("Panic: a"));
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
                 Duration::ZERO,
@@ -6076,12 +6105,12 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
-            ctx.interesting.insert(
-                "Panic: a".to_string(),
-                vec![bool_node(true), bool_node(true)],
-            );
-            ctx.nd_origins
-                .confirm("Panic: a", 0.5, None, Vec::new(), (4, 6))
+            ctx.origins
+                .entry("Panic: a")
+                .replace(vec![bool_node(true), bool_node(true)]);
+            ctx.origins
+                .entry("Panic: a")
+                .confirm(0.5, None, Vec::new(), (4, 6))
                 .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
@@ -6263,7 +6292,7 @@ fn nd_targeting_yields_to_a_discovery() {
                 &HashMap::from_iter([("a".to_string(), 0.0), ("b".to_string(), 0.0)]),
             );
             ctx.optimise_targets_nd().await.unwrap();
-            assert!(!ctx.interesting.is_empty());
+            assert!(ctx.origins.any_live());
             let spent = execs.get();
             ctx.optimise_targets_nd().await.unwrap();
             assert_eq!(execs.get(), spent);
@@ -6409,7 +6438,7 @@ fn nd_targeting_reference_interrupted_by_a_discovery_is_not_marked_dead() {
                 .record(&[], &HashMap::from_iter([("s".to_string(), 1.0)]));
             ctx.optimise_targets_nd().await.unwrap();
             assert!(ctx.targeting.nd_target("s").is_none());
-            assert!(!ctx.interesting.is_empty());
+            assert!(ctx.origins.any_live());
         },
     );
 }
@@ -6432,9 +6461,9 @@ fn gauntlet_accept_without_adoption_moves_nothing() {
             boom("bug")
         },
         async |ctx| {
-            ctx.nd_origins
+            ctx.origins
+                .entry("Panic: bug")
                 .confirm(
-                    "Panic: bug",
                     0.3,
                     Some(interesting_at("Panic: bug", vec![bool_node(true)])),
                     Vec::new(),
@@ -6462,7 +6491,7 @@ fn gauntlet_accept_without_adoption_moves_nothing() {
                     "an unadopted accept must not move the probe anchor"
                 );
             }
-            let (_, anchor) = ctx.nd_origins.take_witness("Panic: bug").unwrap();
+            let (_, anchor) = ctx.origins.entry("Panic: bug").take_witness().unwrap();
             assert_eq!(anchor, 0.3, "the stored anchor is untouched");
             assert!(
                 ctx.db().unwrap().fetch(b"k").is_empty(),
@@ -6490,8 +6519,9 @@ fn anchor_raises_only_on_adoption_and_once_per_timeline() {
             boom("bug")
         },
         async |ctx| {
-            ctx.nd_origins
-                .confirm("Panic: bug", 0.3, None, Vec::new(), (4, 6))
+            ctx.origins
+                .entry("Panic: bug")
+                .confirm(0.3, None, Vec::new(), (4, 6))
                 .unwrap();
             let raised_anchor;
             {
@@ -7187,10 +7217,10 @@ fn a_flip_during_a_successful_final_replay_keeps_the_failure() {
                 "the verdict flip inside the successful replay entered nd handling"
             );
             assert!(
-                !ctx.nd_origins.needs_confirmation(&origin),
+                !ctx.origins.needs_confirmation(&origin),
                 "the reproduced origin re-entered the queue and confirmed"
             );
-            assert!(ctx.interesting.contains_key(&origin));
+            assert!(ctx.origins.incumbent(&origin).is_some());
             let report = ctx.build_report();
             assert_eq!(report.failures.len(), 1);
             assert!(report.failures[0].reproduce_blob.is_some());
@@ -7238,12 +7268,12 @@ fn a_dry_pooled_review_backtracks_over_history_at_the_final_replay() {
                 .await
                 .unwrap();
             assert!(
-                !ctx.nd_origins.needs_confirmation(&origin),
+                !ctx.origins.needs_confirmation(&origin),
                 "the dry review backtracked over history and confirmed"
             );
             assert_eq!(
-                ctx.interesting.get(&origin).unwrap(),
-                &vec![int_node(77), int_node(77)],
+                ctx.origins.incumbent(&origin).unwrap(),
+                &[int_node(77), int_node(77)],
                 "the restored incumbent displaced the fluke"
             );
         },
@@ -7300,10 +7330,10 @@ fn an_exhausted_backtrack_after_a_dry_pooled_review_rejects_the_origin() {
                 .await
                 .unwrap();
             assert!(
-                ctx.interesting.get(origin).is_none(),
+                ctx.origins.incumbent(origin).is_none(),
                 "an origin nothing reproduces is rejected into the caveat-only report"
             );
-            let caveat = ctx.nd_origins.caveat(origin).unwrap();
+            let caveat = ctx.origins.caveat(origin).unwrap();
             assert!(
                 caveat.starts_with("unconfirmed failure: failed 0 of"),
                 "unexpected caveat: {caveat}"
@@ -7331,7 +7361,7 @@ fn a_seeded_bar_quota_with_no_reproducing_replay_rejects_at_the_cap() {
             for _ in 0..nd::CONFIRM_MIN_FAILS {
                 seed.record(true);
             }
-            ctx.nd_origins.seed_evidence(origin, seed);
+            ctx.origins.entry(origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
                 .nd_evidence_batch(origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
@@ -7372,7 +7402,7 @@ fn a_seeded_bar_quota_accepts_once_a_replay_reproduces() {
             for _ in 0..nd::CONFIRM_MIN_FAILS {
                 seed.record(true);
             }
-            ctx.nd_origins.seed_evidence(&origin, seed);
+            ctx.origins.entry(&origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
                 .nd_evidence_batch(&origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
@@ -7594,8 +7624,8 @@ fn the_caveat_only_fallback_honors_report_multiple_failures() {
         |_ds| TestCaseResult::Valid,
         async |ctx| {
             ctx.nd_flip();
-            ctx.nd_origins.observe("Panic: a");
-            ctx.nd_origins.observe("Panic: b");
+            ctx.origins.entry("Panic: a");
+            ctx.origins.entry("Panic: b");
             let report = ctx.build_report();
             assert_eq!(report.failures.len(), 1);
             assert_eq!(report.failures[0].origin, "Panic: a");

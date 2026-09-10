@@ -167,8 +167,8 @@ through rediscovery on the next run (decision 35).
 
 ## Origin history
 
-`OriginHistory` (test_runner.rs) retains every pre-flip interesting execution
-per origin: raw sightings and accepts alike, in execution order, deduplicated
+Each `Counterexample`'s `History` (counterexample.rs) retains every pre-flip
+interesting execution of its origin: raw sightings and accepts alike, in execution order, deduplicated
 by serialized nodes. The history is unbounded because gate G24 found that a
 recency bound evicts exactly the entries an early slip-in needs. The `accept` flag marks entries
 that became the incumbent when recorded, a founding sighting or a shortlex

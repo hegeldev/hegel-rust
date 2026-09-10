@@ -15,7 +15,10 @@ weighting, so evidence is plain (fails, runs); decision 72 (2026-09-07, experime
 backtrack attempt budgets, per-proposal gauntlet alpha spending with an escalating
 failure minimum, and a bar on the pooled review's reproducing run in place of the
 any-failure rule (see [the lifecycle](lifecycle.md), [shrinking](shrinking.md), and
-[the final replay](final-replay.md)). Part II
+[the final replay](final-replay.md)); and decision 73 (2026-09-10) gave the failing
+test case one representation, `Counterexample` (`counterexample.rs`), replacing the
+engine's interesting map, `OriginLifecycle`, and the separate history, alpha-budget, and
+first-check containers (see [the lifecycle](lifecycle.md)). Part II
 tells the story ([production](../part2/production.md), [remediation](../part2/remediation.md),
 [seam plan](../part2/seam-plan.md)). This chapter records the state as of the plans'
 close plus that addition.

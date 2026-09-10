@@ -1,6 +1,6 @@
 # The origin lifecycle
 
-Once a run flips into ND handling (see [detection](detection.md)), an interesting execution stops being self-evident: any single failure may be a background fluke, and every claim about a failure must be bought with replays. The per-failure state that enforces this is `OriginLifecycle` (hegel-c/src/native/nd/lifecycle.rs), driven from `test_runner.rs`. The arithmetic it consults is pure and engine-state-free in hegel-c/src/native/nd/mod.rs.
+Once a run flips into ND handling (see [detection](detection.md)), an interesting execution stops being self-evident: any single failure may be a background fluke, and every claim about a failure must be bought with replays. The per-failure state that enforces this is the `Counterexample` (hegel-c/src/native/counterexample.rs) — one value per origin holding the incumbent, the pool, the standing described in this chapter, the evidence, the pre-flip history, and the per-run budgets — driven from `test_runner.rs` (decision 73; before it the standing lived in a separate `OriginLifecycle` keyed by origin, the incumbent in the engine's interesting map). The arithmetic it consults is pure and engine-state-free in hegel-c/src/native/nd/mod.rs.
 
 ## Origin identity
 
@@ -10,7 +10,7 @@ A failure's identity is its origin: the panic site rendered as a `file:line:col`
 
 The run that discovers an origin was noticed because it failed. Treating it as one Bernoulli observation of the failure rate conditions on the outcome: over a long generation phase, low-probability flukes get many chances to fire once, so first sightings over-represent exactly the failures least likely to reproduce. Experiment 003 measured this directly: at the noise floor a first-interesting execution was a fluke more often than a real bug (2:1), and letting raw runs displace incumbents allowed noise-floor flukes to displace a 20/20-confirmed discovery in about 80% of trials (decisions 20, 21).
 
-So under ND handling a raw interesting run does exactly two things. It may fill a vacant slot in the interesting map (never displace an occupied one), and it calls `OriginLifecycle::observe`, which creates `Unconfirmed { fails: 0, replays: 0 }` on first sighting and never changes existing state: "a raw run is selection, not evidence." `observe` runs from `record_run` when a post-flip interesting conclusion fills a vacant origin, and again defensively at the final replay. Reproduction-rate claims come only from replays made for that purpose. As `nd_evidence_batch`'s doc puts it: "The triggering run is selection, not evidence — only these fresh replays count."
+So under ND handling a raw interesting run does exactly one thing: it may fill a vacant origin's incumbent (`Counterexample::adopt` on a record with no incumbent, never displacing an occupied one), and the record it lands in starts `Unconfirmed` with no evidence: "a raw run is selection, not evidence." This happens in `record_run` when a post-flip interesting conclusion fills a vacant origin. Reproduction-rate claims come only from replays made for that purpose. As `nd_evidence_batch`'s doc puts it: "The triggering run is selection, not evidence — only these fresh replays count."
 
 ## Evidence and Wilson bounds
 
@@ -63,11 +63,11 @@ Not every origin passes through the check. Database-reuse reproductions are exem
 
 ## The three states
 
-`OriginState` (hegel-c/src/native/nd/lifecycle.rs):
+`Standing` (hegel-c/src/native/counterexample.rs), one per `Counterexample`; the pool and the evidence counters (`fails`, `replays`, `report_fails`, `report_replays`) sit beside it on the record, whatever the standing:
 
-- `Unconfirmed { fails, replays }`: observed interesting but not past the bar. The counts accumulate the evidence behind rejected batches, for the caveated report.
-- `Trusted { pool, fails, replays, report_fails, report_replays }`: reproduced from the database, so exempt from the bar's verdict and from eviction, carrying the stored v2 entry's timeline pool (empty for v1) but no anchor until promotion.
-- `Confirmed { anchor, witness, pool, fails, replays, report_fails, report_replays }`: past the bar, or promoted from Trusted. The anchor is the monotone failure-rate estimate the gauntlet prices candidates against, the witness is the confirmation run the shrinker starts from, and the pool is the captured failing timelines, incumbent first.
+- `Unconfirmed`: observed interesting but not past the bar. The counts accumulate the evidence behind rejected batches, for the caveated report.
+- `Trusted`: reproduced from the database, so exempt from the bar's verdict and from eviction, carrying the stored v2 entry's timeline pool (empty for v1) but no anchor until promotion.
+- `Confirmed { anchor, witness }`: past the bar, or promoted from Trusted. The anchor is the monotone failure-rate estimate the gauntlet prices candidates against, the witness is the confirmation run the shrinker starts from, and the record's pool is the captured failing timelines, confirm-time incumbent first.
 
 Every stored pool obeys `POOL_CAP` = 10 timelines total, incumbent included: decision 22 measured K = 5 as near-ceiling and K = 10 as the plateau for reproduction, and the lifecycle's writers truncate incoming pools so the invariant holds at the single point of storage. The decode-side format bound is deliberately looser ([persistence](persistence.md)).
 
@@ -103,11 +103,11 @@ Trust exempts the origin from the bar's verdict, not from measurement (decision 
 
 ## Rejection and eviction
 
-`reject` folds the rejecting batch's counts into the origin's evidence and reports whether the caller must evict: true for Unconfirmed origins, false for Trusted and Confirmed ones, which are exempt. Eviction removes the origin from the interesting map: generation keeps hunting, and a rediscovery faces the bar afresh, which is why the bar can afford 45% per-discovery power. The lifecycle entry itself survives ("Rejection never demotes and never removes state"), so the accumulated counts still feed the caveat. A rejected origin reaches the report only through the caveat-only fallback, and only when nothing confirmed or trusted survived: unconfirmed reporting is gated to avoid caveat fatigue (decisions 3, 24).
+`Counterexample::reject` folds the rejecting batch's counts into the origin's evidence and evicts the incumbent for Unconfirmed origins (returning it, for the seam dump); Trusted and Confirmed ones are exempt and keep theirs. An evicted origin is no longer live: generation keeps hunting, and a rediscovery faces the bar afresh, which is why the bar can afford 45% per-discovery power. The record itself survives ("Rejection never demotes and never removes state"), so the accumulated counts and budgets still stand and feed the caveat. A rejected origin reaches the report only through the caveat-only fallback, and only when nothing confirmed or trusted survived: unconfirmed reporting is gated to avoid caveat fatigue (decisions 3, 24).
 
 ## Caveat wording
 
-`OriginLifecycle::caveat` renders each reported failure's note from the origin's state, quoting only in-run measurements. No rates are ever persisted, so every run's caveat stands on its own replays (decisions 3, 8). It returns `None` for an origin the lifecycle never saw: a deterministic failure carries no caveat. The environment-modification hypothesis appears only where non-reproduction is surprising given the evidence, and report-time counts are quoted apart from confirmation or reuse counts.
+`Counterexample::caveat` renders each reported failure's note from the record's standing and counts, quoting only in-run measurements. No rates are ever persisted, so every run's caveat stands on its own replays (decisions 3, 8). The report attaches it only under ND handling: a deterministic failure carries no caveat. The environment-modification hypothesis appears only where non-reproduction is surprising given the evidence, and report-time counts are quoted apart from confirmation or reuse counts.
 
 Confirmed:
 

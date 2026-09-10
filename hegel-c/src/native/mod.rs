@@ -5,6 +5,7 @@ pub mod base64;
 pub mod bignum;
 pub mod blob;
 pub mod core;
+pub(crate) mod counterexample;
 pub mod data_source;
 pub mod database;
 pub mod draws;
