@@ -12,4 +12,4 @@ gs::floats::<f64>().min_value_exclusive(0.0).max_value_exclusive(1.0)
 
 `min_value` and `min_value_exclusive` set the same bound, so whichever is called last wins (likewise for `max_value` / `max_value_exclusive`). An exclusive bound can no longer be set without a bound value, so that `InvalidArgument` no longer exists; the remaining validation (an exclusive `+inf` minimum, an exclusive `-inf` maximum, or exclusive bounds on a single-point range) is unchanged.
 
-`exclude_min` and `exclude_max` remain as deprecated methods, but calling them is a compile error whose message names the replacement, rather than a warning.
+`exclude_min` and `exclude_max` remain as deprecated methods so existing call sites get a deprecation warning naming the replacement, but calling either now panics immediately rather than configuring the generator.
