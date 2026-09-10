@@ -196,7 +196,7 @@
 //!
 //! Suite-wide settings live in named *profiles*. Hegel ships three:
 //! `development` (what local runs get), `ci` (selected automatically on CI
-//! servers), and `antithesis` (selected automatically inside
+//! servers), and `workload` (selected automatically inside
 //! [Antithesis](https://antithesis.com/)). Modify them or define your own
 //! in a `hegel.toml` at your package or workspace root:
 //!

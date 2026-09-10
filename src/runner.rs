@@ -82,7 +82,7 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. The shipped `antithesis` settings
+    /// and reproduce generation directly. The shipped `workload` settings
     /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
@@ -118,7 +118,7 @@ pub enum Verbosity {
 /// base settings, and `default` is the default profile — the one in effect
 /// when nothing names a profile, chosen by [`Settings::set_default_profile`],
 /// `HEGEL_DEFAULT_PROFILE`, or the `default` entry in `hegel.toml`, else by
-/// the environment (`antithesis` inside Antithesis, `ci` on a CI server,
+/// the environment (`workload` inside Antithesis, `ci` on a CI server,
 /// `development` locally). [`Settings::new`] resolves `default`;
 /// [`Settings::from_profile`] resolves a profile by name. Profiles are
 /// modified and defined in a `hegel.toml` at the package or workspace root,
@@ -153,7 +153,7 @@ impl Settings {
     }
 
     /// Create settings from the named profile: reserved (`base`,
-    /// `default`), shipped (`development`, `ci`, `antithesis`), defined in
+    /// `default`), shipped (`development`, `ci`, `workload`), defined in
     /// `hegel.toml`, or registered with [`Settings::register_profile`].
     /// Selecting a profile does not change what the default profile is, and
     /// the named profile still implicitly extends `default`, so it layers
@@ -222,7 +222,7 @@ impl Settings {
     }
 
     /// Select the randomness backend (base value: [`Backend::Default`]; the
-    /// shipped `antithesis` profile selects [`Backend::Urandom`]).
+    /// shipped `workload` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
         self

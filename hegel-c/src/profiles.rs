@@ -10,7 +10,7 @@
 //!   a profile. It is an alias whose candidates, in order, are the named
 //!   default (the strongest set of the process override
 //!   ([`set_default_profile`]), `HEGEL_DEFAULT_PROFILE`, and the `default`
-//!   entry in `hegel.toml`) and the environment's profile (`antithesis`
+//!   entry in `hegel.toml`) and the environment's profile (`workload`
 //!   inside Antithesis, else `ci` on a CI server, else `development`). The
 //!   alias resolves to the first candidate not already part of the chain
 //!   being resolved, falling back to `base`. Resolving no name at all
@@ -27,11 +27,11 @@
 //! - `development`: an empty delta, the environment profile of local runs.
 //! - `ci`: `derandomize = true`, the database disabled, the `too_slow`
 //!   health check suppressed, and `print_blob = true`.
-//! - `antithesis`: the urandom backend, the database disabled, and every
+//! - `workload`: the urandom backend, the database disabled, and every
 //!   health check suppressed, since Antithesis's thread pausing would trip
 //!   wall-clock checks such as `too_slow` spuriously. Like any profile
 //!   setting these can be changed in `hegel.toml`, and resolving a profile
-//!   that does not extend `antithesis` inside Antithesis runs the health
+//!   that does not extend `workload` inside Antithesis runs the health
 //!   checks on the default backend.
 //!
 //! Users modify shipped profiles and define new ones in a `hegel.toml`
@@ -263,7 +263,7 @@ static SHIPPED: Lazy<[(&'static str, ProfileDelta); 3]> = Lazy::new(|| {
             },
         ),
         (
-            "antithesis",
+            "workload",
             ProfileDelta {
                 backend: Some(Backend::Urandom),
                 database: Some(Database::Disabled),
@@ -353,7 +353,7 @@ pub(crate) struct Candidates {
     overridden: Option<String>,
     env: Option<String>,
     toml: Option<String>,
-    /// The environment's profile: `antithesis` or `ci` by detection, else
+    /// The environment's profile: `workload` or `ci` by detection, else
     /// `development`.
     environment: &'static str,
 }
@@ -369,7 +369,7 @@ impl Candidates {
             env: env(DEFAULT_PROFILE_VAR).filter(|v| !v.is_empty()),
             toml: config.default.clone(),
             environment: if crate::antithesis_detect::antithesis_env_var_set_from(&env) {
-                "antithesis"
+                "workload"
             } else if crate::settings::is_in_ci_from(&env) {
                 "ci"
             } else {

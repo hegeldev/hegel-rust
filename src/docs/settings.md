@@ -128,7 +128,7 @@ they are siblings, and none layers over another.
 |---|---|---|
 | `development` | nothing | Locally: whenever neither of the others applies. |
 | `ci` | `derandomize = true`, `database = "disabled"`, `suppress_health_check = ["too_slow"]`, `print_blob = true` | On a CI server, detected from `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, and the variables other common services set. |
-| `antithesis` | `backend = "urandom"`, `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis's fuzzer controls `/dev/urandom`, so the `urandom` backend hands it every choice; and Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
+| `workload` | `backend = "urandom"`, `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis's fuzzer controls `/dev/urandom`, so the `urandom` backend hands it every choice; and Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
 
 The `ci` profile's `print_blob = true` is why a failing test on CI prints a
 `#[hegel::reproduce_failure("…")]` line: with the database disabled, the
@@ -202,7 +202,7 @@ weaker ones are ignored entirely, not kept as fallbacks:
    which the `--profile` flag of a `#[hegel::main]` binary calls.
 2. The `HEGEL_DEFAULT_PROFILE` environment variable, when non-empty.
 3. The top-level `default = "<profile>"` entry in `hegel.toml`.
-4. The environment's profile: `antithesis` inside Antithesis, else `ci` on
+4. The environment's profile: `workload` inside Antithesis, else `ci` on
    a CI server, else `development`.
 
 Naming a profile that does not exist is an error, reported with the list
@@ -315,5 +315,5 @@ run first.
 | `HEGEL_TEST_CASES` | each run | Overrides `test_cases`, after every other layer. |
 | `HEGEL_DATABASE` | each run | Overrides `database`, after every other layer. |
 | `HEGEL_STATISTICS` | each run | Turns `show_statistics` on, after every other layer. |
-| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `antithesis` profile. Must name an existing directory. |
+| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |

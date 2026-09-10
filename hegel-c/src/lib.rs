@@ -209,7 +209,7 @@ pub enum hegel_backend_t {
     /// Read fresh entropy from `/dev/urandom` on every draw, falling back to
     /// an OS-seeded PRNG on platforms without it. Intended for running under
     /// Antithesis, whose fuzzer controls `/dev/urandom`, and selected by the
-    /// shipped `antithesis` profile; you almost certainly don't want it
+    /// shipped `workload` profile; you almost certainly don't want it
     /// otherwise.
     HEGEL_BACKEND_URANDOM = 2,
 }
@@ -737,7 +737,7 @@ fn cstring_lossy(s: &str) -> CString {
 /// the strongest set of `hegel_set_default_profile`, the
 /// `HEGEL_DEFAULT_PROFILE` environment variable, and the top-level
 /// `default = "<profile>"` entry in `hegel.toml`, else the detected
-/// environment (`antithesis` inside Antithesis, detected via
+/// environment (`workload` inside Antithesis, detected via
 /// `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI server, detected via `CI`,
 /// `GITHUB_ACTIONS`, and similar variables), else `development`. This
 /// function resolves `default`.
@@ -745,7 +745,7 @@ fn cstring_lossy(s: &str) -> CString {
 /// Three ordinary profiles ship with libhegel: `development` (the base
 /// settings, unchanged — what local runs get), `ci` (derandomization on,
 /// database disabled, the `too_slow` health check suppressed, reproduction
-/// lines printed), and `antithesis` (database disabled, every health check
+/// lines printed), and `workload` (database disabled, every health check
 /// suppressed). A custom profile without an explicit `extends` extends
 /// `default`, skipping any candidate already in its chain, so it sits on
 /// `ci` when resolved on a CI server and on `development` locally. The
@@ -766,7 +766,7 @@ pub unsafe extern "C" fn hegel_settings_new(
 
 /// Parameters:
 /// `name`: The profile to resolve: reserved (`base`, `default`), shipped
-///   (`development`, `ci`, `antithesis`), defined in `hegel.toml`, or
+///   (`development`, `ci`, `workload`), defined in `hegel.toml`, or
 ///   registered with `hegel_settings_register_profile`.
 /// `out_settings`: Receives a handle initialized from that profile.
 ///

@@ -60,7 +60,7 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. The shipped `antithesis` settings
+    /// and reproduce generation directly. The shipped `workload` settings
     /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
@@ -138,7 +138,7 @@ pub enum Verbosity {
 /// the `settings` parameter of `#[hegel::test]`.
 ///
 /// [`Settings::new`] returns the library's base defaults. Environment
-/// policy — the shipped `development`/`ci`/`antithesis` profiles,
+/// policy — the shipped `development`/`ci`/`workload` profiles,
 /// `hegel.toml`, and default-profile selection — lives in the profile
 /// system ([`crate::profiles`]); `hegel_settings_new` resolves the
 /// `default` alias, so C-ABI callers get profile-aware defaults
@@ -213,14 +213,14 @@ impl Settings {
     }
 
     /// Select the randomness backend (default: [`Backend::Default`]; the
-    /// shipped `antithesis` profile selects [`Backend::Urandom`]).
+    /// shipped `workload` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
         self.backend = backend;
         self
     }
 
     /// Whether `check` should be skipped because the resolved settings
-    /// suppress it. The shipped `antithesis` profile suppresses every check.
+    /// suppress it. The shipped `workload` profile suppresses every check.
     pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
         self.suppress_health_check.contains(&check)
     }

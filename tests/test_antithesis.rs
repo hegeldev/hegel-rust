@@ -121,7 +121,7 @@ fn test_nonexistent_antithesis_output_dir_panics() {
 }
 
 /// Filters out every input. Outside Antithesis this trips the
-/// `FilterTooMuch` health check; inside Antithesis the `antithesis` profile
+/// `FilterTooMuch` health check; inside Antithesis the `workload` profile
 /// suppresses every health check, so the run ends quietly with no valid
 /// inputs.
 #[hegel::test]

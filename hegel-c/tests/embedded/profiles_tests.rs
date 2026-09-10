@@ -103,8 +103,8 @@ const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
 ];
 
 #[test]
-fn the_antithesis_profile_selects_urandom_and_disables_the_database_and_every_health_check() {
-    let s = resolve_named("antithesis", &no_config());
+fn the_workload_profile_selects_urandom_and_disables_the_database_and_every_health_check() {
+    let s = resolve_named("workload", &no_config());
     assert_eq!(s.backend, Backend::Urandom);
     assert_eq!(s.database, Database::Disabled);
     for check in ALL_HEALTH_CHECKS {
@@ -134,9 +134,9 @@ fn antithesis_detection_does_not_force_health_checks_off() {
 
 #[test]
 fn a_config_delta_re_enables_health_checks_in_antithesis() {
-    let config = config_of("[profiles.antithesis]\nsuppress_health_check = [\"too_slow\"]\n");
+    let config = config_of("[profiles.workload]\nsuppress_health_check = [\"too_slow\"]\n");
     let s = resolve(
-        "antithesis",
+        "workload",
         &config,
         &[],
         &Settings::base(true),
@@ -179,7 +179,7 @@ fn shipped_profiles_root_in_the_base_defaults_not_development() {
     let s = resolve_named("ci", &config);
     assert_eq!(s.test_cases, 100, "development is a sibling, not a layer");
     assert!(s.derandomize);
-    let s = resolve_named("antithesis", &config);
+    let s = resolve_named("workload", &config);
     assert_eq!(s.test_cases, 100);
     let s = resolve_named("development", &config);
     assert_eq!(s.test_cases, 200);
@@ -287,12 +287,9 @@ fn long_extends_chains_resolve() {
 #[test]
 fn a_config_delta_overrides_an_inherited_backend() {
     let config = config_of(
-        "[profiles.antithesis]\nbackend = \"default\"\n[profiles.x]\nextends = \"development\"\nbackend = \"urandom\"\n",
+        "[profiles.workload]\nbackend = \"default\"\n[profiles.x]\nextends = \"development\"\nbackend = \"urandom\"\n",
     );
-    assert_eq!(
-        resolve_named("antithesis", &config).backend,
-        Backend::Default
-    );
+    assert_eq!(resolve_named("workload", &config).backend, Backend::Default);
     assert_eq!(resolve_named("x", &config).backend, Backend::Urandom);
 }
 
@@ -340,17 +337,17 @@ fn unknown_profiles_are_reported_with_the_known_names() {
             name: "nope".to_owned(),
             source: None,
             known: vec![
-                "antithesis".to_owned(),
                 "base".to_owned(),
                 "ci".to_owned(),
                 "development".to_owned(),
+                "workload".to_owned(),
             ],
         }
     );
     assert_eq!(
         e.to_string(),
         "unknown settings profile \"nope\"; known profiles: \
-         antithesis, base, ci, development"
+         base, ci, development, workload"
     );
 }
 
@@ -374,7 +371,7 @@ fn known_names_include_config_and_registered_profiles() {
     };
     assert_eq!(
         known,
-        vec!["antithesis", "base", "ci", "development", "mine", "nightly"]
+        vec!["base", "ci", "development", "mine", "nightly", "workload"]
     );
 }
 
@@ -723,7 +720,7 @@ fn an_empty_default_profile_variable_is_ignored() {
 fn antithesis_detection_beats_ci_detection() {
     let env = env_of(&[("ANTITHESIS_OUTPUT_DIR", "/tmp"), ("CI", "true")]);
     let s = settings_for_env(None, &no_config(), env).unwrap();
-    assert!(!s.derandomize, "the antithesis profile won, not ci");
+    assert!(!s.derandomize, "the workload profile won, not ci");
     assert_eq!(s.database, Database::Disabled);
 }
 
@@ -771,17 +768,17 @@ fn settings_for_from_rejects_an_unknown_default_profile_variable() {
             name: "bogus".to_owned(),
             source: Some("HEGEL_DEFAULT_PROFILE"),
             known: vec![
-                "antithesis".to_owned(),
                 "base".to_owned(),
                 "ci".to_owned(),
                 "development".to_owned(),
+                "workload".to_owned(),
             ],
         }
     );
     assert_eq!(
         e.to_string(),
         "unknown settings profile \"bogus\" (named by HEGEL_DEFAULT_PROFILE); \
-         known profiles: antithesis, base, ci, development"
+         known profiles: base, ci, development, workload"
     );
 }
 
@@ -818,10 +815,10 @@ fn settings_for_from_validates_the_toml_default_entry_eagerly() {
             name: "ghost".to_owned(),
             source: Some("the default entry in hegel.toml"),
             known: vec![
-                "antithesis".to_owned(),
                 "base".to_owned(),
                 "ci".to_owned(),
                 "development".to_owned(),
+                "workload".to_owned(),
             ],
         }
     );
@@ -839,18 +836,18 @@ fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
     assert_eq!(
         s.backend,
         Backend::Default,
-        "explicitly selecting base opts out of the antithesis profile's backend"
+        "explicitly selecting base opts out of the workload profile's backend"
     );
     for check in ALL_HEALTH_CHECKS {
         assert!(
             !s.health_check_suppressed(check),
-            "explicitly selecting base opts out of the antithesis profile's health-check policy: {check:?}"
+            "explicitly selecting base opts out of the workload profile's health-check policy: {check:?}"
         );
     }
     assert_eq!(
         s.database,
         Database::Unset,
-        "explicitly selecting base opts out of the antithesis profile's database policy"
+        "explicitly selecting base opts out of the workload profile's database policy"
     );
 }
 
