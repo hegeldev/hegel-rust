@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.41.5 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.8.
+
 ## 0.41.4 - 2026-09-09
 
 `#[hegel::main]` binaries now suppress the `TooSlow` and `TestCasesTooLarge` health checks. Stateful test cases no longer stop at random after tens of thousands of rounds: the engine's per-round stop probability is now 2^-32 instead of 2^-16.
