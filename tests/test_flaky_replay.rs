@@ -36,4 +36,9 @@ fn replay_of_a_vanishing_failure_is_reported_as_flaky() {
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .unwrap_or("");
     assert!(msg.contains("Flaky test detected"), "got: {msg:?}");
+    assert!(
+        msg.contains("The failure that did not reproduce was: Panic at "),
+        "the diagnostic names the failure the engine recorded, got: {msg:?}"
+    );
+    assert!(msg.contains("test_flaky_replay.rs"), "got: {msg:?}");
 }
