@@ -70,7 +70,6 @@ pub(crate) enum hegel_status_t {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub(crate) enum hegel_backend_t {
-    HEGEL_BACKEND_AUTO = 0,
     HEGEL_BACKEND_DEFAULT = 1,
     HEGEL_BACKEND_URANDOM = 2,
 }

@@ -60,8 +60,8 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. When running inside Antithesis this
-    /// backend is selected automatically unless you set one explicitly.
+    /// and reproduce generation directly. The shipped `antithesis` settings
+    /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
     /// source differs. On platforms without `/dev/urandom` (Windows) it falls
@@ -164,10 +164,7 @@ pub struct Settings {
     /// exists so profiles can carry the choice and frontends can read it
     /// back through the C ABI.
     pub(crate) print_blob: bool,
-    /// The randomness backend, or `None` to let it be chosen automatically
-    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
-    /// [`Settings::backend`] always wins over the automatic choice.
-    pub(crate) backend: Option<Backend>,
+    pub(crate) backend: Backend,
     /// The path of the `hegel.toml` these settings were resolved against,
     /// `None` when no config file was loaded. A diagnostic stamped by
     /// profile resolution and logged at run start under `Debug` verbosity,
@@ -210,18 +207,15 @@ impl Settings {
             report_multiple_failures: false,
             show_statistics: false,
             print_blob: false,
-            backend: None,
+            backend: Backend::Default,
             config_path: None,
         }
     }
 
-    /// Select the randomness backend.
-    ///
-    /// By default the backend is chosen automatically: [`Backend::Urandom`]
-    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
-    /// Calling this pins the choice, overriding the automatic detection.
+    /// Select the randomness backend (default: [`Backend::Default`]; the
+    /// shipped `antithesis` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
-        self.backend = Some(backend);
+        self.backend = backend;
         self
     }
 
@@ -229,19 +223,6 @@ impl Settings {
     /// suppress it. The shipped `antithesis` profile suppresses every check.
     pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
         self.suppress_health_check.contains(&check)
-    }
-
-    /// Resolve the effective backend, given whether the process is running
-    /// inside Antithesis.
-    ///
-    /// An explicit [`Settings::backend`] always wins; otherwise urandom is
-    /// used under Antithesis and the default PRNG backend elsewhere.
-    pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
-        match self.backend {
-            Some(backend) => backend,
-            None if in_antithesis => Backend::Urandom,
-            None => Backend::Default,
-        }
     }
 
     /// Set the number of test cases to run (default: 100).

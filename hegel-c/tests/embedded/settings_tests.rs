@@ -10,15 +10,13 @@ fn default_is_new() {
 }
 
 #[test]
-fn resolved_backend_picks_urandom_under_antithesis() {
-    assert_eq!(
-        Settings::new()
-            .backend(Backend::Default)
-            .resolved_backend(true),
-        Backend::Default
-    );
-    assert_eq!(Settings::new().resolved_backend(true), Backend::Urandom);
-    assert_eq!(Settings::new().resolved_backend(false), Backend::Default);
+fn backend_defaults_to_the_prng_and_is_settable() {
+    for in_antithesis in [false, true] {
+        assert_eq!(Settings::base(in_antithesis).backend, Backend::Default);
+    }
+    let s = Settings::new().backend(Backend::Urandom);
+    assert_eq!(s.backend, Backend::Urandom);
+    assert_eq!(s.backend(Backend::Default).backend, Backend::Default);
 }
 
 #[test]

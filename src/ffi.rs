@@ -283,7 +283,7 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
     let mut report_multiple_failures = false;
     let mut show_statistics = false;
     let mut print_blob = false;
-    let mut backend = hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO;
+    let mut backend = hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT;
     // SAFETY: ctx and raw are live handles, and every out pointer is a valid
     // local.
     unsafe {
@@ -1756,11 +1756,10 @@ fn map_verbosity(v: Verbosity) -> u32 {
     }
 }
 
-fn map_backend(backend: Option<Backend>) -> u32 {
+fn map_backend(backend: Backend) -> u32 {
     match backend {
-        None => hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO as u32,
-        Some(Backend::Default) => hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32,
-        Some(Backend::Urandom) => hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM as u32,
+        Backend::Default => hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32,
+        Backend::Urandom => hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM as u32,
     }
 }
 
@@ -1806,11 +1805,10 @@ fn verbosity_from_c(v: hegel_c::hegel_verbosity_t) -> Verbosity {
     }
 }
 
-fn backend_from_c(backend: hegel_c::hegel_backend_t) -> Option<Backend> {
+fn backend_from_c(backend: hegel_c::hegel_backend_t) -> Backend {
     match backend {
-        hegel_c::hegel_backend_t::HEGEL_BACKEND_AUTO => None,
-        hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT => Some(Backend::Default),
-        hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM => Some(Backend::Urandom),
+        hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT => Backend::Default,
+        hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM => Backend::Urandom,
     }
 }
 

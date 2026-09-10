@@ -82,8 +82,8 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. When running inside Antithesis this
-    /// backend is selected automatically unless you set one explicitly.
+    /// and reproduce generation directly. The shipped `antithesis` settings
+    /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
     /// source differs. On platforms without `/dev/urandom` (Windows) it falls
@@ -140,10 +140,7 @@ pub struct Settings {
     pub(crate) report_multiple_failures: bool,
     pub(crate) show_statistics: bool,
     pub(crate) print_blob: bool,
-    /// The randomness backend, or `None` to let it be chosen automatically
-    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
-    /// [`Settings::backend`] always wins over the automatic choice.
-    pub(crate) backend: Option<Backend>,
+    pub(crate) backend: Backend,
 }
 
 impl Settings {
@@ -224,13 +221,10 @@ impl Settings {
         }
     }
 
-    /// Select the randomness backend.
-    ///
-    /// By default the backend is chosen automatically: [`Backend::Urandom`]
-    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
-    /// Calling this pins the choice, overriding the automatic detection.
+    /// Select the randomness backend (base value: [`Backend::Default`]; the
+    /// shipped `antithesis` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
-        self.backend = Some(backend);
+        self.backend = backend;
         self
     }
 

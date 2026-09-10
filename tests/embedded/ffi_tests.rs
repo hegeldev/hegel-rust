@@ -342,7 +342,7 @@ fn ffi_settings_round_trip_every_field_through_registration() {
     assert!(restored.report_multiple_failures);
     assert!(restored.show_statistics);
     assert!(restored.print_blob);
-    assert_eq!(restored.backend, Some(Backend::Urandom));
+    assert_eq!(restored.backend, Backend::Urandom);
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn ffi_settings_round_trip_the_remaining_enum_values() {
         register_profile("ffi_tests_enum_values", &original).unwrap();
         let restored = settings_from_profile(Some("ffi_tests_enum_values")).unwrap();
         assert_eq!(restored.verbosity, verbosity);
-        assert_eq!(restored.backend, Some(Backend::Default));
+        assert_eq!(restored.backend, Backend::Default);
     }
 }
 

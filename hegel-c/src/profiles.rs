@@ -27,13 +27,12 @@
 //! - `development`: an empty delta, the environment profile of local runs.
 //! - `ci`: `derandomize = true`, the database disabled, the `too_slow`
 //!   health check suppressed, and `print_blob = true`.
-//! - `antithesis`: the database disabled and every health check
-//!   suppressed, since Antithesis's thread pausing would trip wall-clock
-//!   checks such as `too_slow` spuriously. Like any profile setting these
-//!   can be changed in `hegel.toml`, and resolving a profile that does not
-//!   extend `antithesis` inside Antithesis runs the health checks. The
-//!   urandom backend is driven by Antithesis detection (`backend = "auto"`),
-//!   not by this profile.
+//! - `antithesis`: the urandom backend, the database disabled, and every
+//!   health check suppressed, since Antithesis's thread pausing would trip
+//!   wall-clock checks such as `too_slow` spuriously. Like any profile
+//!   setting these can be changed in `hegel.toml`, and resolving a profile
+//!   that does not extend `antithesis` inside Antithesis runs the health
+//!   checks on the default backend.
 //!
 //! Users modify shipped profiles and define new ones in a `hegel.toml`
 //! ([`crate::config`]), or register complete snapshots through the C ABI's
@@ -83,9 +82,7 @@ pub(crate) struct ProfileDelta {
     pub(crate) report_multiple_failures: Option<bool>,
     pub(crate) show_statistics: Option<bool>,
     pub(crate) print_blob: Option<bool>,
-    /// `Some(None)` pins the automatic backend choice (`"auto"`), undoing
-    /// a parent's explicit selection.
-    pub(crate) backend: Option<Option<Backend>>,
+    pub(crate) backend: Option<Backend>,
 }
 
 impl ProfileDelta {
@@ -268,6 +265,7 @@ static SHIPPED: Lazy<[(&'static str, ProfileDelta); 3]> = Lazy::new(|| {
         (
             "antithesis",
             ProfileDelta {
+                backend: Some(Backend::Urandom),
                 database: Some(Database::Disabled),
                 suppress_health_check: Some(alloc::vec![
                     HealthCheck::FilterTooMuch,

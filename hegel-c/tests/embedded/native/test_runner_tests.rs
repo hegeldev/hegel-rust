@@ -861,20 +861,14 @@ fn span_mutation_extends_diverged_proposals_with_random_draws() {
 #[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Prng(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Urandom(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
 }
 
 #[test]

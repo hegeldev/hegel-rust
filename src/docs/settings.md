@@ -17,7 +17,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `report_multiple_failures` | boolean | `false` | Report every distinct failure a run finds rather than collapsing to one. |
 | `show_statistics` | boolean | `false` | Print the end-of-run statistics report for events recorded with [`TestCase::event`](crate::TestCase::event) and [`TestCase::event_value`](crate::TestCase::event_value). |
 | `print_blob` | boolean | `false` | On failure, print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. |
-| `backend` | `auto`, `default`, `urandom` | `auto` | The source of randomness ([`Backend`](crate::Backend)); `auto` picks `urandom` inside Antithesis and `default` elsewhere. |
+| `backend` | `default`, `urandom` | `default` | The source of randomness ([`Backend`](crate::Backend)): a seeded PRNG, or fresh bytes from `/dev/urandom` on every draw for Antithesis's fuzzer to control. |
 
 The "Values" column is the vocabulary `hegel.toml` and the command-line
 flags use. In Rust the same settings are the builder methods on
@@ -128,11 +128,7 @@ they are siblings, and none layers over another.
 |---|---|---|
 | `development` | nothing | Locally: whenever neither of the others applies. |
 | `ci` | `derandomize = true`, `database = "disabled"`, `suppress_health_check = ["too_slow"]`, `print_blob = true` | On a CI server, detected from `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, and the variables other common services set. |
-| `antithesis` | `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
-
-Antithesis detection also drives the automatic `backend` choice, but
-independently of profiles: `backend = "auto"` resolves to `urandom` inside
-Antithesis whichever profile is in effect.
+| `antithesis` | `backend = "urandom"`, `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis's fuzzer controls `/dev/urandom`, so the `urandom` backend hands it every choice; and Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
 
 The `ci` profile's `print_blob = true` is why a failing test on CI prints a
 `#[hegel::reproduce_failure("…")]` line: with the database disabled, the
@@ -273,15 +269,13 @@ seed = "none"
 suppress_health_check = ["too_slow", "filter_too_much"]
 phases = ["explicit", "reuse", "generate", "target", "shrink"]
 database = "default"
-backend = "auto"
+backend = "default"
 ```
 
 Every key from the settings table is accepted with the vocabulary shown
-there, plus `extends`. Three values exist to undo a parent's setting:
-`seed = "none"` clears an inherited seed, `database = "default"` restores
-the default database after a parent disabled it or set a path, and
-`backend = "auto"` restores automatic selection after a parent pinned a
-backend.
+there, plus `extends`. Two values exist to undo a parent's setting:
+`seed = "none"` clears an inherited seed, and `database = "default"`
+restores the default database after a parent disabled it or set a path.
 
 # Programmatic profiles
 
@@ -321,5 +315,5 @@ run first.
 | `HEGEL_TEST_CASES` | each run | Overrides `test_cases`, after every other layer. |
 | `HEGEL_DATABASE` | each run | Overrides `database`, after every other layer. |
 | `HEGEL_STATISTICS` | each run | Turns `show_statistics` on, after every other layer. |
-| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `antithesis` profile and the `urandom` backend. |
+| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `antithesis` profile. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |

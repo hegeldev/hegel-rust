@@ -59,7 +59,7 @@ fn base_is_the_base_settings() {
     assert!(!s.report_multiple_failures);
     assert!(!s.show_statistics);
     assert!(!s.print_blob);
-    assert_eq!(s.backend, None);
+    assert_eq!(s.backend, Backend::Default);
 }
 
 fn assert_same_settings(a: &Settings, b: &Settings) {
@@ -103,8 +103,9 @@ const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
 ];
 
 #[test]
-fn the_antithesis_profile_disables_the_database_and_every_health_check() {
+fn the_antithesis_profile_selects_urandom_and_disables_the_database_and_every_health_check() {
     let s = resolve_named("antithesis", &no_config());
+    assert_eq!(s.backend, Backend::Urandom);
     assert_eq!(s.database, Database::Disabled);
     for check in ALL_HEALTH_CHECKS {
         assert!(s.health_check_suppressed(check), "{check:?}");
@@ -284,15 +285,15 @@ fn long_extends_chains_resolve() {
 }
 
 #[test]
-fn backend_auto_clears_an_inherited_choice() {
+fn a_config_delta_overrides_an_inherited_backend() {
     let config = config_of(
-        "[profiles.development]\nbackend = \"urandom\"\n[profiles.x]\nbackend = \"auto\"\n",
+        "[profiles.antithesis]\nbackend = \"default\"\n[profiles.x]\nextends = \"development\"\nbackend = \"urandom\"\n",
     );
     assert_eq!(
-        resolve_named("development", &config).backend,
-        Some(Backend::Urandom)
+        resolve_named("antithesis", &config).backend,
+        Backend::Default
     );
-    assert_eq!(resolve_named("x", &config).backend, None);
+    assert_eq!(resolve_named("x", &config).backend, Backend::Urandom);
 }
 
 #[test]
@@ -505,7 +506,7 @@ fn snapshots_reproduce_their_settings_over_any_base() {
     assert!(restored.report_multiple_failures);
     assert!(restored.show_statistics);
     assert!(restored.print_blob);
-    assert_eq!(restored.backend, Some(Backend::Urandom));
+    assert_eq!(restored.backend, Backend::Urandom);
 }
 
 #[test]
@@ -835,6 +836,11 @@ fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
     ]);
     let s = settings_for_env(None, &no_config(), env).unwrap();
     assert!(s.in_antithesis);
+    assert_eq!(
+        s.backend,
+        Backend::Default,
+        "explicitly selecting base opts out of the antithesis profile's backend"
+    );
     for check in ALL_HEALTH_CHECKS {
         assert!(
             !s.health_check_suppressed(check),

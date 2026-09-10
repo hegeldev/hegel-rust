@@ -99,7 +99,6 @@ enum CRunStatus {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[allow(dead_code)]
 enum CBackend {
-    Auto = 0,
     Default = 1,
     Urandom = 2,
 }

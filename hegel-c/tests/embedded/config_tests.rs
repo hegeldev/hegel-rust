@@ -52,7 +52,7 @@ fn parses_every_key() {
             report_multiple_failures: Some(true),
             show_statistics: Some(true),
             print_blob: Some(false),
-            backend: Some(Some(Backend::Default)),
+            backend: Some(Backend::Default),
         }
     );
 }
@@ -77,11 +77,7 @@ fn parses_verbosity_and_backend_vocabularies() {
         let text = format!("[profiles.x]\nverbosity = \"{name}\"\n");
         assert_eq!(parse_one(&text).verbosity, Some(expected));
     }
-    for (name, expected) in [
-        ("auto", None),
-        ("default", Some(Backend::Default)),
-        ("urandom", Some(Backend::Urandom)),
-    ] {
+    for (name, expected) in [("default", Backend::Default), ("urandom", Backend::Urandom)] {
         let text = format!("[profiles.x]\nbackend = \"{name}\"\n");
         assert_eq!(parse_one(&text).backend, Some(expected));
     }
@@ -406,7 +402,7 @@ fn rejects_unknown_enum_names() {
     );
     assert_eq!(
         parse_err("[profiles.x]\nbackend = \"dice\"\n").message,
-        "`backend` expects one of auto|default|urandom, got \"dice\""
+        "`backend` expects one of default|urandom, got \"dice\""
     );
     assert!(
         parse_err("[profiles.x]\nphases = [\"explode\"]\n")

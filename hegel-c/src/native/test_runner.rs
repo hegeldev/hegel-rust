@@ -1033,6 +1033,7 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
+        crate::antithesis_detect::check_environment()?;
         #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
@@ -1045,7 +1046,7 @@ impl<'a> Engine<'a> {
             settings,
             database_key,
             exchange,
-            rng: create_rng(settings, database_key)?,
+            rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
             exec_cache: ExecCache::default(),
             kind_ledger: KindLedger::default(),
@@ -1473,21 +1474,17 @@ impl<'a> Engine<'a> {
     }
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineRng, RunError> {
-    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis()?)
-        == Backend::Urandom
-    {
-        return Ok(EngineRng::urandom());
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
+    if settings.backend == Backend::Urandom {
+        return EngineRng::urandom();
     }
     if let Some(seed) = settings.seed {
-        Ok(EngineRng::seeded(seed))
+        EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        Ok(EngineRng::seeded(crate::native::database::fnv1a(
-            key.as_bytes(),
-        )))
+        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
     } else {
-        Ok(EngineRng::from_os())
+        EngineRng::from_os()
     }
 }
 

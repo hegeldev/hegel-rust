@@ -212,20 +212,16 @@ typedef enum {
  */
 typedef enum {
     /*
-     Choose automatically (the default): urandom when running inside
-     Antithesis, otherwise the default backend.
-     */
-    HEGEL_BACKEND_AUTO = 0,
-    /*
-     Expand a single seeded PRNG. Runs are reproducible from the seed and
-     shrinking / replay work as usual.
+     Expand a single seeded PRNG (the base setting). Runs are
+     reproducible from the seed and shrinking / replay work as usual.
      */
     HEGEL_BACKEND_DEFAULT = 1,
     /*
      Read fresh entropy from `/dev/urandom` on every draw, falling back to
      an OS-seeded PRNG on platforms without it. Intended for running under
-     Antithesis, whose fuzzer controls `/dev/urandom`; you almost
-     certainly don't want it otherwise.
+     Antithesis, whose fuzzer controls `/dev/urandom`, and selected by the
+     shipped `antithesis` profile; you almost certainly don't want it
+     otherwise.
      */
     HEGEL_BACKEND_URANDOM = 2,
 } hegel_backend_t;
@@ -762,9 +758,6 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
  The enum-valued setters take `uint32_t` rather than the enum type so
  that an out-of-range value is an error instead of undefined behavior.
-
- Once an explicit backend has been set on a handle there is no way to
- change it within a run.
  */
 hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
                                           hegel_settings_t *s,
@@ -1059,8 +1052,7 @@ hegel_result_t hegel_settings_get_print_blob(hegel_context_t *ctx,
 
 /*
  Parameters:
- `out`: Receives the configured backend: `HEGEL_BACKEND_AUTO` when no
-   explicit backend has been pinned.
+ `out`: Receives the configured backend.
 
  Returns `HEGEL_OK`.
  */

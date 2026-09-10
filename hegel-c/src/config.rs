@@ -379,13 +379,12 @@ fn assign(
         "backend" => {
             let s = expect_string(value, key, line_no)?;
             delta.backend = Some(match s.as_str() {
-                "auto" => None,
-                "default" => Some(Backend::Default),
-                "urandom" => Some(Backend::Urandom),
+                "default" => Backend::Default,
+                "urandom" => Backend::Urandom,
                 other => {
                     return Err(err(
                         line_no,
-                        format!("`backend` expects one of auto|default|urandom, got {other:?}"),
+                        format!("`backend` expects one of default|urandom, got {other:?}"),
                     ));
                 }
             });

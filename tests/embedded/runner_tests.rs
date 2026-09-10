@@ -32,17 +32,17 @@ fn test_settings_report_multiple_failures_setter() {
 }
 
 #[test]
-fn test_settings_backend_default_unset() {
+fn test_settings_backend_defaults_to_the_prng() {
     let s = Settings::new();
-    assert_eq!(s.backend, None);
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
 fn test_settings_backend_setter() {
     let s = Settings::new().backend(Backend::Urandom);
-    assert_eq!(s.backend, Some(Backend::Urandom));
+    assert_eq!(s.backend, Backend::Urandom);
     let s = s.backend(Backend::Default);
-    assert_eq!(s.backend, Some(Backend::Default));
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
@@ -215,7 +215,7 @@ fn test_from_profile_base_is_environment_independent() {
     assert_eq!(settings.test_cases, 100);
     assert_eq!(settings.stateful_step_count, 50);
     assert_eq!(settings.seed, None);
-    assert_eq!(settings.backend, None);
+    assert_eq!(settings.backend, crate::runner::Backend::Default);
     assert!(settings.suppress_health_check.is_empty());
     assert_eq!(settings.phases.len(), 5);
     assert!(!settings.report_multiple_failures);

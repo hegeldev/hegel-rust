@@ -171,7 +171,7 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_settings_set_backend(
                 ctx,
                 ptr::null_mut(),
-                hegel_backend_t::HEGEL_BACKEND_AUTO as u32
+                hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32
             ),
             HEGEL_E_INVALID_HANDLE
         );
@@ -732,6 +732,11 @@ fn out_of_range_enum_values_are_invalid_arguments() {
         let s = make_settings(ctx);
         assert_eq!(hegel_settings_set_backend(ctx, s, 999), HEGEL_E_INVALID_ARG);
         assert!(last_error(ctx).contains("unknown backend"));
+        assert_eq!(
+            hegel_settings_set_backend(ctx, s, 0),
+            HEGEL_E_INVALID_ARG,
+            "0 was the removed HEGEL_BACKEND_AUTO"
+        );
         assert_eq!(
             hegel_c::hegel_settings_set_verbosity(ctx, s, 999),
             HEGEL_E_INVALID_ARG
@@ -2896,7 +2901,7 @@ unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings
             s,
             &mut print_blob,
         ));
-        let mut backend = hegel_backend_t::HEGEL_BACKEND_AUTO;
+        let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;
         ok(hegel_c::hegel_settings_get_backend(ctx, s, &mut backend));
         SettingsView {
             test_cases,
@@ -3036,7 +3041,7 @@ fn the_base_profile_reads_back_the_base_settings() {
         assert!(!view.report_multiple_failures);
         assert!(!view.show_statistics);
         assert!(!view.print_blob);
-        assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_AUTO as u32);
+        assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32);
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
@@ -3322,7 +3327,7 @@ fn settings_getters_reject_null_handles_and_null_outs() {
             hegel_c::hegel_settings_get_print_blob(ctx, s, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
-        let mut backend = hegel_backend_t::HEGEL_BACKEND_AUTO;
+        let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;
         assert_eq!(
             hegel_c::hegel_settings_get_backend(ctx, null_s, &mut backend),
             HEGEL_E_INVALID_HANDLE

@@ -238,19 +238,19 @@ fn test_removed_flags_are_unknown_arguments() {
 #[test]
 fn test_backend_urandom_flag() {
     let parsed = apply(&["--backend", "urandom"]);
-    assert_eq!(parsed.backend, Some(Backend::Urandom));
+    assert_eq!(parsed.backend, Backend::Urandom);
 }
 
 #[test]
 fn test_backend_default_flag() {
     let parsed = apply(&["--backend", "default"]);
-    assert_eq!(parsed.backend, Some(Backend::Default));
+    assert_eq!(parsed.backend, Backend::Default);
 }
 
 #[test]
-fn test_backend_default_is_unset() {
+fn test_backend_defaults_to_the_prng() {
     let parsed = apply(&[]);
-    assert_eq!(parsed.backend, None);
+    assert_eq!(parsed.backend, Backend::Default);
 }
 
 #[test]
