@@ -89,7 +89,7 @@ fn test_min_stack(tc: TestCase) {
     let test = MinStackTest {
         stack: MinStack::new(),
     };
-    hegel::stateful::run(test, tc);
+    hegel::stateful::machine(test).run(tc);
 }
 
 fn main() {}

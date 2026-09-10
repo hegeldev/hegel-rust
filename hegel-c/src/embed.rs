@@ -86,8 +86,6 @@ pub fn data_source_for_blob(
         ));
     }
     let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
-    ntc.family()
-        .set_stateful_step_count(settings.stateful_step_count);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
     Some(Box::new(data_source))
 }

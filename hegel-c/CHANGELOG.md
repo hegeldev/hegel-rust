@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.38.0 - 2026-09-10
+
+This release makes the stateful step count a per-machine parameter. `hegel_new_state_machine` takes a new `step_count` argument. `hegel_settings_set_stateful_step_count` is removed, and the engine no longer has a default step count. Frontends pass one explicitly (50 is the conventional choice). A `step_count` below 1 is rejected with `HEGEL_E_INVALID_ARG`.
+
 ## 0.37.10 - 2026-09-10
 
 This patch adds two functions for shaping a test case's printed output without decorating every line by hand.

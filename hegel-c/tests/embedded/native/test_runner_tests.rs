@@ -64,6 +64,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
         alloc::vec::Vec::new(),
         2,
         2,
+        50,
     ) {
         Ok(_) => Ok(()),
         Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),

@@ -256,6 +256,7 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
             0,
             1,
             1,
+            50,
             &mut machine,
             &mut out_concurrency,
         ));

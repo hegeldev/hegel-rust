@@ -200,10 +200,13 @@ pub trait DataSource: Send + Sync {
     /// [`Self::state_machine_next_group`] /
     /// [`Self::state_machine_next_rule`] /
     /// [`Self::state_machine_rule_rejected`]; any stream of the same family
-    /// may drive it. Errors with `InvalidArgument` if `rule_names` is
-    /// empty, `rule_groups` is not parallel to `rule_names`,
-    /// `invariant_always_check` is not parallel to `invariant_names`,
-    /// `min_concurrency < 1`, or `max_concurrency < min_concurrency`.
+    /// may drive it. `step_count` is the target number of counted rounds
+    /// the machine runs per test case: each case runs at least one round
+    /// and at most `step_count`. Errors with `InvalidArgument` if
+    /// `rule_names` is empty, `rule_groups` is not parallel to
+    /// `rule_names`, `invariant_always_check` is not parallel to
+    /// `invariant_names`, `min_concurrency < 1`,
+    /// `max_concurrency < min_concurrency`, or `step_count < 1`.
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
@@ -212,6 +215,7 @@ pub trait DataSource: Send + Sync {
         invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
+        step_count: i64,
     ) -> Result<NativeStateMachine, DataSourceError>;
 
     /// Start the machine's next round, drawing the stop decision and which
@@ -250,7 +254,7 @@ pub trait DataSource: Send + Sync {
     /// Decide whether the caller should run invariant `invariant_index` at
     /// the current join point: `true` without consuming entropy for an
     /// invariant registered always-check, otherwise a recorded boolean draw
-    /// that is `true` with probability `1 / stateful_step_count`, so each
+    /// that is `true` with probability `1 / step_count`, so each
     /// sampled invariant's expected number of sampled runs over a
     /// full-length test case is one. The caller runs its guaranteed checks
     /// — the machine's initial state and its final state after the last

@@ -147,11 +147,6 @@ impl SettingsHandle {
                     raw,
                     settings.test_cases,
                 ));
-                require_ok(hegel_c::hegel_settings_set_stateful_step_count(
-                    ctx,
-                    raw,
-                    settings.stateful_step_count,
-                ));
                 require_ok(hegel_c::hegel_settings_set_verbosity(
                     ctx,
                     raw,
@@ -809,7 +804,8 @@ impl CTestCase {
     /// engine draws the concurrency level in
     /// `[min_concurrency, max_concurrency]` at creation — weighted toward
     /// the maximum (the engine owns the distribution) — and returns it
-    /// alongside the new machine's id.
+    /// alongside the new machine's id. `step_count` is the target number
+    /// of counted rounds the machine runs per test case.
     pub(crate) fn new_state_machine(
         &self,
         rule_names: &[&str],
@@ -818,6 +814,7 @@ impl CTestCase {
         invariant_always_check: &[bool],
         min_concurrency: i64,
         max_concurrency: i64,
+        step_count: i64,
     ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
         let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
         let invariant_cstrings: Vec<CString> =
@@ -839,6 +836,7 @@ impl CTestCase {
                 invariant_ptrs.len(),
                 min_concurrency,
                 max_concurrency,
+                step_count,
                 &mut raw,
                 &mut concurrency,
             )
@@ -917,7 +915,7 @@ impl CTestCase {
 
     /// Ask the engine whether invariant `invariant_index` should run at the
     /// current join point: a recorded draw that is true with probability
-    /// `1 / stateful_step_count`. The guaranteed initial and final checks
+    /// `1 / step_count`. The guaranteed initial and final checks
     /// are the caller's and run without asking.
     pub(crate) fn state_machine_should_check_invariant(
         &self,

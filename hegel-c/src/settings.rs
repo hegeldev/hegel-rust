@@ -146,7 +146,6 @@ pub enum Verbosity {
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
-    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) output: Output,
     pub(crate) seed: Option<u64>,
@@ -176,7 +175,6 @@ impl Settings {
     pub(crate) fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
         Self {
             test_cases: 100,
-            stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
@@ -238,13 +236,6 @@ impl Settings {
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
-        self
-    }
-
-    /// Set the target number of steps run per stateful test case (default:
-    /// 50). Each case runs at least one step and at most this many.
-    pub fn stateful_step_count(mut self, n: i64) -> Self {
-        self.stateful_step_count = n;
         self
     }
 
