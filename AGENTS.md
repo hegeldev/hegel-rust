@@ -49,7 +49,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
 - `src/antithesis.rs` — The Antithesis integration: detection from `ANTITHESIS_OUTPUT_DIR` (selects the `workload` profile) and reporting each run's verdict to `sdk.jsonl` for tests whose settings carry a location (`hegel_settings_set_test_location`, which the frontend's macros supply)
 - `benches/` — Microbenchmarks of engine internals, exposed through the internal `__bench` feature
-- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` — the crate the frontend's `build.rs` builds the shared library from (and links directly under `static-engine`)
+- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each `libhegel-v<version>`-tagged GitHub release (hegel-rust's own releases are the plain `v<version>` tags and get no GitHub release); the source is published to crates.io as `hegeltest-c` — the crate the frontend's `build.rs` builds the shared library from (and links directly under `static-engine`)
 
 ### Feature Flags (root crate)
 
