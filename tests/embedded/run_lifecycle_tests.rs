@@ -156,7 +156,7 @@ fn test_settings() -> Settings {
         .database(None)
         .derandomize(true)
         .seed(Some(1))
-        .max_choices(8192)
+        .__max_choices(8192)
 }
 
 /// Run one real test case from a fresh engine run through `run_test_case`,

@@ -147,7 +147,7 @@ fn test_recursive_on_an_exhausted_stream_is_an_overrun() {
                 Settings::new()
                     .database(None)
                     .seed(Some(0))
-                    .max_choices(1000),
+                    .__max_choices(1000),
             )
             .run();
         },
@@ -191,7 +191,7 @@ fn test_recursive_completing_on_an_exhausted_stream_is_an_overrun() {
                 Settings::new()
                     .database(None)
                     .seed(Some(0))
-                    .max_choices(1000),
+                    .__max_choices(1000),
             )
             .run();
         },

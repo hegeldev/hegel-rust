@@ -208,7 +208,7 @@ mod size_checks {
         Settings::new()
             .test_cases(100)
             .database(None)
-            .max_choices(1000)
+            .__max_choices(1000)
     }
 
     /// The smallest natural example already overruns the choice limit, so
@@ -223,10 +223,10 @@ mod size_checks {
         );
     }
 
-    /// `max_choices = 0` (no limit) is accepted as an attribute arg and
+    /// `unlimited_choices = true` is accepted as an attribute arg and
     /// forwarded to the engine; the run completes as usual.
-    #[hegel::test(test_cases = 5, database = None, max_choices = 0)]
-    fn max_choices_zero_is_accepted(tc: hegel::TestCase) {
+    #[hegel::test(test_cases = 5, database = None, unlimited_choices = true)]
+    fn unlimited_choices_is_accepted(tc: hegel::TestCase) {
         for _ in 0..2000 {
             tc.draw_silent(gs::booleans());
         }

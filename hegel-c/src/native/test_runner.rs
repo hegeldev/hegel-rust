@@ -686,8 +686,8 @@ pub(crate) fn too_large_check(
              during generation. Testing with inputs this large is slow and shrinks \
              poorly. Try reducing the amount of data generated, e.g. a smaller \
              min_size on collections like gs::vecs(). If the test genuinely needs \
-             inputs this large, raise the limit with max_choices, or remove it \
-             with max_choices = 0. If this is expected, suppress the check with \
+             inputs this large, remove the limit with unlimited_choices = true. \
+             If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::TestCasesTooLarge]."
         ))
     } else {

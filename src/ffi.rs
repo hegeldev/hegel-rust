@@ -19,7 +19,7 @@ pub(crate) mod sys;
 use self::sys as hegel_c;
 
 use crate::control::hegel_internal_error;
-use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
+use crate::runner::{Backend, ChoiceLimit, Database, HealthCheck, Phase, Settings, Verbosity};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString, c_void};
@@ -171,7 +171,12 @@ impl SettingsHandle {
                     raw,
                     settings.show_statistics,
                 ));
-                if let Some(max_choices) = settings.max_choices {
+                let max_choices = match settings.choice_limit {
+                    ChoiceLimit::Unset | ChoiceLimit::EngineDefault => None,
+                    ChoiceLimit::Unlimited => Some(0),
+                    ChoiceLimit::Explicit(n) => Some(n),
+                };
+                if let Some(max_choices) = max_choices {
                     require_ok(hegel_c::hegel_settings_set_max_choices(
                         ctx,
                         raw,

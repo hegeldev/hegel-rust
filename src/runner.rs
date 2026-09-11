@@ -137,10 +137,22 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
-    /// The per-test-case choice bound: `None` while unset (the engine's
-    /// default applies), `Some(0)` for unbounded, `Some(n)` for an explicit
-    /// limit. See [`Settings::max_choices`].
-    pub(crate) max_choices: Option<u64>,
+    pub(crate) choice_limit: ChoiceLimit,
+}
+
+/// The per-test-case choice limit a [`Settings`] asks the engine for. See
+/// [`Settings::unlimited_choices`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChoiceLimit {
+    /// Nothing was asked for: the engine's default applies, and a
+    /// `#[hegel::main]` binary switches to [`ChoiceLimit::Unlimited`].
+    Unset,
+    /// The engine's default limit was asked for explicitly.
+    EngineDefault,
+    /// No limit.
+    Unlimited,
+    /// A specific limit, reachable only through [`Settings::__max_choices`].
+    Explicit(u64),
 }
 
 impl Settings {
@@ -177,7 +189,7 @@ impl Settings {
             show_statistics: false,
             print_blob: false,
             backend: None,
-            max_choices: None,
+            choice_limit: ChoiceLimit::Unset,
         }
     }
 
@@ -203,9 +215,10 @@ impl Settings {
         self
     }
 
-    /// Set the maximum number of choices a single test case may make, or 0
-    /// for no limit. Defaults to 2^20 (1,048,576) choices, except in a
-    /// `#[hegel::main]` binary, where the default is no limit.
+    /// Remove (or, with `false`, restore) the limit on the number of choices
+    /// a single test case may make. The limit is 2^20 (1,048,576) choices,
+    /// and applies by default everywhere except in a `#[hegel::main]`
+    /// binary, where test cases are unlimited unless this is set to `false`.
     ///
     /// Every draw counts as at least one choice, as does each element of a
     /// collection, each step of a state machine, and each cloned
@@ -220,7 +233,7 @@ impl Settings {
     /// use hegel::TestCase;
     /// use hegel::generators as gs;
     ///
-    /// #[hegel::test(test_cases = 1, max_choices = 0)]
+    /// #[hegel::test(test_cases = 1, unlimited_choices = true)]
     /// fn soak(tc: TestCase) {
     ///     for _ in 0..5_000_000 {
     ///         let _: u8 = tc.draw(gs::integers());
@@ -228,10 +241,23 @@ impl Settings {
     /// }
     /// ```
     ///
-    /// The engine records every choice a test case makes, so an unbounded
+    /// The engine records every choice a test case makes, so an unlimited
     /// test case's memory grows with its length.
-    pub fn max_choices(mut self, max_choices: u64) -> Self {
-        self.max_choices = Some(max_choices);
+    pub fn unlimited_choices(mut self, unlimited: bool) -> Self {
+        self.choice_limit = if unlimited {
+            ChoiceLimit::Unlimited
+        } else {
+            ChoiceLimit::EngineDefault
+        };
+        self
+    }
+
+    /// Set an explicit per-test-case choice limit. Internal: the test suite
+    /// uses a small limit so a case that draws until it overruns finishes
+    /// quickly; users get the toggle, [`Settings::unlimited_choices`].
+    #[doc(hidden)]
+    pub fn __max_choices(mut self, max_choices: u64) -> Self {
+        self.choice_limit = ChoiceLimit::Explicit(max_choices);
         self
     }
 
@@ -374,12 +400,12 @@ impl Settings {
     /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
     /// both measure how valid test cases accumulate over a run and a run of
     /// one has nothing to measure, and no choice limit unless
-    /// [`Settings::max_choices`] set one explicitly, since a binary's one
+    /// [`Settings::unlimited_choices`] asked for one, since a binary's one
     /// test case is typically meant to run for a long time.
     pub(crate) fn for_single_test_case(mut self) -> Self {
         self.test_cases = 1;
-        if self.max_choices.is_none() {
-            self.max_choices = Some(0);
+        if self.choice_limit == ChoiceLimit::Unset {
+            self.choice_limit = ChoiceLimit::Unlimited;
         }
         for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {
             if !self.suppress_health_check.contains(&check) {

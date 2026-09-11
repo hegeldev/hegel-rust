@@ -327,7 +327,7 @@ fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
             .settings(
                 Settings::new()
                     .database(None)
-                    .max_choices(2000)
+                    .__max_choices(2000)
                     .suppress_health_check([HealthCheck::LargeInitialTestCase])
                     .verbosity(Verbosity::Quiet),
             )
@@ -895,7 +895,7 @@ fn pool_add_on_an_exhausted_stream_is_an_overrun() {
         .settings(
             Settings::new()
                 .database(None)
-                .max_choices(1000)
+                .__max_choices(1000)
                 .verbosity(Verbosity::Quiet),
         )
         .run();
@@ -920,7 +920,7 @@ fn creating_a_pool_on_an_exhausted_stream_is_an_overrun() {
         .settings(
             Settings::new()
                 .database(None)
-                .max_choices(1000)
+                .__max_choices(1000)
                 .verbosity(Verbosity::Quiet),
         )
         .run();
@@ -942,7 +942,7 @@ fn budget_exhaustion_during_machine_creation_is_an_overrun() {
         .settings(
             Settings::new()
                 .database(None)
-                .max_choices(1000)
+                .__max_choices(1000)
                 .verbosity(Verbosity::Quiet),
         )
         .run();
