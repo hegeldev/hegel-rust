@@ -1,9 +1,17 @@
-use super::{Collection, Generator, TestCase, labels};
+use super::{Collection, Generator, PrintableGenerator, TestCase, combine_labels, label_from_name};
 use crate::control::hegel_internal_assert;
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
+
+const VEC_LABEL: u64 = label_from_name("hegel.vec");
+const HASH_SET_LABEL: u64 = label_from_name("hegel.hash_set");
+const HASH_MAP_LABEL: u64 = label_from_name("hegel.hash_map");
+const BTREE_SET_LABEL: u64 = label_from_name("hegel.btree_set");
+const BTREE_MAP_LABEL: u64 = label_from_name("hegel.btree_map");
+const ARRAY_LABEL: u64 = label_from_name("hegel.array");
 
 /// Generator for `Vec<T>`. Created by [`vecs()`].
 pub struct VecGenerator<G, T> {
@@ -40,31 +48,76 @@ impl<G, T: PartialEq> VecGenerator<G, T> {
     }
 }
 
-impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
-where
-    G: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
+impl<G, T> VecGenerator<G, T> {
+    /// The one vec body both draw paths run: each element draws inside a
+    /// speculative print region, so an element rejected for uniqueness
+    /// discards its own output (including its separator). Only how each
+    /// element is drawn (silently or printing) is injected.
+    fn draw_vec(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> Vec<T> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::LIST);
+        tc.start_span(label);
+        printer.begin_group(5, "vec![");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut result = Vec::new();
         while collection.more() {
-            let element = self.elements.do_draw(tc);
+            let mut speculation = printer.speculate();
+            if !result.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let element = draw(&self.elements, tc, speculation.printer());
             if let Some(eq_fn) = &self.unique_by {
                 if result.iter().any(|existing| eq_fn(existing, &element)) {
+                    speculation.abort();
                     collection.reject(Some("duplicate element"));
                     continue;
                 }
             }
+            speculation.commit();
             result.push(element);
         }
+        printer.end_group("]");
         tc.stop_span(false);
         result
+    }
+}
+
+impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
+where
+    G: Generator<T>,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[VEC_LABEL, self.elements.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> Vec<T> {
+        self.draw_vec(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
+    }
+}
+
+impl<T, G> PrintableGenerator<Vec<T>> for VecGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
+        self.draw_vec(tc, self.label(), printer, |elements, tc, printer| {
+            tc.draw_and_print(elements, printer)
+        })
     }
 }
 
@@ -117,106 +170,81 @@ impl<G, T> HashSetGenerator<G, T> {
     }
 }
 
-/// The largest enumerated value pool [`HashSetGenerator`] will draw
-/// without replacement from. Mirrors the bound the engine's old
-/// unique-sampled-list strategy used.
-const MAX_UNIQUE_POOL: usize = 10_000;
+impl<G, T> HashSetGenerator<G, T>
+where
+    T: Eq + Hash,
+{
+    /// The one set body both draw paths run: each element draws inside a
+    /// speculative print region, so an element rejected as a duplicate
+    /// discards its own output (including its separator). Only how each
+    /// element is drawn (silently or printing) is injected.
+    fn draw_set(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> HashSet<T> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        tc.start_span(label);
+        printer.begin_group(15, "HashSet::from([");
+        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut set = HashSet::new();
+        while collection.more() {
+            let mut speculation = printer.speculate();
+            if !set.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let element = draw(&self.elements, tc, speculation.printer());
+            if set.contains(&element) {
+                speculation.abort();
+                collection.reject(Some("duplicate element"));
+            } else {
+                speculation.commit();
+                set.insert(element);
+            }
+        }
+        hegel_internal_assert!(set.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
+        set
+    }
+}
 
 impl<T, G> Generator<HashSet<T>> for HashSetGenerator<G, T>
 where
     G: Generator<T>,
     T: Eq + Hash,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[HASH_SET_LABEL, self.elements.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        tc.start_span(labels::SET);
-        let set = match self.enumerated_pool() {
-            Some(pool) => self.draw_from_pool(tc, pool),
-            None => self.draw_by_rejection(tc),
-        };
-        tc.stop_span(false);
-        set
+        self.draw_set(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
     }
 }
 
-impl<T, G> HashSetGenerator<G, T>
+impl<T, G> PrintableGenerator<HashSet<T>> for HashSetGenerator<G, T>
 where
-    G: Generator<T>,
+    G: PrintableGenerator<T>,
     T: Eq + Hash,
 {
-    /// The distinct values of an enumerable element generator, in first
-    /// occurrence order (which the shrinker treats as simplest-first), when
-    /// there are few enough of them to draw without replacement.
-    fn enumerated_pool(&self) -> Option<Vec<T>> {
-        let values = self.elements.enumerate_values()?;
-        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
-            return None;
-        }
-        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut pool: Vec<T> = Vec::new();
-        for v in values {
-            let bucket = by_hash.entry(fingerprint(&v)).or_default();
-            if bucket.iter().any(|&i| pool[i] == v) {
-                continue;
-            }
-            bucket.push(pool.len());
-            pool.push(v);
-        }
-        Some(pool)
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
+        self.draw_set(tc, self.label(), printer, |elements, tc, printer| {
+            tc.draw_and_print(elements, printer)
+        })
     }
-
-    /// Draw set elements as indices into a shrinking pool of the remaining
-    /// values, avoiding the coupon-collector problem when the set must
-    /// contain most of a small alphabet. Port of Hypothesis's
-    /// `UniqueSampledListStrategy`.
-    fn draw_from_pool(&self, tc: &TestCase, mut remaining: Vec<T>) -> HashSet<T> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a set: min_size {} is larger than the {} distinct values the element generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut set = HashSet::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            set.insert(remaining.remove(j));
-        }
-        set
-    }
-
-    fn draw_by_rejection(&self, tc: &TestCase) -> HashSet<T> {
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
-        let mut set = HashSet::new();
-        while collection.more() {
-            let element = self.elements.do_draw(tc);
-            if !set.insert(element) {
-                collection.reject(Some("duplicate element"));
-            }
-        }
-        hegel_internal_assert!(set.len() >= self.min_size);
-        set
-    }
-}
-
-/// A hashable stand-in for a value that is only `Eq + Hash`, used to dedup
-/// the enumerated pool.
-fn fingerprint<T: Eq + Hash>(v: &T) -> u64 {
-    use std::hash::{DefaultHasher, Hasher};
-    let mut h = DefaultHasher::new();
-    v.hash(&mut h);
-    h.finish()
 }
 
 /// Generate hash sets with elements from the given generator.
@@ -260,94 +288,90 @@ where
     V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[HASH_MAP_LABEL, self.keys.label(), self.values.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
-        tc.start_span(labels::MAP);
-        let map = match self.enumerated_key_pool() {
-            Some(pool) => self.draw_from_key_pool(tc, pool),
-            None => self.draw_by_rejection(tc),
-        };
-        tc.stop_span(false);
-        map
+        self.draw_map(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |keys, tc, _| keys.do_draw(tc),
+            |values, tc, _| values.do_draw(tc),
+        )
     }
 }
 
 impl<K, V, KT, VT> HashMapGenerator<K, V, KT, VT>
 where
-    K: Generator<KT>,
-    V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
-    /// The distinct values of an enumerable key generator, in first
-    /// occurrence order, when there are few enough of them to draw without
-    /// replacement. Mirrors [`HashSetGenerator::enumerated_pool`].
-    fn enumerated_key_pool(&self) -> Option<Vec<KT>> {
-        let values = self.keys.enumerate_values()?;
-        if values.is_empty() || values.len() > MAX_UNIQUE_POOL {
-            return None;
-        }
-        let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut pool: Vec<KT> = Vec::new();
-        for v in values {
-            let bucket = by_hash.entry(fingerprint(&v)).or_default();
-            if bucket.iter().any(|&i| pool[i] == v) {
-                continue;
+    /// The one map body both draw paths run: each entry draws inside a
+    /// speculative print region, so an entry rejected for a duplicate key
+    /// discards its own output (including its separator), and the value is
+    /// only drawn once the key is known to be fresh. Only how keys and
+    /// values are drawn (silently or printing) is injected.
+    fn draw_map(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
+    ) -> HashMap<KT, VT> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
             }
-            bucket.push(pool.len());
-            pool.push(v);
         }
-        Some(pool)
-    }
-
-    /// Draw keys as indices into a shrinking pool of the remaining values,
-    /// avoiding the coupon-collector problem when the map must contain most
-    /// of a small key alphabet; each key's value is drawn right after it.
-    fn draw_from_key_pool(&self, tc: &TestCase, mut remaining: Vec<KT>) -> HashMap<KT, VT> {
-        if self.min_size > remaining.len() {
-            invalid_argument!(
-                "Cannot generate a map: min_size {} is larger than the {} distinct keys the key generator can produce",
-                self.min_size,
-                remaining.len()
-            );
-        }
-        let effective_max = self
-            .max_size
-            .map_or(remaining.len(), |m| m.min(remaining.len()));
-        let mut collection = Collection::new(tc, self.min_size, Some(effective_max));
-        let mut map = HashMap::new();
-        loop {
-            if remaining.is_empty() || !collection.more() {
-                break;
-            }
-            let j = tc.generate_integer_i64(0, remaining.len() as i64 - 1) as usize;
-            let key = remaining.remove(j);
-            let value = self.values.do_draw(tc);
-            map.insert(key, value);
-        }
-        map
-    }
-
-    fn draw_by_rejection(&self, tc: &TestCase) -> HashMap<KT, VT> {
+        tc.start_span(label);
+        printer.begin_group(15, "HashMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
-            let key = self.keys.do_draw(tc);
+            let mut speculation = printer.speculate();
+            if !map.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            speculation.printer().text("(");
+            let key = draw_key(&self.keys, tc, speculation.printer());
             match map.entry(key) {
                 std::collections::hash_map::Entry::Occupied(_) => {
+                    speculation.abort();
                     collection.reject(Some("duplicate key"));
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    let value = self.values.do_draw(tc);
+                    speculation.printer().text(", ");
+                    let value = draw_value(&self.values, tc, speculation.printer());
+                    speculation.printer().text(")");
+                    speculation.commit();
                     entry.insert(value);
                 }
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
         map
+    }
+}
+
+impl<K, V, KT, VT> PrintableGenerator<HashMap<KT, VT>> for HashMapGenerator<K, V, KT, VT>
+where
+    K: PrintableGenerator<KT>,
+    V: PrintableGenerator<VT>,
+    KT: Eq + std::hash::Hash,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
+        self.draw_map(
+            tc,
+            self.label(),
+            printer,
+            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            |values, tc, printer| tc.draw_and_print(values, printer),
+        )
     }
 }
 
@@ -379,6 +403,265 @@ pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     }
 }
 
+/// Generator for `BTreeSet<T>`. Created by [`btree_sets()`].
+pub struct BTreeSetGenerator<G, T> {
+    elements: G,
+    min_size: usize,
+    max_size: Option<usize>,
+    _phantom: PhantomData<fn(T)>,
+}
+
+impl<G, T> BTreeSetGenerator<G, T> {
+    /// Set the minimum number of elements.
+    pub fn min_size(mut self, min_size: usize) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum number of elements.
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+}
+
+impl<G, T> BTreeSetGenerator<G, T>
+where
+    T: Ord,
+{
+    fn draw_set(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> BTreeSet<T> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        tc.start_span(label);
+        printer.begin_group(16, "BTreeSet::from([");
+        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut set = BTreeSet::new();
+        while collection.more() {
+            let mut speculation = printer.speculate();
+            if !set.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            let element = draw(&self.elements, tc, speculation.printer());
+            if set.contains(&element) {
+                speculation.abort();
+                collection.reject(Some("duplicate element"));
+            } else {
+                speculation.commit();
+                set.insert(element);
+            }
+        }
+        hegel_internal_assert!(set.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
+        set
+    }
+}
+
+impl<T, G> Generator<BTreeSet<T>> for BTreeSetGenerator<G, T>
+where
+    G: Generator<T>,
+    T: Ord,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[BTREE_SET_LABEL, self.elements.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
+        self.draw_set(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
+    }
+}
+
+impl<T, G> PrintableGenerator<BTreeSet<T>> for BTreeSetGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+    T: Ord,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeSet<T> {
+        self.draw_set(tc, self.label(), printer, |elements, tc, printer| {
+            tc.draw_and_print(elements, printer)
+        })
+    }
+}
+
+/// Generate B-tree sets with elements from the given generator.
+///
+/// See [`BTreeSetGenerator`] for builder methods.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+/// use std::collections::BTreeSet;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers()).max_size(10));
+///     assert!(set.len() <= 10);
+/// }
+/// ```
+pub fn btree_sets<T, G: Generator<T>>(elements: G) -> BTreeSetGenerator<G, T> {
+    BTreeSetGenerator {
+        elements,
+        min_size: 0,
+        max_size: None,
+        _phantom: PhantomData,
+    }
+}
+
+/// Generator for `BTreeMap<K, V>`. Created by [`btree_maps()`].
+pub struct BTreeMapGenerator<K, V, KT, VT> {
+    keys: K,
+    values: V,
+    min_size: usize,
+    max_size: Option<usize>,
+    _phantom: PhantomData<fn(KT, VT)>,
+}
+
+impl<K, V, KT, VT> BTreeMapGenerator<K, V, KT, VT> {
+    /// Set the minimum number of entries.
+    pub fn min_size(mut self, min_size: usize) -> Self {
+        self.min_size = min_size;
+        self
+    }
+
+    /// Set the maximum number of entries.
+    pub fn max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+}
+
+impl<K, V, KT, VT> Generator<BTreeMap<KT, VT>> for BTreeMapGenerator<K, V, KT, VT>
+where
+    K: Generator<KT>,
+    V: Generator<VT>,
+    KT: Ord,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[BTREE_MAP_LABEL, self.keys.label(), self.values.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> BTreeMap<KT, VT> {
+        self.draw_map(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |keys, tc, _| keys.do_draw(tc),
+            |values, tc, _| values.do_draw(tc),
+        )
+    }
+}
+
+impl<K, V, KT, VT> BTreeMapGenerator<K, V, KT, VT>
+where
+    KT: Ord,
+{
+    fn draw_map(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
+    ) -> BTreeMap<KT, VT> {
+        if let Some(max) = self.max_size {
+            if self.min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        tc.start_span(label);
+        printer.begin_group(16, "BTreeMap::from([");
+        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut map = BTreeMap::new();
+        while collection.more() {
+            let mut speculation = printer.speculate();
+            if !map.is_empty() {
+                speculation.printer().text(",");
+                speculation.printer().breakable(" ");
+            }
+            speculation.printer().text("(");
+            let key = draw_key(&self.keys, tc, speculation.printer());
+            match map.entry(key) {
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    speculation.abort();
+                    collection.reject(Some("duplicate key"));
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    speculation.printer().text(", ");
+                    let value = draw_value(&self.values, tc, speculation.printer());
+                    speculation.printer().text(")");
+                    speculation.commit();
+                    entry.insert(value);
+                }
+            }
+        }
+        hegel_internal_assert!(map.len() >= self.min_size);
+        printer.end_group("])");
+        tc.stop_span(false);
+        map
+    }
+}
+
+impl<K, V, KT, VT> PrintableGenerator<BTreeMap<KT, VT>> for BTreeMapGenerator<K, V, KT, VT>
+where
+    K: PrintableGenerator<KT>,
+    V: PrintableGenerator<VT>,
+    KT: Ord,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeMap<KT, VT> {
+        self.draw_map(
+            tc,
+            self.label(),
+            printer,
+            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            |values, tc, printer| tc.draw_and_print(values, printer),
+        )
+    }
+}
+
+/// Generate B-tree maps.
+///
+/// See [`BTreeMapGenerator`] for builder methods.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::generators as gs;
+/// use std::collections::BTreeMap;
+///
+/// #[hegel::test]
+/// fn my_test(tc: hegel::TestCase) {
+///     let map: BTreeMap<i32, String> = tc.draw(gs::btree_maps(gs::integers(), gs::text()));
+/// }
+/// ```
+pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
+    keys: K,
+    values: V,
+) -> BTreeMapGenerator<K, V, KT, VT> {
+    BTreeMapGenerator {
+        keys,
+        values,
+        min_size: 0,
+        max_size: None,
+        _phantom: PhantomData,
+    }
+}
+
 /// Generator for fixed-size arrays `[T; N]`. Created by [`arrays()`].
 pub struct ArrayGenerator<G, T, const N: usize> {
     element: G,
@@ -402,13 +685,54 @@ pub fn arrays<G: Generator<T> + Send + Sync, T, const N: usize>(
     ArrayGenerator::new(element)
 }
 
+impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
+    /// The one array body both draw paths run; only how each element is
+    /// drawn (silently or printing) is injected.
+    fn draw_array(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> [T; N] {
+        tc.start_span(label);
+        printer.begin_group(1, "[");
+        let result = std::array::from_fn(|i| {
+            if i > 0 {
+                printer.text(",");
+                printer.breakable(" ");
+            }
+            draw(&self.element, tc, printer)
+        });
+        printer.end_group("]");
+        tc.stop_span(false);
+        result
+    }
+}
+
 impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
     for ArrayGenerator<G, T, N>
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[ARRAY_LABEL, self.element.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> [T; N] {
-        tc.start_span(labels::TUPLE);
-        let result = std::array::from_fn(|_| self.element.do_draw(tc));
-        tc.stop_span(false);
-        result
+        self.draw_array(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |element, tc, _| element.do_draw(tc),
+        )
+    }
+}
+
+impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerator<[T; N]>
+    for ArrayGenerator<G, T, N>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> [T; N] {
+        self.draw_array(tc, self.label(), printer, |element, tc, printer| {
+            tc.draw_and_print(element, printer)
+        })
     }
 }

@@ -2,7 +2,7 @@ mod common;
 
 use common::utils::assert_all_examples;
 use hegel::TestCase;
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 
 #[hegel::test]
 fn test_compose_basic(tc: TestCase) {
@@ -10,6 +10,15 @@ fn test_compose_basic(tc: TestCase) {
         tc.draw(gs::integers::<i32>().min_value(0).max_value(100))
     }));
     assert!((0..=100).contains(&value));
+}
+
+#[hegel::test]
+fn test_compose_accepts_move_closures(tc: TestCase) {
+    let offset = 10;
+    let value = tc.draw(hegel::compose!(move |tc| {
+        tc.draw(gs::integers::<i32>().min_value(0).max_value(5)) + offset
+    }));
+    assert!((10..=15).contains(&value));
 }
 
 #[hegel::test]
@@ -45,8 +54,8 @@ fn test_compose_with_filter(tc: TestCase) {
 
 #[hegel::test]
 fn test_compose_with_boxed(tc: TestCase) {
-    let g =
-        hegel::compose!(|tc| { tc.draw(gs::integers::<i32>().min_value(0).max_value(50)) }).boxed();
+    let g = hegel::compose!(|tc| { tc.draw(gs::integers::<i32>().min_value(0).max_value(50)) })
+        .boxed_printable();
     let value = tc.draw(g);
     assert!((0..=50).contains(&value));
 }

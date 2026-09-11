@@ -1,6 +1,6 @@
 //! Embedded tests for `src/native/test_runner.rs`.
 //!
-//! These drive the engine directly — `run_main`, `run_single_case`, `Engine`,
+//! These drive the engine directly — `run_main`, `Engine`,
 //! the health-check helpers, and the database reuse phase. Test bodies draw
 //! from the engine's own `DataSource` (the same interface the C ABI exposes)
 //! and report their outcome by returning a `TestCaseResult`, rather than going
@@ -10,10 +10,12 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use crate::native::core::choices::BooleanChoice;
+use alloc::vec;
 
-use crate::backend::{DataSource, Failure, TestCaseResult};
+use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
 use crate::native::bignum::{BigInt, ToPrimitive};
-use crate::settings::{Mode, Phase};
+use crate::settings::Phase;
 use std::time::Duration;
 
 /// A drawn boolean, or `Err(())` if the case overran / was aborted.
@@ -47,6 +49,27 @@ fn boom(msg: &str) -> TestCaseResult {
         origin: format!("Panic: {msg}"),
         reproduce_blob: None,
     })
+}
+
+/// Create (and immediately drop) a one-rule state machine whose declared
+/// concurrency bound is above 1. On the first such case of a run the
+/// engine rejects the creation with an assume violation (`Err(Invalid)`
+/// here): the case is discarded and the run flips into nondeterministic
+/// mode, and later cases create the machine successfully.
+fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
+    match ds.new_state_machine(
+        vec!["rule".to_string()],
+        vec![0],
+        alloc::vec::Vec::new(),
+        alloc::vec::Vec::new(),
+        2,
+        2,
+        50,
+    ) {
+        Ok(_) => Ok(()),
+        Err(DataSourceError::Assume) => Err(TestCaseResult::Invalid),
+        Err(_) => Err(TestCaseResult::Overrun),
+    }
 }
 
 #[test]
@@ -92,10 +115,6 @@ fn invalid_thresholds_match_hypothesis() {
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::native::core::ChoiceKind;
-use crate::native::core::choices::BooleanChoice;
-use crate::native::data_tree::{DataTreeNode, record_tree};
-
 /// Build an [`Engine`] whose driver runs `body` (returning the test
 /// case's outcome) and counts how many times the body actually executed,
 /// then hand both to `after`, driving the whole interaction through a
@@ -110,7 +129,7 @@ where
     let settings = Settings::new().database(None);
     let exchange = CaseExchange::new();
     let fut = async {
-        let mut ctx = Engine::new(&settings, None, &exchange);
+        let mut ctx = Engine::new(&settings, None, &exchange).unwrap();
         after(&mut ctx, &exec_count).await;
     };
     crate::exchange::drive(&exchange, fut, |ds| {
@@ -118,21 +137,6 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     });
-}
-
-/// Drive [`run_single_case`] to completion with a synchronous `run_case`
-/// callback, the way the old pre-exchange entry point worked.
-fn run_single_case_sync(
-    settings: &Settings,
-    key: Option<&str>,
-    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
-) -> Option<Failure> {
-    let exchange = CaseExchange::new();
-    crate::exchange::drive(
-        &exchange,
-        run_single_case(settings, key, &exchange),
-        run_case,
-    )
 }
 
 /// Drive [`run_main`] to completion with a synchronous `run_case` callback,
@@ -143,7 +147,7 @@ fn run_main_sync(
     run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
     too_slow_threshold: Duration,
     shrink_budget: Duration,
-) -> Result<Vec<Failure>, crate::backend::RunError> {
+) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
     let exchange = CaseExchange::new();
     crate::exchange::drive(
         &exchange,
@@ -153,22 +157,36 @@ fn run_main_sync(
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
+}
+
+fn int_node(value: i128) -> ChoiceNode {
+    ChoiceNode::integer(
+        crate::native::core::choices::IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(100),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
+/// The flat cache keys on exact realized values, so a proposal longer than
+/// a recorded conclusion is a miss and executes — the trailing-unread
+/// serving the tree did is a deliberately accepted loss (experiment 010:
+/// serves were ≈ exact repeats).
 #[test]
-fn cached_test_function_serves_tree_known_path_without_executing() {
+fn cached_test_function_executes_a_proposal_longer_than_a_known_conclusion() {
     with_counting_ctx(
         |ds| match rbool(ds) {
             Ok(_) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
         async |ctx, count| {
-            record_tree(&mut ctx.tree_root, &[bool_node(false)], Status::Valid, &[]);
+            let known = [ChoiceValue::Boolean(false)];
+            ctx.cached_test_function(&known, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1);
 
             let run = ctx
                 .cached_test_function(
@@ -176,9 +194,10 @@ fn cached_test_function_serves_tree_known_path_without_executing() {
                     None,
                     0,
                 )
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
-            assert_eq!(count.get(), 0, "tree-known path must not run the body");
+            assert_eq!(count.get(), 2, "a longer proposal is not an exact repeat");
             assert_eq!(run.nodes.len(), 1);
         },
     );
@@ -194,19 +213,85 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Valid);
-            assert_eq!(count.get(), 1, "exact repeat must be served from the tree");
+            assert_eq!(count.get(), 1, "exact repeat must be served from the cache");
+        },
+    );
+}
+
+/// The tree predicted an overrun for a truncated known path without running
+/// the body; the flat cache does not record overruns, so the truncated
+/// replay executes every time.
+#[test]
+fn cached_test_function_executes_a_truncated_known_path_to_overrun() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            let first = ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(first.status, Status::Valid);
+            assert_eq!(count.get(), 1);
+
+            let truncated = [ChoiceValue::Boolean(false)];
+            let overrun = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(overrun.status, Status::EarlyStop);
+            assert_eq!(count.get(), 2);
+
+            let again = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            assert_eq!(again.status, Status::EarlyStop);
+            assert_eq!(
+                count.get(),
+                3,
+                "an overrun concluded nothing and is never served"
+            );
         },
     );
 }
 
 #[test]
-fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
+fn cached_test_function_probe_executes_a_truncated_prefix_with_continuation() {
+    with_counting_ctx(
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
+            ctx.cached_test_function(&full, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1);
+
+            let prefix = [ChoiceValue::Boolean(false)];
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert_eq!(
+                count.get(),
+                2,
+                "a probe must execute the body to draw its continuation"
+            );
+        },
+    );
+}
+
+#[test]
+fn cached_test_function_serves_interesting_from_cache_with_origin_and_spans() {
     with_counting_ctx(
         |ds| {
             ds.start_span(7).unwrap();
@@ -221,26 +306,335 @@ fn cached_test_function_serves_interesting_from_tree_with_origin_and_spans() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await;
+            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await;
+            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
                 1,
-                "interesting path must be served from the tree, not re-run"
+                "an interesting repeat must be served from the cache, not re-run"
             );
             assert_eq!(second.origin, first.origin);
             assert_eq!(second.spans.len(), 2, "outer span plus the per-draw span");
             assert_eq!(second.spans[0].label, "7");
             assert_eq!(second.spans[0].start, 0);
             assert_eq!(second.spans[0].end, 1);
-            assert_eq!(second.spans[1].label, "28");
+            assert_eq!(
+                second.spans[1].label,
+                crate::native::draws::LABEL_BOOLEAN.to_string()
+            );
             assert_eq!(second.spans[1].parent, Some(0));
         },
+    );
+}
+
+/// Stateful bodies realize their draws through cloned streams; the cache
+/// keys clones by child values, so an exact repeat of a clone-bearing
+/// conclusion is served like any other. The tree declined these.
+#[test]
+fn a_repeated_stateful_probe_is_served() {
+    with_counting_ctx(
+        |ds| {
+            let child = match ds.clone_stream() {
+                Ok(c) => c,
+                Err(_) => return TestCaseResult::Overrun,
+            };
+            match rint(&*child, 0, 1000) {
+                Ok(v) if v >= 100 => boom("child too big"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx, count| {
+            let clone = ChoiceValue::Clone(alloc::sync::Arc::new(
+                crate::native::core::CloneRecord::from_values(vec![ChoiceValue::Integer(
+                    BigInt::from(500),
+                )]),
+            ));
+            let first = ctx
+                .cached_test_function(std::slice::from_ref(&clone), None, 0)
+                .await
+                .unwrap();
+            assert_eq!(first.status, Status::Interesting);
+            assert_eq!(count.get(), 1);
+
+            let second = ctx
+                .cached_test_function(std::slice::from_ref(&clone), None, 0)
+                .await
+                .unwrap();
+            assert_eq!(second.status, Status::Interesting);
+            assert_eq!(count.get(), 1, "the clone-bearing repeat must be served");
+        },
+    );
+}
+
+/// The verdict-flip channel the tree never had: identical realized values
+/// concluding differently abort as a flaky test.
+#[test]
+fn a_reexecuted_fingerprint_with_a_different_outcome_is_flaky() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_counting_ctx(
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                TestCaseResult::Valid
+            } else {
+                boom("flip")
+            }
+        },
+        async |ctx, _count| {
+            let choices = [ChoiceValue::Boolean(true)];
+            let nodes = [bool_node(true)];
+            let (run, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(&choices, Some(&nodes), None))
+                .await
+                .unwrap();
+            assert_eq!(run.status, Status::Valid);
+            assert!(mismatch.is_none());
+
+            let (run, mismatch) = ctx
+                .test_function(NativeTestCase::for_choices(&choices, Some(&nodes), None))
+                .await
+                .unwrap();
+            assert_eq!(run.status, Status::Interesting);
+            match mismatch {
+                Some(crate::backend::RunError::Flaky(msg)) => {
+                    assert!(msg.contains("Flaky test detected"), "{msg}");
+                }
+                other => panic!("expected the flaky abort, got {other:?}"),
+            }
+        },
+    );
+}
+
+/// A generation-window repeat executes (the digest tier keeps no serving
+/// entry), and a verdict flip on it aborts the replay chokepoint too.
+#[test]
+fn a_verdict_flip_on_a_generation_window_repeat_aborts_as_flaky() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_counting_ctx(
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
+                TestCaseResult::Valid
+            } else {
+                boom("flip")
+            }
+        },
+        async |ctx, count| {
+            ctx.collect_statistics = true;
+            let choices = [ChoiceValue::Boolean(true)];
+            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1);
+
+            let repeat = ctx.cached_test_function(&choices, None, 0).await;
+            assert_eq!(count.get(), 2, "generation-window repeats execute");
+            match repeat {
+                Err(crate::backend::RunError::Flaky(msg)) => {
+                    assert!(msg.contains("Flaky test detected"), "{msg}");
+                }
+                Err(other) => panic!("expected the flaky abort, got {other:?}"),
+                Ok(_) => panic!("expected the flaky abort, got a run"),
+            }
+        },
+    );
+}
+
+/// The flip drops everything the cache knew and stops serving: post-flip,
+/// identical timelines need not conclude identically.
+#[test]
+fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    with_counting_ctx(
+        move |ds| {
+            if execs.fetch_add(1, Ordering::SeqCst) >= 1 {
+                if let Err(result) = concurrent_machine(ds) {
+                    return result;
+                }
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+        async |ctx, count| {
+            let choices = [ChoiceValue::Boolean(true)];
+            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            assert_eq!(count.get(), 1, "served before the flip");
+
+            let flipping = [ChoiceValue::Boolean(false)];
+            ctx.cached_test_function(&flipping, None, 0).await.unwrap();
+            assert_eq!(count.get(), 2);
+            assert!(ctx.nondeterministic);
+            assert!(
+                ctx.exec_cache
+                    .serve(&serialize_choices(&choices).unwrap())
+                    .is_none(),
+                "the flip flushes the cache"
+            );
+
+            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            assert_eq!(count.get(), 3, "nothing is served after the flip");
+        },
+    );
+}
+
+/// A generation-window duplicate advances the counter; a novel conclusion
+/// resets it.
+#[test]
+fn duplicate_counter_resets_on_a_novel_case() {
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx, _count| {
+            ctx.collect_statistics = true;
+            let run = |v: bool| NativeTestCase::for_choices(&[ChoiceValue::Boolean(v)], None, None);
+            ctx.test_function(run(true)).await.unwrap();
+            assert_eq!(ctx.consecutive_duplicates, 0);
+            ctx.test_function(run(true)).await.unwrap();
+            assert_eq!(ctx.consecutive_duplicates, 1);
+            ctx.test_function(run(true)).await.unwrap();
+            assert_eq!(ctx.consecutive_duplicates, 2);
+            ctx.test_function(run(false)).await.unwrap();
+            assert_eq!(
+                ctx.consecutive_duplicates, 0,
+                "a novel case resets the streak"
+            );
+        },
+    );
+}
+
+fn tiny_invalid_run(
+    settings: Settings,
+    body_status: TestCaseResult,
+) -> (
+    Result<crate::backend::TestRunResult, crate::backend::RunError>,
+    u64,
+) {
+    let execs = Cell::new(0u64);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = match rbool(&*ds) {
+            Ok(_) => body_status.clone(),
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    (result, execs.get())
+}
+
+/// A two-value space whose every case is filtered reaches ten consecutive
+/// duplicates long before the 50-invalid threshold, and the exhausted-space
+/// FilterTooMuch variant reports it.
+#[test]
+fn filter_too_much_fires_via_the_duplicate_stop_on_an_exhausted_space() {
+    let (result, execs) = tiny_invalid_run(
+        Settings::new().database(None).test_cases(10_000),
+        TestCaseResult::Invalid,
+    );
+    match result {
+        Err(crate::backend::RunError::HealthCheck(msg)) => {
+            assert!(
+                msg.contains("every reachable input was filtered out"),
+                "{msg}"
+            );
+        }
+        other => panic!("expected the exhausted-space FilterTooMuch, got {other:?}"),
+    }
+    assert!(
+        execs < 50,
+        "the stop fires before the invalid threshold: {execs}"
+    );
+}
+
+/// Suppressing FilterTooMuch must not send a tiny filtered space grinding
+/// through the whole invalid budget: the duplicate stop stays active.
+#[test]
+fn duplicate_stop_stays_active_under_health_check_suppression() {
+    let (result, execs) = tiny_invalid_run(
+        Settings::new()
+            .database(None)
+            .test_cases(10_000)
+            .suppress_health_check([HealthCheck::FilterTooMuch]),
+        TestCaseResult::Invalid,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert!(
+        execs < 50,
+        "stopped by duplicates, not the invalid budget: {execs}"
+    );
+}
+
+/// A nondeterministic run trusts no repeat, so the duplicate stop is
+/// suspended at the flip and the run grinds to its invalid budget instead.
+#[test]
+fn duplicate_stop_is_disabled_for_a_nondeterministic_run() {
+    let execs = Cell::new(0u64);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = if let Err(result) = concurrent_machine(&*ds) {
+            result
+        } else {
+            match rbool(&*ds) {
+                Ok(_) => TestCaseResult::Invalid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        };
+        ds.mark_complete(&result);
+    };
+    let result = run_main_sync(
+        &Settings::new()
+            .database(None)
+            .test_cases(10_000)
+            .verbosity(Verbosity::Quiet)
+            .suppress_health_check([HealthCheck::FilterTooMuch]),
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert!(
+        execs.get() > 100,
+        "no duplicate stop after the flip: {}",
+        execs.get()
+    );
+}
+
+/// A tiny space whose cases are valid runs to its test-case budget: the
+/// duplicate stop only guards the all-invalid grind, and stopping a valid
+/// space early would leave `one_of` alternatives unreached.
+#[test]
+fn a_tiny_passing_space_generates_to_its_test_case_budget() {
+    let (result, execs) = tiny_invalid_run(
+        Settings::new().database(None).test_cases(50),
+        TestCaseResult::Valid,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert!(
+        execs >= 50,
+        "a valid space is budget-bounded, never duplicate-stopped: {execs}"
     );
 }
 
@@ -254,7 +648,8 @@ fn overrun_during_draw_overrides_a_swallowed_valid_outcome() {
         async |ctx, _| {
             let run = ctx
                 .execute(NativeTestCase::for_choices(&[], None, None))
-                .await;
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
         },
     );
@@ -269,17 +664,21 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
         },
         async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await;
+            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
-            assert_eq!(run.nodes[0].value, ChoiceValue::Boolean(true));
+            assert_eq!(run.nodes[0].value(), ChoiceValue::Boolean(true));
         },
     );
 }
 
+/// Span-mutation proposals are keyed as whole proposals, and the body here
+/// realizes only one of the proposal's four values — so no attempt is an
+/// exact repeat of a recorded conclusion and every one executes. The tree
+/// served these; the loss is accepted (experiment 010).
 #[test]
-fn span_mutation_does_not_re_execute_identical_proposals() {
+fn span_mutation_re_executes_proposals_that_are_not_exact_repeats() {
     with_counting_ctx(
         |ds| match rbool(ds) {
             Ok(_) => TestCaseResult::Valid,
@@ -302,11 +701,11 @@ fn span_mutation_does_not_re_execute_identical_proposals() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
-            assert_eq!(count.get(), 1);
-            assert_eq!(ctx.calls, 1);
-            assert_eq!(ctx.valid_test_cases, 1);
+            assert_eq!(count.get(), 5);
+            assert_eq!(ctx.calls, 5);
+            assert_eq!(ctx.valid_test_cases, 5);
             assert!(ctx.interesting.is_empty());
         },
     );
@@ -337,7 +736,7 @@ fn span_mutation_returns_interesting_proposal() {
             };
             let spans = vec![span(0, 4), span(1, 3)];
 
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 1);
             assert_eq!(ctx.calls, 1);
@@ -348,6 +747,41 @@ fn span_mutation_returns_interesting_proposal() {
                 .next()
                 .expect("the first proposal should be Interesting");
             assert!(origin.contains("Panic"));
+        },
+    );
+}
+
+/// A recursive value's span and its first sub-value's span share a label
+/// and a start; whichever the probe picks as the donor, the proposal must
+/// splice without reaching outside the choice sequence.
+#[test]
+fn span_mutation_handles_same_label_spans_sharing_a_start() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..3 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true), bool_node(false)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 3), span(0, 1)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert_eq!(ctx.calls as usize, count.get());
+            assert!(ctx.interesting.is_empty());
         },
     );
 }
@@ -377,11 +811,49 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let spans = vec![span(0, 4), span(1, 3)];
 
             ctx.valid_test_cases = 100;
-            ctx.try_span_mutation(&nodes, &spans).await;
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
 
             assert_eq!(count.get(), 0);
             assert_eq!(ctx.calls, 0);
             assert_eq!(ctx.valid_test_cases, 100);
+        },
+    );
+}
+
+#[test]
+fn span_mutation_extends_diverged_proposals_with_random_draws() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..4 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 2), span(1, 2)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert!(
+                ctx.valid_test_cases >= 1,
+                "a mutated sequence that runs out of data should be completed \
+                 with fresh random draws instead of being discarded, got {} \
+                 valid cases from {} calls",
+                ctx.valid_test_cases,
+                ctx.calls
+            );
         },
     );
 }
@@ -397,49 +869,6 @@ fn create_rng_default_backend_is_prng() {
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
     assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
-}
-
-/// Wrap a `run_main` outcome into the aggregate
-/// [`crate::backend::TestRunResult`], the way `embed::run_native` does —
-/// convenient for tests that drive `run_main` directly to inject the
-/// TooSlow / shrink-budget thresholds: the exploration failures wrapped up.
-fn complete_native(
-    exploration: Result<Vec<crate::backend::Failure>, crate::backend::RunError>,
-) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
-    Ok(crate::backend::TestRunResult {
-        failures: exploration?,
-    })
-}
-
-#[test]
-fn run_single_case_returns_the_failure() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&boom("single-case bug"));
-        },
-    )
-    .unwrap();
-    assert!(failure.origin.contains("single-case bug"), "{failure:?}");
-}
-
-#[test]
-fn run_single_case_returns_none_for_a_passing_case() {
-    let failure = run_single_case_sync(
-        &Settings::new()
-            .database(None)
-            .mode(Mode::SingleTestCase)
-            .verbosity(Verbosity::Quiet),
-        None,
-        |ds| {
-            ds.mark_complete(&TestCaseResult::Valid);
-        },
-    );
-    assert!(failure.is_none(), "{failure:?}");
 }
 
 #[test]
@@ -463,7 +892,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(result.failures.is_empty());
 }
 
@@ -488,7 +917,8 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
+    assert!(!result.nondeterministic);
     assert!(
         result.failures[0].origin.contains("always fails"),
         "{:?}",
@@ -506,13 +936,13 @@ fn slow_shrink_warning_mentions_shrinking() {
 #[test]
 fn run_main_stops_shrinking_when_budget_is_exhausted() {
     let body = |ds: &dyn DataSource| -> TestCaseResult {
-        let cid = match ds.new_collection(0, None) {
+        let mut collection = match ds.new_collection(0, None) {
             Ok(c) => c,
             Err(_) => return TestCaseResult::Overrun,
         };
         let mut len = 0usize;
         loop {
-            match ds.collection_more(cid) {
+            match ds.collection_more(&mut collection) {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(_) => return TestCaseResult::Overrun,
@@ -543,7 +973,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         Duration::from_secs(30),
         Duration::ZERO,
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert!(
         !result.failures.is_empty(),
         "the failure must still be reported"
@@ -553,6 +983,78 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
         "{:?}",
         result.failures
     );
+}
+
+/// Cost guard (experiment 010): on a passing body the run's execution count
+/// is a pure function of the seed, so replacing the tree's recording with
+/// the flat cache must not change it at all.
+#[test]
+fn a_passing_run_executes_a_seed_pinned_count() {
+    let execs = Cell::new(0u64);
+    let body = |ds: &dyn DataSource| match rint(ds, I32_MIN, I32_MAX) {
+        Ok(_) => TestCaseResult::Valid,
+        Err(()) => TestCaseResult::Overrun,
+    };
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .test_cases(50)
+        .database(None)
+        .derandomize(true);
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert_eq!(execs.get(), 50);
+}
+
+/// Cost guard (experiment 010): the flat cache must keep serving
+/// shrink-phase repeats, so a deterministic shrink-heavy run stays within
+/// ~1.1x the tree-era execution count (010's 85% serve rate).
+#[test]
+fn a_deterministic_shrink_stays_within_the_tree_era_execution_budget() {
+    let execs = Cell::new(0u64);
+    let body = |ds: &dyn DataSource| {
+        let mut sum: i64 = 0;
+        for _ in 0..16 {
+            match rint(ds, 0, 100) {
+                Ok(v) => sum += v,
+                Err(()) => return TestCaseResult::Overrun,
+            }
+        }
+        if sum >= 200 {
+            boom("large sum")
+        } else {
+            TestCaseResult::Valid
+        }
+    };
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        execs.set(execs.get() + 1);
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .test_cases(50)
+        .database(None)
+        .derandomize(true);
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert!(result.failures[0].origin.contains("large sum"));
+    assert!(execs.get() <= 1661, "execs = {}", execs.get());
 }
 
 #[test]
@@ -565,7 +1067,10 @@ fn run_main_reports_too_slow_at_call_site() {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let settings = Settings::new().test_cases(100).database(None);
+    let settings = Settings::new()
+        .test_cases(100)
+        .database(None)
+        .suppress_health_check([]);
     let exploration = run_main_sync(
         &settings,
         None,
@@ -573,13 +1078,41 @@ fn run_main_reports_too_slow_at_call_site() {
         Duration::ZERO,
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration);
+    let result = exploration;
     match result {
         Err(crate::backend::RunError::HealthCheck(msg)) => {
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
         }
         other => panic!("expected RunError::HealthCheck, got {other:?}"),
     }
+}
+
+/// Regression for issue #78: a test that rejects its input before making
+/// any draw can never produce a valid case, so the run must report
+/// Unsatisfiable after one call instead of passing.
+#[test]
+fn run_main_reports_unsatisfiable_for_trivial_always_invalid_test() {
+    let mut calls = 0usize;
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        calls += 1;
+        ds.mark_complete(&TestCaseResult::Invalid);
+    };
+    let settings = Settings::new().test_cases(100).database(None);
+    let exploration = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    );
+    match exploration {
+        Err(crate::backend::RunError::Unsatisfiable(msg)) => {
+            assert!(msg.contains("Unsatisfiable"), "unexpected message: {msg}");
+            assert!(msg.contains("assume()"), "unexpected message: {msg}");
+        }
+        other => panic!("expected RunError::Unsatisfiable, got {other:?}"),
+    }
+    assert_eq!(calls, 1, "a trivial invalid test must stop after one call");
 }
 
 #[test]
@@ -632,7 +1165,7 @@ fn large_initial_check_quiet_for_interesting() {
 }
 
 #[test]
-fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
+fn genuine_overrun_is_early_stop_and_not_cached() {
     with_counting_ctx(
         |ds| {
             if rbool(ds).is_err() {
@@ -643,14 +1176,17 @@ fn genuine_overrun_is_early_stop_and_not_recorded_in_the_tree() {
             }
             TestCaseResult::Valid
         },
-        async |ctx, _count| {
-            let (run, _mismatch) = ctx.test_function(NativeTestCase::for_simplest(1)).await;
+        async |ctx, count| {
+            let (run, _mismatch) = ctx
+                .test_function(NativeTestCase::for_simplest(1).unwrap())
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::EarlyStop);
 
-            let mut tree = DataTreeNode::default();
-            record_tree(&mut tree, &run.nodes, run.status, &[]);
-            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value.clone()).collect();
-            assert_eq!(crate::native::data_tree::simulate(&tree, &choices), None);
+            let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value().clone()).collect();
+            let replay = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            assert_eq!(replay.status, Status::EarlyStop);
+            assert_eq!(count.get(), 2, "an overrun is never served");
         },
     );
 }
@@ -668,14 +1204,13 @@ where
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
-    let exploration = run_main_sync(
+    run_main_sync(
         &settings,
         Some(key),
         &mut run_case,
         Duration::from_secs(30),
         Duration::from_secs(300),
-    );
-    complete_native(exploration)
+    )
 }
 
 #[test]
@@ -683,7 +1218,10 @@ fn reuse_replay_extends_past_stored_prefix() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let result = reuse_run(
         Settings::new()
@@ -721,12 +1259,12 @@ fn reuse_consults_secondary_corpus_when_primary_fails_to_reproduce() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     db.save(
         &secondary_key,
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let result = reuse_run(
@@ -756,13 +1294,13 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(7))]).unwrap(),
     );
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
     for n in [4242, 4243, 4244, 4245] {
         db.save(
             &secondary_key,
-            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]),
+            &serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap(),
         );
     }
 
@@ -786,13 +1324,52 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
 }
 
 #[test]
+fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
+    );
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]).unwrap(),
+    );
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(10)
+            .report_multiple_failures(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(4242) => boom("primary bug"),
+            Ok(4243) => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].origin.contains("primary bug"),
+        "the secondary entry must not be replayed once a primary entry reproduces"
+    );
+}
+
+#[test]
 fn shrink_phase_drains_stale_secondary_corpus_entries() {
     use crate::native::bignum::BigInt;
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let secondary_key = crate::native::data_tree::sub_key(b"k", b"secondary");
-    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]);
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
+    let stale = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
     db.save(&secondary_key, &stale);
 
     let result = reuse_run(
@@ -848,11 +1425,11 @@ fn reuse_stops_after_first_reproduced_bug_without_multiple_reporting() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(1111))]).unwrap(),
     );
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(2222))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -892,7 +1469,7 @@ fn reuse_found_bug_skips_generation_entirely() {
     let db = DirectoryTestCaseDatabase::new(&path);
     db.save(
         b"k",
-        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]),
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
     );
 
     let calls = AtomicUsize::new(0);
@@ -1005,13 +1582,219 @@ fn shrink_verify_surfaces_generator_nondeterminism() {
 }
 
 #[test]
+fn nondeterministic_run_stops_at_first_bug_with_no_blob_and_no_verify() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let seen_bug = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            let a = match rbool(ds) {
+                Ok(v) => v,
+                Err(()) => return TestCaseResult::Overrun,
+            };
+            if !a {
+                return TestCaseResult::Valid;
+            }
+            let follow_up = if seen_bug.swap(true, Ordering::SeqCst) {
+                rint(ds, 0, 100).is_err()
+            } else {
+                rbool(ds).is_err()
+            };
+            if follow_up {
+                return TestCaseResult::Overrun;
+            }
+            boom("stable origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("stable origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(result.nondeterministic);
+    assert!(
+        seen_bug.load(Ordering::SeqCst),
+        "the bug must have been discovered by generation"
+    );
+}
+
+#[test]
+fn nondeterministic_run_reports_a_bug_that_would_otherwise_be_flaky() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let failed_once = AtomicBool::new(false);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .phases([Phase::Generate, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(true) if !failed_once.swap(true, Ordering::SeqCst) => boom("racy origin"),
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].origin.contains("racy origin"));
+    assert!(result.failures[0].reproduce_blob.is_none());
+}
+
+#[test]
+fn nondeterministic_run_discards_stale_entries_and_persists_nothing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let seeded = serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap();
+    db.save(b"k", &seeded);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            boom("db origin")
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(result.failures[0].reproduce_blob.is_none());
+    assert!(
+        db.fetch(b"k").is_empty(),
+        "the stale replay is discarded like a failed assumption and deleted, \
+         and the fresh failure is not persisted"
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(db.fetch(&secondary).is_empty());
+}
+
+#[test]
+fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::new()
+            .database(None)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let notices = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Concurrent state machine detected"))
+        .count();
+    assert_eq!(notices, 1, "the notice is printed exactly once per run");
+}
+
+#[test]
+fn debug_runs_log_the_loaded_config_path() {
+    use std::sync::{Arc, Mutex};
+    for (path, expected) in [
+        (Some("/a/hegel.toml"), "loaded config: /a/hegel.toml"),
+        (None, "no config file loaded"),
+    ] {
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&lines);
+        let mut settings = Settings::new()
+            .database(None)
+            .test_cases(2)
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            }));
+        settings.config_path = path.map(String::from);
+        reuse_run(settings, "k", |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        })
+        .unwrap();
+        assert!(
+            lines.lock().unwrap().iter().any(|l| l == expected),
+            "missing {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn a_concurrent_machine_prints_no_nondeterminism_notice_in_antithesis() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let result = reuse_run(
+        Settings::base(true)
+            .database(None)
+            .test_cases(5)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            if let Err(result) = concurrent_machine(ds) {
+                return result;
+            }
+            match rbool(ds) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let text = lines.lock().unwrap().join("\n");
+    assert!(
+        !text.contains("Concurrent state machine detected"),
+        "Antithesis is deterministic, so the notice does not apply:\n{text}"
+    );
+}
+
+#[test]
 fn reuse_detects_nondeterministic_generator_across_replays() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(false)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(false)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -1044,12 +1827,15 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
 }
 
 #[test]
-fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
+fn nondeterministic_generator_contradicts_the_reuse_fed_kind_ledger_at_simplest_example() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    db.save(b"k", &serialize_choices(&[ChoiceValue::Boolean(true)]));
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
 
     let flip = AtomicUsize::new(0);
     let result = reuse_run(
@@ -1082,12 +1868,46 @@ fn nondeterministic_generator_contradicts_reuse_fed_tree_at_simplest_example() {
     }
 }
 
+/// A one-case budget skips the deterministic simplest-example probe (which
+/// would otherwise consume the whole budget and pin every run to the
+/// all-simplest case), so the single case is randomly generated.
 #[test]
-fn run_single_case_derandomize_is_keyed_by_test_identity() {
+fn a_one_case_budget_generates_a_random_case() {
+    let mut executions = 0;
+    let mut drawn: Vec<u64> = Vec::new();
+    let result = run_main_sync(
+        &Settings::new()
+            .test_cases(1)
+            .database(None)
+            .seed(Some(0))
+            .verbosity(Verbosity::Quiet),
+        None,
+        |ds| {
+            executions += 1;
+            for _ in 0..4 {
+                if let Ok(n) = ru64(&*ds) {
+                    drawn.push(n);
+                }
+            }
+            ds.mark_complete(&TestCaseResult::Valid);
+        },
+        Duration::from_secs(30),
+        Duration::ZERO,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert_eq!(executions, 1, "one valid case is the whole budget");
+    assert!(
+        drawn.iter().any(|&n| n != 0),
+        "the one case must be random, not the all-simplest probe: {drawn:?}"
+    );
+}
+
+#[test]
+fn derandomize_is_keyed_by_test_identity() {
     let settings = Settings::new()
+        .test_cases(5)
         .database(None)
         .derandomize(true)
-        .mode(Mode::SingleTestCase)
         .verbosity(Verbosity::Quiet);
     let draw_with_key = |key: Option<&str>| {
         let mut drawn: Vec<u64> = Vec::new();
@@ -1100,7 +1920,14 @@ fn run_single_case_derandomize_is_keyed_by_test_identity() {
                 }
                 ds.mark_complete(&TestCaseResult::Valid);
             };
-            run_single_case_sync(&settings, key, &mut run_case);
+            run_main_sync(
+                &settings,
+                key,
+                &mut run_case,
+                Duration::from_secs(30),
+                Duration::ZERO,
+            )
+            .unwrap();
         }
         drawn
     };
@@ -1139,7 +1966,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         Duration::from_secs(30),
         Duration::from_secs(300),
     );
-    let result = complete_native(exploration).unwrap();
+    let result = exploration.unwrap();
     assert_eq!(result.failures.len(), 1);
     assert!(result.failures[0].origin.contains("child too big"));
 
@@ -1150,7 +1977,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
         panic!("expected the shrunk sequence to keep the clone node: {choices:?}");
     };
     assert_eq!(
-        record.values().cloned().collect::<Vec<_>>(),
+        record.owned_values(),
         vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(
             100
         ))]
@@ -1158,5 +1985,336 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
     assert_eq!(
         choices[1],
         ChoiceValue::Integer(crate::native::bignum::BigInt::from(0))
+    );
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DbOp {
+    Save(Vec<u8>, Vec<u8>),
+    Delete(Vec<u8>, Vec<u8>),
+    Move(Vec<u8>, Vec<u8>, Vec<u8>),
+}
+
+/// In-memory [`TestCaseDatabase`] recording every mutating call, so tests
+/// can assert on operation ordering as well as final contents.
+#[derive(Clone, Default)]
+struct LoggingDatabase(std::sync::Arc<LoggingState>);
+
+#[derive(Default)]
+struct LoggingState {
+    ops: std::sync::Mutex<Vec<DbOp>>,
+    entries: std::sync::Mutex<std::collections::HashMap<Vec<u8>, Vec<Vec<u8>>>>,
+}
+
+impl LoggingDatabase {
+    fn ops(&self) -> Vec<DbOp> {
+        self.0.ops.lock().unwrap().clone()
+    }
+}
+
+impl TestCaseDatabase for LoggingDatabase {
+    fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
+        self.0
+            .entries
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn save(&self, key: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Save(key.to_vec(), value.to_vec()));
+        let mut entries = self.0.entries.lock().unwrap();
+        let values = entries.entry(key.to_vec()).or_default();
+        if !values.contains(&value.to_vec()) {
+            values.push(value.to_vec());
+        }
+    }
+
+    fn delete(&self, key: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Delete(key.to_vec(), value.to_vec()));
+        if let Some(values) = self.0.entries.lock().unwrap().get_mut(key) {
+            values.retain(|v| v != value);
+        }
+    }
+
+    fn move_value(&self, src: &[u8], dst: &[u8], value: &[u8]) {
+        self.0
+            .ops
+            .lock()
+            .unwrap()
+            .push(DbOp::Move(src.to_vec(), dst.to_vec(), value.to_vec()));
+        let mut entries = self.0.entries.lock().unwrap();
+        if let Some(values) = entries.get_mut(src) {
+            values.retain(|v| v != value);
+        }
+        let values = entries.entry(dst.to_vec()).or_default();
+        if !values.contains(&value.to_vec()) {
+            values.push(value.to_vec());
+        }
+    }
+}
+
+#[test]
+fn persister_saves_new_bytes_before_deleting_superseded() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
+
+    let old = serialize_choices(&[ChoiceValue::Integer(BigInt::from(5))]).unwrap();
+    let new = serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap();
+    let ops = db.ops();
+    let saved_new = ops
+        .iter()
+        .position(|op| *op == DbOp::Save(b"k".to_vec(), new.clone()))
+        .unwrap();
+    let removed_old = ops
+        .iter()
+        .position(|op| {
+            matches!(op, DbOp::Delete(key, v) | DbOp::Move(key, _, v)
+                if key.as_slice() == b"k" && *v == old)
+        })
+        .unwrap();
+    assert!(
+        saved_new < removed_old,
+        "the superseding save must land before the superseded bytes leave the primary key"
+    );
+}
+
+#[test]
+fn persister_deletes_superseded_same_run_saves() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: bug", &[int_node(5)]).unwrap();
+    persister.record("Panic: bug", &[int_node(3)]).unwrap();
+
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(3))]).unwrap()]
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a superseded same-run save is deleted, not demoted"
+    );
+}
+
+#[test]
+fn end_of_run_reconciliation_demotes_only_the_run_start_primary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(1005)),
+        ChoiceValue::Boolean(true),
+    ])
+    .unwrap();
+    db.save(b"k", &run_start);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(n) if n >= 1000 => boom("big bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(1000))]).unwrap()]
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert_eq!(
+        db.fetch(&secondary),
+        vec![run_start],
+        "only the run-start primary entry demotes; same-run saves delete"
+    );
+}
+
+#[test]
+fn secondary_corpus_cap_evicts_shortlex_largest() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    let entry = |n: i64| serialize_choices(&[ChoiceValue::Integer(BigInt::from(n))]).unwrap();
+    for n in 0..55 {
+        db.save(&secondary, &entry(n));
+    }
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Generate])
+            .test_cases(5)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    let mut kept = db.fetch(&secondary);
+    kept.sort_by(|a, b| shortlex(a, b));
+    let expected: Vec<Vec<u8>> = (0..50).map(entry).collect();
+    assert_eq!(
+        kept, expected,
+        "eviction removes exactly the shortlex-largest overflow"
+    );
+}
+
+#[test]
+fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
+    let misaligned = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(95)),
+        ChoiceValue::Integer(BigInt::from(3)),
+    ])
+    .unwrap();
+    db.save(b"k", &run_start);
+    db.save(b"k", &misaligned);
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = match rint(&*ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        };
+        ds.mark_complete(&result);
+    };
+    let settings = Settings::new()
+        .database(Some(path))
+        .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
+        .verbosity(Verbosity::Quiet);
+    let result = run_main_sync(
+        &settings,
+        Some("k"),
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::from_secs(300),
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).contains(&run_start),
+        "the superseded run-start entry demotes instead of deleting"
+    );
+}
+
+#[test]
+fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
+    let db = LoggingDatabase::default();
+    let mut persister = Persister::new(Some(Box::new(db.clone())), Some("k"));
+    persister.record("Panic: a", &[int_node(90)]).unwrap();
+    persister.record("Panic: b", &[int_node(90)]).unwrap();
+    assert_eq!(db.fetch(b"k").len(), 1);
+
+    persister.record("Panic: a", &[int_node(50)]).unwrap();
+
+    let shared = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
+    let smaller = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
+    let primary = db.fetch(b"k");
+    assert!(
+        primary.contains(&shared),
+        "the shared entry survives the other origin's supersession"
+    );
+    assert!(primary.contains(&smaller));
+    assert_eq!(primary.len(), 2);
+}
+
+#[test]
+fn shrink_phase_drain_stops_at_entries_above_the_largest_surviving_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let run_start = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(90)),
+        ChoiceValue::Boolean(true),
+    ])
+    .unwrap();
+    db.save(b"k", &run_start);
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    let small = serialize_choices(&[ChoiceValue::Integer(BigInt::from(10))]).unwrap();
+    let large = serialize_choices(&[
+        ChoiceValue::Integer(BigInt::from(80)),
+        ChoiceValue::Integer(BigInt::from(4)),
+    ])
+    .unwrap();
+    db.save(&secondary, &small);
+    db.save(&secondary, &large);
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, 0, 100) {
+            Ok(v) if v >= 50 => boom("bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    let shrunk = serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap();
+    assert_eq!(db.fetch(b"k"), vec![shrunk]);
+    let kept = db.fetch(&secondary);
+    assert!(
+        !kept.contains(&small),
+        "an entry at or below the surviving failure is replayed and drained"
+    );
+    assert!(
+        kept.contains(&large),
+        "an entry shortlex above the surviving failure survives the drain"
+    );
+    assert!(kept.contains(&run_start));
+}
+
+#[test]
+fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let settings = Settings::new().database(Some(path));
+    let exchange = CaseExchange::new();
+    let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
+    ctx.persister.record("Panic: bug", &[int_node(90)]).unwrap();
+    ctx.interesting
+        .insert("Panic: bug".to_string(), vec![int_node(50)]);
+    ctx.reconcile_database().unwrap();
+
+    assert_eq!(
+        db.fetch(b"k"),
+        vec![serialize_choices(&[ChoiceValue::Integer(BigInt::from(50))]).unwrap()]
+    );
+    let secondary = crate::native::database::sub_key(b"k", b"secondary");
+    assert!(
+        db.fetch(&secondary).is_empty(),
+        "a same-run leftover is deleted, not demoted"
     );
 }

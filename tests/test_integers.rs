@@ -116,86 +116,10 @@ fn test_usize() {
     find_any(gs::integers::<usize>(), |&n| n == usize::MAX);
 }
 
-mod numerics {
-    use hegel::generators as gs;
-    use hegel::{HealthCheck, Hegel, Settings};
-
-    #[test]
-    fn test_fuzz_floats_bounds() {
-        Hegel::new(|tc| {
-            let (mut low, mut high): (Option<f64>, Option<f64>) = tc.draw(gs::tuples!(
-                gs::optional(gs::floats::<f64>().allow_nan(false)),
-                gs::optional(gs::floats::<f64>().allow_nan(false)),
-            ));
-            if let (Some(l), Some(h)) = (low, high) {
-                if l > h {
-                    std::mem::swap(&mut low, &mut high);
-                }
-            }
-            tc.assume(!low.is_some_and(|l| l.is_infinite()));
-            tc.assume(!high.is_some_and(|h| h.is_infinite()));
-
-            let exmin = low.is_some() && tc.draw(gs::booleans());
-            let exmax = high.is_some() && tc.draw(gs::booleans());
-
-            if let (Some(l), Some(h)) = (low, high) {
-                let lo = if exmin { l.next_up() } else { l };
-                let hi = if exmax { h.next_down() } else { h };
-                tc.assume(lo <= hi);
-                if lo == 0.0 && hi == 0.0 {
-                    tc.assume(!exmin && !exmax && (1.0_f64).copysign(lo) <= (1.0_f64).copysign(hi));
-                }
-            }
-
-            let mut s = gs::floats::<f64>();
-            if let Some(l) = low {
-                s = s.min_value(l);
-            }
-            if let Some(h) = high {
-                s = s.max_value(h);
-            }
-            s = s.exclude_min(exmin).exclude_max(exmax);
-            let val: f64 = tc.draw(s);
-            tc.assume(val != 0.0);
-
-            if let Some(l) = low {
-                assert!(l <= val);
-            }
-            if let Some(h) = high {
-                assert!(val <= h);
-            }
-            if exmin {
-                assert_ne!(low.unwrap(), val);
-            }
-            if exmax {
-                assert_ne!(high.unwrap(), val);
-            }
-        })
-        .settings(
-            Settings::new()
-                .suppress_health_check(HealthCheck::all())
-                .database(None),
-        )
-        .run();
-    }
-}
-
 mod nocover_simple_numbers {
     use super::common::utils::{Minimal, minimal};
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
-
-    #[test]
-    fn test_minimize_negative_int() {
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x < 0), -1);
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x < -1), -2);
-    }
-
-    #[test]
-    fn test_positive_negative_int() {
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x > 0), 1);
-        assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x > 1), 2);
-    }
 
     fn boundaries() -> Vec<i64> {
         let mut bs: Vec<i64> = Vec::new();
@@ -360,14 +284,6 @@ mod nocover_simple_numbers {
     }
 
     #[test]
-    fn test_minimal_infinite_float_is_positive() {
-        assert_eq!(
-            minimal(gs::floats::<f64>(), |x: &f64| x.is_infinite()),
-            f64::INFINITY
-        );
-    }
-
-    #[test]
     fn test_can_minimal_infinite_negative_float() {
         let x = minimal(gs::floats::<f64>(), |x: &f64| *x < -f64::MAX);
         assert!(x < -f64::MAX);
@@ -378,11 +294,6 @@ mod nocover_simple_numbers {
         minimal(gs::floats::<f64>(), |x: &f64| {
             *x + 1.0 == *x && !x.is_infinite()
         });
-    }
-
-    #[test]
-    fn test_minimize_nan() {
-        assert!(minimal(gs::floats::<f64>(), |x: &f64| x.is_nan()).is_nan());
     }
 
     #[test]
@@ -501,53 +412,11 @@ mod nocover_simple_numbers {
     }
 
     #[test]
-    fn test_no_allow_infinity_upper() {
-        Hegel::new(|tc| {
-            let x: f64 = tc.draw(gs::floats::<f64>().min_value(0.0).allow_infinity(false));
-            assert!(!x.is_infinite());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_no_allow_infinity_lower() {
-        Hegel::new(|tc| {
-            let x: f64 = tc.draw(gs::floats::<f64>().max_value(0.0).allow_infinity(false));
-            assert!(!x.is_infinite());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_are_floats_unbounded() {
-        Hegel::new(|tc| {
-            tc.draw(gs::floats::<f64>());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
     fn test_floats_are_floats_int_float_bounds() {
         Hegel::new(|tc| {
             tc.draw(
                 gs::floats::<f64>()
                     .min_value(0.0)
-                    .max_value(u64::MAX as f64),
-            );
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_are_floats_float_float_bounds() {
-        Hegel::new(|tc| {
-            tc.draw(
-                gs::floats::<f64>()
-                    .min_value(0.0_f64)
                     .max_value(u64::MAX as f64),
             );
         })
@@ -597,5 +466,154 @@ mod nocover_boundary_exploration {
                 .suppress_health_check(HealthCheck::all()),
         )
         .run();
+    }
+}
+
+/// End-to-end distribution checks: drawing from a wide integer range through
+/// the public `integers()` generator must surface boundary and small-magnitude
+/// values with a meaningful frequency, mirroring Hypothesis's special-value
+/// injection. Regression test for the boundary under-sampling that made
+/// off-by-one / overflow / sign bugs hard to find.
+///
+/// The rates here are *marginal* over test cases: because each case draws its
+/// own swarm category weights (most cases middle-dominated, a boundary-heavy
+/// minority not), boundary values are clustered in the heavy cases rather than spread
+/// evenly, so the aggregate per-draw rate is lower than the in-a-heavy-case
+/// rate. The `x + y` overflow check exercises what that clustering buys: a bug
+/// needing *two* extreme operands at once, which a fixed per-draw probability
+/// would reach only at rate ~p².
+mod special_value_distribution {
+    use hegel::generators as gs;
+    use hegel::{HealthCheck, Hegel, Settings};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn is_boundary(a: i64) -> bool {
+        a == i64::MIN
+            || a == i64::MAX
+            || a == i64::MIN + 1
+            || a == i64::MAX - 1
+            || a == 0
+            || a == 1
+            || a == -1
+    }
+
+    // A second, independent integer is drawn each case so the data tree does
+    // not collapse repeated single-value leaves (which would mask the draw
+    // distribution behind tree-exhaustion rather than the sampler).
+    #[test]
+    fn full_width_hits_boundary_and_small_values() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static BOUNDARY: AtomicU64 = AtomicU64::new(0);
+        static SMALL: AtomicU64 = AtomicU64::new(0);
+
+        Hegel::new(|tc| {
+            let a: i64 = tc.draw(gs::integers::<i64>());
+            let _b: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if is_boundary(a) {
+                BOUNDARY.fetch_add(1, Ordering::Relaxed);
+            }
+            if (-8..=8).contains(&a) {
+                SMALL.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB0)) // deterministic: not a flaky statistical test
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let boundary = BOUNDARY.load(Ordering::Relaxed) as f64 / n;
+        let small = SMALL.load(Ordering::Relaxed) as f64 / n;
+        // Marginal per-draw rates under swarm: lower than a flat boundary-biased
+        // distribution would give, but concentrated where it matters.
+        assert!(
+            boundary > 0.008,
+            "boundary values only {boundary:.4} of draws; expected > 0.8%"
+        );
+        assert!(
+            small > 0.03,
+            "small values only {small:.4} of draws; expected > 3%"
+        );
+    }
+
+    // `x` and `y` are drawn in the same test case, so they share that case's
+    // swarm category weights. In a boundary-heavy case both are pulled
+    // toward the endpoints together, so `x + y` overflows far more often than
+    // the ~p² a fixed per-draw boundary probability `p` would yield — this is
+    // the interaction swarm testing exists to reach.
+    #[test]
+    fn overflow_of_x_plus_y_is_common() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static OVERFLOW: AtomicU64 = AtomicU64::new(0);
+
+        Hegel::new(|tc| {
+            let x: i64 = tc.draw(gs::integers::<i64>());
+            let y: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if x.checked_add(y).is_none() {
+                OVERFLOW.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB2)) // deterministic: not a flaky statistical test
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let overflow = OVERFLOW.load(Ordering::Relaxed) as f64 / n;
+        assert!(
+            overflow > 0.01,
+            "x + y overflowed only {overflow:.4} of cases; expected > 1%"
+        );
+    }
+
+    #[test]
+    fn large_bounded_hits_endpoints_and_small_values() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        static MINMAX: AtomicU64 = AtomicU64::new(0);
+        static SMALL: AtomicU64 = AtomicU64::new(0);
+
+        let lo = -(1i64 << 40);
+        let hi = 1i64 << 40;
+        Hegel::new(move |tc| {
+            let a: i64 = tc.draw(gs::integers::<i64>().min_value(lo).max_value(hi));
+            let _b: i64 = tc.draw(gs::integers::<i64>());
+            N.fetch_add(1, Ordering::Relaxed);
+            if a == lo || a == hi {
+                MINMAX.fetch_add(1, Ordering::Relaxed);
+            }
+            if (-8..=8).contains(&a) {
+                SMALL.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(20_000)
+                .seed(Some(0xB1))
+                .database(None)
+                .suppress_health_check(HealthCheck::all()),
+        )
+        .run();
+
+        let n = N.load(Ordering::Relaxed) as f64;
+        let minmax = MINMAX.load(Ordering::Relaxed) as f64 / n;
+        let small = SMALL.load(Ordering::Relaxed) as f64 / n;
+        assert!(
+            minmax > 0.004,
+            "min/max endpoints only {minmax:.4} of draws; expected > 0.4%"
+        );
+        assert!(
+            small > 0.03,
+            "small values only {small:.4} of draws; expected > 3%"
+        );
     }
 }

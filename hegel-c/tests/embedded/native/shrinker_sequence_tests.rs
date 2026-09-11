@@ -2,35 +2,35 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::IntegerChoice;
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(0),
             max_value: BigInt::from(100),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn int_values(shrinker: &Shrinker) -> Vec<i128> {
     shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
             _ => unreachable!(),
         })
@@ -72,7 +72,7 @@ fn sort_values_sorts_booleans() {
     let bools: Vec<bool> = shrinker
         .current_nodes
         .iter()
-        .map(|n| matches!(n.value, ChoiceValue::Boolean(true)))
+        .map(|n| matches!(n.value(), ChoiceValue::Boolean(true)))
         .collect();
     assert_eq!(bools, vec![false, true, true]);
 }

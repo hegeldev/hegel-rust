@@ -20,7 +20,7 @@ where
     T: Debug,
 {
     Hegel::new(move |tc: TestCase| {
-        let value = tc.draw(&generator);
+        let value = tc.draw_silent(&generator);
         assert!(property(&value), "property failed for {value:?}");
     })
     .settings(
@@ -42,7 +42,7 @@ where
     let found_clone = Arc::clone(&found);
     let result = catch_unwind(AssertUnwindSafe(|| {
         Hegel::new(move |tc: TestCase| {
-            let value = tc.draw(&generator);
+            let value = tc.draw_silent(&generator);
             if condition(&value) {
                 *found_clone.lock().unwrap() = Some(value);
                 panic!("HEGEL_MINIMAL_FOUND");
@@ -181,13 +181,13 @@ fn map_filter_flatmap() {
     check(g, |v: &Vec<bool>| v.len() <= 3);
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum Shape {
     Empty,
     Circle(u32),

@@ -15,6 +15,8 @@
 //! and the usual arithmetic operators), so swapping the backend stays confined
 //! to this file.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use dashu_int::ops::BitTest;
 use dashu_int::{IBig, Sign as DashuSign, UBig};
 

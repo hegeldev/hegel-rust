@@ -146,7 +146,7 @@ fn test_boxed_generator_with_references(tc: TestCase) {
     let options = [10, 20, 30];
     let refs: Vec<&i32> = options.iter().collect();
     let g = gs::sampled_from(refs).boxed();
-    let value: &i32 = tc.draw(g);
+    let value: &i32 = tc.draw_silent(g);
     assert!(options.contains(value));
 }
 
@@ -186,7 +186,7 @@ fn test_boxed_generator_with_local_lifetime(tc: TestCase) {
 
     let refs = ix.map(|i| &x[i]).boxed();
 
-    let t = tc.draw(refs);
+    let t = tc.draw_silent(refs);
 
     assert!(t.len() == 3);
 }

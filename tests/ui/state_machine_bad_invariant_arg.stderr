@@ -1,0 +1,5 @@
+error: unsupported #[invariant] argument; expected `always_run`
+  --> tests/ui/state_machine_bad_invariant_arg.rs:10:17
+   |
+10 |     #[invariant(sometimes)]
+   |                 ^^^^^^^^^

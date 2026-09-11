@@ -1,4 +1,6 @@
 use super::*;
+use alloc::string::ToString;
+use alloc::vec;
 
 #[test]
 fn build_intervals_default_excludes_surrogates() {
@@ -299,4 +301,10 @@ fn build_intervals_rejects_include_characters_outside_codec() {
     })
     .unwrap();
     assert!(iv.contains(b'a' as u32) && iv.contains(b'z' as u32));
+}
+
+#[test]
+fn categories_union_of_no_categories_is_empty() {
+    let iv = categories_union(&[]).unwrap();
+    assert!(iv.is_empty());
 }

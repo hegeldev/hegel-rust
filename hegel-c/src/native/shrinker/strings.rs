@@ -1,74 +1,77 @@
-use std::collections::HashMap;
+use crate::native::HashMap;
+use alloc::vec::Vec;
 
-use crate::native::core::{ChoiceKind, ChoiceValue, StringChoice};
+use crate::native::core::{ChoiceValue, StringChoice};
 use crate::unicodedata;
 
 use super::search::{BinSearchDown, FindInteger};
-use super::{ShrinkResult, Shrinker};
-use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_ne};
+use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
+use crate::control::{
+    hegel_internal_debug_assert, hegel_internal_debug_assert_ne, hegel_internal_unwrap,
+};
 
 impl<'a> Shrinker<'a> {
     pub(super) async fn shrink_strings(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (kind, current) = match (
-                self.current_nodes[i].kind.as_ref(),
-                self.current_nodes[i].value.clone(),
-            ) {
-                (ChoiceKind::String(sc), ChoiceValue::String(s)) => (sc.clone(), s),
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
+            absorb_node_gone(self.shrink_string_node(i).await)?;
+            i += 1;
+        }
+        Ok(())
+    }
 
-            let simplest = kind.simplest();
+    async fn shrink_string_node(&mut self, i: usize) -> Result<(), PassExit> {
+        {
+            let (kind, current) = self.string_at(i).ok_or(PassExit::NodeGone)?;
+
+            let simplest = kind.simplest()?;
             if simplest != current {
-                self.replace(&HashMap::from([(i, ChoiceValue::String(simplest))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(simplest))]))
                     .await?;
             }
 
-            let cur_len = self.current_string(i).len();
+            let captured = self.current_string(i).ok_or(PassExit::NodeGone)?;
+            let cur_len = captured.len();
             if cur_len > kind.min_size {
-                let captured = self.current_string(i);
                 let mut search = BinSearchDown::new(kind.min_size as i128, cur_len as i128);
                 while let Some(sz) = search.probe() {
                     let cand: Vec<u32> = captured[..sz as usize].to_vec();
                     let ok = self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                         .await?;
                     search.record(ok);
                 }
             }
 
-            let cur_len = self.current_string(i).len();
-            let scan_end = (kind.min_size + 8).min(cur_len);
+            let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+            let scan_end = (kind.min_size + 8).min(cur.len());
             for target_len in kind.min_size..scan_end {
-                let cur = self.current_string(i);
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
                 if target_len > cur.len() {
                     break;
                 }
                 let cand: Vec<u32> = cur[..target_len].to_vec();
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                     .await?;
             }
 
-            let mut j = self.current_string(i).len();
+            let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                let cur = self.current_string(i);
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
                 if cur.len() <= kind.min_size {
                     continue;
                 }
                 let mut cand = cur.clone();
                 cand.remove(j);
-                self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                     .await?;
             }
 
+            let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
             let dup_codepoints: Vec<u32> = {
-                let cur = self.current_string(i);
-                let mut counts: HashMap<u32, usize> = HashMap::new();
+                let mut counts: HashMap<u32, usize> = HashMap::default();
                 for &cp in &cur {
                     *counts.entry(cp).or_default() += 1;
                 }
@@ -85,8 +88,8 @@ impl<'a> Shrinker<'a> {
                 i: usize,
                 val: u32,
                 cand_cp: u32,
-            ) -> ShrinkResult<bool> {
-                let mut new_str = sh.current_string(i);
+            ) -> Result<bool, PassExit> {
+                let mut new_str = sh.current_string(i).ok_or(PassExit::NodeGone)?;
                 let mut changed = false;
                 for c in new_str.iter_mut() {
                     if *c == val {
@@ -97,8 +100,9 @@ impl<'a> Shrinker<'a> {
                 if !changed {
                     return Ok(false);
                 }
-                sh.replace(&HashMap::from([(i, ChoiceValue::String(new_str))]))
-                    .await
+                Ok(sh
+                    .replace(&HashMap::from_iter([(i, ChoiceValue::String(new_str))]))
+                    .await?)
             }
 
             for val in dup_codepoints {
@@ -108,19 +112,22 @@ impl<'a> Shrinker<'a> {
 
                 for cand_cp in semantic_candidates(val, &kind) {
                     try_replace_all(self, i, val, cand_cp).await?;
-                    if !self.current_string(i).contains(&val) {
+                    let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                    if !cur.contains(&val) {
                         break;
                     }
                 }
 
-                if self.current_string(i).contains(&val) {
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                if cur.contains(&val) {
                     let cur_key = kind.codepoint_key(val);
                     if cur_key > 0 {
                         let mut search = BinSearchDown::new(0, cur_key as i128);
                         while let Some(k) = search.probe() {
-                            let cp = kind
-                                .key_to_codepoint(k as u32)
-                                .expect("bin_search probe stays within alpha_size");
+                            let cp = hegel_internal_unwrap!(
+                                kind.key_to_codepoint(k as u32),
+                                "shrink pass probed a key outside the alphabet"
+                            );
                             let ok = try_replace_all(self, i, val, cp).await?;
                             search.record(ok);
                         }
@@ -128,36 +135,40 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
-            let mut j = self.current_string(i).len();
+            let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+            let mut j = cur.len();
             while j > 0 {
                 j -= 1;
-                if kind.codepoint_key(self.current_string(i)[j]) == 0 {
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                if kind.codepoint_key(cur[j]) == 0 {
                     continue;
                 }
-                let original_cp = self.current_string(i)[j];
+                let original_cp = cur[j];
 
                 for cand_cp in semantic_candidates(original_cp, &kind) {
-                    let cur_key = kind.codepoint_key(self.current_string(i)[j]);
+                    let mut cand = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                    let cur_key = kind.codepoint_key(cand[j]);
                     if kind.codepoint_key(cand_cp) >= cur_key {
                         continue;
                     }
-                    let mut cand = self.current_string(i);
                     cand[j] = cand_cp;
-                    self.replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                    self.replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                         .await?;
                 }
 
-                let cur_key = kind.codepoint_key(self.current_string(i)[j]);
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                let cur_key = kind.codepoint_key(cur[j]);
                 if cur_key > 0 {
                     let mut search = BinSearchDown::new(0, cur_key as i128);
                     while let Some(k) = search.probe() {
-                        let cp = kind
-                            .key_to_codepoint(k as u32)
-                            .expect("bin_search probe stays within alpha_size");
-                        let mut cand = self.current_string(i);
+                        let cp = hegel_internal_unwrap!(
+                            kind.key_to_codepoint(k as u32),
+                            "shrink pass probed a key outside the alphabet"
+                        );
+                        let mut cand = self.current_string(i).ok_or(PassExit::NodeGone)?;
                         cand[j] = cp;
                         let ok = self
-                            .replace(&HashMap::from([(i, ChoiceValue::String(cand))]))
+                            .replace(&HashMap::from_iter([(i, ChoiceValue::String(cand))]))
                             .await?;
                         search.record(ok);
                     }
@@ -166,13 +177,13 @@ impl<'a> Shrinker<'a> {
 
             let mut pos = 1;
             loop {
-                let cur_len = self.current_string(i).len();
-                if pos >= cur_len {
+                let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+                if pos >= cur.len() {
                     break;
                 }
                 let mut j = pos;
                 while j > 0 {
-                    let cur = self.current_string(i);
+                    let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
                     let prev_key = kind.codepoint_key(cur[j - 1]);
                     let cur_key = kind.codepoint_key(cur[j]);
                     if prev_key <= cur_key {
@@ -181,7 +192,7 @@ impl<'a> Shrinker<'a> {
                     let mut swapped = cur.clone();
                     swapped.swap(j - 1, j);
                     if self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(swapped))]))
+                        .replace(&HashMap::from_iter([(i, ChoiceValue::String(swapped))]))
                         .await?
                     {
                         j -= 1;
@@ -191,17 +202,22 @@ impl<'a> Shrinker<'a> {
                 }
                 pos += 1;
             }
-
-            i += 1;
         }
         Ok(())
     }
 
-    fn current_string(&self, i: usize) -> Vec<u32> {
-        match &self.current_nodes[i].value {
-            ChoiceValue::String(s) => s.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
-        }
+    /// The string constraint and value at node `i`, or `None` when the node
+    /// is not (or no longer) a string — a concurrent shrink can pun the kind
+    /// at any position between probes.
+    fn string_at(&self, i: usize) -> Option<(StringChoice, Vec<u32>)> {
+        let (sc, v) = self.current_nodes.get(i)?.data.as_string()?;
+        Some((sc.clone(), v.to_vec()))
+    }
+
+    /// The current string value at node `i`; `None` under the same
+    /// conditions as [`Shrinker::string_at`].
+    fn current_string(&self, i: usize) -> Option<Vec<u32>> {
+        self.string_at(i).map(|(_, v)| v)
     }
 
     /// Try redistributing length between pairs of string values. For
@@ -220,7 +236,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let i = indices[idx];
                 let j = indices[idx + gap];
-                self.redistribute_string_pair(i, j).await?;
+                absorb_node_gone(self.redistribute_string_pair(i, j).await)?;
                 idx += 1;
             }
         }
@@ -231,20 +247,13 @@ impl<'a> Shrinker<'a> {
         self.current_nodes
             .iter()
             .enumerate()
-            .filter_map(|(i, n)| match n.kind.as_ref() {
-                ChoiceKind::String(_) => Some(i),
-                _ => None,
-            })
+            .filter_map(|(i, n)| n.data.as_string().map(|_| i))
             .collect()
     }
 
-    async fn redistribute_string_pair(&mut self, i: usize, j: usize) -> ShrinkResult<()> {
-        let s = self.current_string(i);
-        let t = self.current_string(j);
-        let kind_j = match self.current_nodes[j].kind.as_ref() {
-            ChoiceKind::String(kj) => kj.clone(),
-            _ => unreachable!("kind/value invariant violated: outer match guaranteed this variant"),
-        };
+    async fn redistribute_string_pair(&mut self, i: usize, j: usize) -> Result<(), PassExit> {
+        let s = self.current_string(i).ok_or(PassExit::NodeGone)?;
+        let (kind_j, t) = self.string_at(j).ok_or(PassExit::NodeGone)?;
 
         if s.is_empty() {
             return Ok(());
@@ -297,7 +306,7 @@ impl<'a> Shrinker<'a> {
         if !kind_j.validate(&new_t) {
             return Ok(false);
         }
-        self.replace(&HashMap::from([
+        self.replace(&HashMap::from_iter([
             (i, ChoiceValue::String(new_s)),
             (j, ChoiceValue::String(new_t)),
         ]))
@@ -315,22 +324,14 @@ impl<'a> Shrinker<'a> {
         let len = self.current_nodes.len();
         for i in 0..len {
             for j in (i + 1)..(i + 1 + 4).min(len) {
-                let (kind_i, val_i) = match (
-                    self.current_nodes[i].kind.as_ref(),
-                    &self.current_nodes[i].value,
-                ) {
-                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                    _ => continue,
+                let Some((kind_i, val_i)) = self.string_at(i) else {
+                    continue;
                 };
-                let (kind_j, val_j) = match (
-                    self.current_nodes[j].kind.as_ref(),
-                    &self.current_nodes[j].value,
-                ) {
-                    (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                    _ => continue,
+                let Some((kind_j, val_j)) = self.string_at(j) else {
+                    continue;
                 };
-                let set_i: std::collections::BTreeSet<u32> = val_i.iter().copied().collect();
-                let set_j: std::collections::BTreeSet<u32> = val_j.iter().copied().collect();
+                let set_i: alloc::collections::BTreeSet<u32> = val_i.iter().copied().collect();
+                let set_j: alloc::collections::BTreeSet<u32> = val_j.iter().copied().collect();
                 let shared: Vec<u32> = set_i.intersection(&set_j).copied().collect();
                 for ch in shared {
                     let original_key = kind_i.codepoint_key(ch);
@@ -339,9 +340,10 @@ impl<'a> Shrinker<'a> {
                     }
                     let mut search = BinSearchDown::new(0, original_key as i128);
                     while let Some(new_key) = search.probe() {
-                        let new_cp = kind_i
-                            .key_to_codepoint(new_key as u32)
-                            .expect("key < original_key < alpha_size");
+                        let new_cp = hegel_internal_unwrap!(
+                            kind_i.key_to_codepoint(new_key as u32),
+                            "shrink pass probed a key outside the alphabet"
+                        );
                         hegel_internal_debug_assert_ne!(new_cp, ch);
                         let new_i: Vec<u32> = val_i
                             .iter()
@@ -354,7 +356,7 @@ impl<'a> Shrinker<'a> {
                         let ok = if !kind_i.validate(&new_i) || !kind_j.validate(&new_j) {
                             false
                         } else {
-                            self.replace(&HashMap::from([
+                            self.replace(&HashMap::from_iter([
                                 (i, ChoiceValue::String(new_i)),
                                 (j, ChoiceValue::String(new_j)),
                             ]))
@@ -377,39 +379,32 @@ impl<'a> Shrinker<'a> {
     pub(crate) async fn normalize_unicode_chars(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let (kind, value) = match (
-                self.current_nodes[i].kind.as_ref(),
-                &self.current_nodes[i].value,
-            ) {
-                (ChoiceKind::String(k), ChoiceValue::String(v)) => (k.clone(), v.clone()),
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            for pos in 0..value.len() {
-                let cp = value[pos];
-                let candidates = natural_simpler_chars(cp, &kind);
-                let cur = match &self.current_nodes[i].value {
-                    ChoiceValue::String(v) => v.clone(),
-                    _ => unreachable!("kind invariant violated mid-pass"),
-                };
-                if pos >= cur.len() || cur[pos] != cp {
-                    continue;
-                }
-                for replacement in candidates {
-                    let mut new_value = cur.clone();
-                    new_value[pos] = replacement;
-                    hegel_internal_debug_assert!(kind.validate(&new_value));
-                    if self
-                        .replace(&HashMap::from([(i, ChoiceValue::String(new_value))]))
-                        .await?
-                    {
-                        break;
-                    }
+            absorb_node_gone(self.normalize_unicode_chars_at(i).await)?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    async fn normalize_unicode_chars_at(&mut self, i: usize) -> Result<(), PassExit> {
+        let (kind, value) = self.string_at(i).ok_or(PassExit::NodeGone)?;
+        for pos in 0..value.len() {
+            let cp = value[pos];
+            let candidates = natural_simpler_chars(cp, &kind);
+            let cur = self.current_string(i).ok_or(PassExit::NodeGone)?;
+            if pos >= cur.len() || cur[pos] != cp {
+                continue;
+            }
+            for replacement in candidates {
+                let mut new_value = cur.clone();
+                new_value[pos] = replacement;
+                hegel_internal_debug_assert!(kind.validate(&new_value));
+                if self
+                    .replace(&HashMap::from_iter([(i, ChoiceValue::String(new_value))]))
+                    .await?
+                {
+                    break;
                 }
             }
-            i += 1;
         }
         Ok(())
     }
@@ -435,7 +430,7 @@ impl<'a> Shrinker<'a> {
 /// then sorted by that key.  Used by `normalize_unicode_chars` to
 /// directly try the most semantically obvious replacements.
 fn natural_simpler_chars(cp: u32, kind: &StringChoice) -> Vec<u32> {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
     let cur_key = kind.codepoint_key(cp);
     let mut candidates: BTreeSet<u32> = BTreeSet::new();
     if let Some(c) = char::from_u32(cp) {

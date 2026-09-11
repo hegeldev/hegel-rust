@@ -4,51 +4,51 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::{BooleanChoice, BytesChoice, FloatChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn int_node(value: i128, was_forced: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN + 1),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         was_forced,
     )
 }
 
 fn float_node(value: f64, was_forced: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    ChoiceNode::float(
+        FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(value),
+        },
+        value,
         was_forced,
     )
 }
 
 fn bool_node(value: bool, was_forced: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        was_forced,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, was_forced)
 }
 
 fn bytes_node(value: Vec<u8>, was_forced: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Bytes(BytesChoice {
+    ChoiceNode::bytes(
+        BytesChoice {
             min_size: 0,
             max_size: 16,
-        }),
-        ChoiceValue::Bytes(value),
+        },
+        value,
         was_forced,
     )
 }
@@ -65,7 +65,7 @@ fn accepting_shrinker(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
 }
 
 fn assert_integer_at(shrinker: &Shrinker<'_>, idx: usize, expected: i128) {
-    match &shrinker.current_nodes[idx].value {
+    match &shrinker.current_nodes[idx].value() {
         ChoiceValue::Integer(v) => {
             assert_eq!(i128::try_from(v.clone()).unwrap(), expected, "node {idx}")
         }
@@ -112,7 +112,7 @@ fn shrink_bytes_skips_forced_node() {
         bytes_node(vec![1, 2, 3], false),
     ]);
     drive_no_yield(shrinker.shrink_bytes()).unwrap();
-    match &shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value() {
         ChoiceValue::Bytes(b) => assert_eq!(b, &vec![9, 9, 9]),
         _ => unreachable!(),
     }
@@ -122,7 +122,7 @@ fn shrink_bytes_skips_forced_node() {
 fn shrink_floats_skips_forced_node() {
     let mut shrinker = accepting_shrinker(vec![float_node(123.5, true), float_node(7.5, false)]);
     drive_no_yield(shrinker.shrink_floats()).unwrap();
-    match shrinker.current_nodes[0].value {
+    match shrinker.current_nodes[0].value() {
         ChoiceValue::Float(v) => assert_eq!(v, 123.5),
         _ => unreachable!(),
     }
@@ -153,7 +153,7 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
             ShrinkRun::Full(nodes) => {
                 let sum: i128 = nodes
                     .iter()
-                    .filter_map(|n| match &n.value {
+                    .filter_map(|n| match &n.value() {
                         ChoiceValue::Integer(v) => Some(i128::try_from(v.clone()).unwrap()),
                         _ => None,
                     })
@@ -164,13 +164,13 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
         }),
         vec![
             int_node(15, false),
-            ChoiceNode::new(
-                ChoiceKind::Integer(IntegerChoice {
+            ChoiceNode::integer(
+                IntegerChoice {
                     min_value: BigInt::from(0),
                     max_value: BigInt::from(100),
                     shrink_towards: BigInt::from(0),
-                }),
-                ChoiceValue::Integer(BigInt::from(10)),
+                },
+                BigInt::from(10),
                 true,
             ),
         ],
@@ -185,27 +185,27 @@ fn redistribute_numeric_pairs_skips_forced_integer() {
 fn normalize_unicode_chars_skips_forced_node() {
     use crate::native::core::choices::StringChoice;
     use crate::native::intervalsets::IntervalSet;
-    let forced_str = ChoiceNode::new(
-        ChoiceKind::String(StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
+    let forced_str = ChoiceNode::string(
+        StringChoice {
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).unwrap().into(),
             min_size: 0,
             max_size: 16,
-        }),
-        ChoiceValue::String(vec![0xE9]),
+        },
+        vec![0xE9],
         true,
     );
-    let other = ChoiceNode::new(
-        ChoiceKind::String(StringChoice {
-            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).into(),
+    let other = ChoiceNode::string(
+        StringChoice {
+            intervals: IntervalSet::new(vec![(0, 0x10FFFF)]).unwrap().into(),
             min_size: 0,
             max_size: 16,
-        }),
-        ChoiceValue::String(vec![0xE9]),
+        },
+        vec![0xE9],
         false,
     );
     let mut shrinker = accepting_shrinker(vec![forced_str, other]);
     drive_no_yield(shrinker.normalize_unicode_chars()).unwrap();
-    match &shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value() {
         ChoiceValue::String(s) => assert_eq!(s, &vec![0xE9]),
         _ => unreachable!(),
     }

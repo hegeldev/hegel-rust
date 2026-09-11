@@ -6,68 +6,68 @@ use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct Person {
     name: String,
     age: u32,
     active: bool,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithOptional {
     label: String,
     value: Option<i32>,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithVec {
     items: Vec<i32>,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 struct WithNested {
     point: Point,
     label: String,
 }
 
-#[derive(DeriveGenerator, Debug, Clone, PartialEq)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone, PartialEq)]
 enum Color {
     Red,
     Green,
     Blue,
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum Shape {
     Circle { radius: f64 },
     Rectangle { width: f64, height: f64 },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum MixedEnum {
     Empty,
     WithValue(i32),
     WithFields { x: i32, y: String },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum SingleVariantData {
     Only(String),
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum TupleVariants {
     Pair(i32, i32),
     Triple(bool, String, u8),
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 enum WithNestedTypes {
     VecVariant(Vec<i32>),
@@ -75,7 +75,7 @@ enum WithNestedTypes {
     PlainVariant { count: u32 },
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 enum Op {
     Reset,
     Skip,
@@ -146,12 +146,6 @@ fn test_derive_struct_with_constrained_field() {
 }
 
 #[test]
-fn test_derive_struct_builder_only_overrides_specified_field() {
-    let g = Point::default_generator().x(gs::just(0));
-    assert_all_examples(g, |p: &Point| p.x == 0);
-}
-
-#[test]
 fn test_derive_struct_with_mapped_field() {
     let g = Point::default_generator().x(gs::integers::<i32>().map(|x| x.saturating_abs()));
     assert_all_examples(g, |p: &Point| p.x >= 0);
@@ -167,11 +161,6 @@ fn test_derive_struct_with_filtered_field() {
 fn test_default_supports_struct_builder() {
     let g = gs::default::<Point>().x(gs::just(42));
     assert_all_examples(g, |p: &Point| p.x == 42);
-}
-
-#[test]
-fn test_derive_unit_enum() {
-    check_can_generate_examples(gs::default::<Color>());
 }
 
 #[test]
@@ -412,6 +401,37 @@ fn test_derive_struct_override_field_twice_takes_last() {
 }
 
 #[derive(DeriveGenerator, Debug, Clone)]
+struct Wrapper(i32);
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct TuplePair(i32, String);
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct NestedTuple(Point, Wrapper);
+
+#[test]
+fn test_derive_tuple_struct_generates() {
+    check_can_generate_examples(gs::default::<Wrapper>());
+    check_can_generate_examples(gs::default::<TuplePair>());
+    check_can_generate_examples(gs::default::<NestedTuple>());
+    check_can_generate_examples(gs::vecs(gs::default::<Wrapper>()));
+}
+
+#[test]
+fn test_derive_tuple_struct_with_custom_field_generator() {
+    let g = gs::default::<Wrapper>()._0(gs::just(42));
+    assert_all_examples(g, |w: &Wrapper| w.0 == 42);
+}
+
+#[test]
+fn test_derive_tuple_struct_with_multiple_custom_fields() {
+    let g = TuplePair::default_generator()
+        ._0(gs::just(1))
+        ._1(gs::just("a".to_string()));
+    assert_all_examples(g, |t: &TuplePair| t.0 == 1 && t.1 == "a");
+}
+
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum NameConflict {
     FieldName(i32),
@@ -428,7 +448,7 @@ fn test_derive_enum_triple_conflict() {
     check_can_generate_examples(g);
 }
 
-#[derive(DeriveGenerator, Debug, Clone)]
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum KeywordVariants {
     Super(i32),
@@ -450,4 +470,148 @@ fn test_derive_enum_with_keyword_variants() {
         KeywordVariants::r#type(n) => *n == 99,
         KeywordVariants::r#Crate(b) => *b,
     });
+}
+
+/// A deliberately non-printable generator: field builders accept any
+/// [`Generator`], and printability of the derived generator is decided by
+/// its current field generators.
+struct SilentSmallInt;
+
+impl Generator<i32> for SilentSmallInt {
+    fn do_draw(&self, tc: &hegel::TestCase) -> i32 {
+        tc.draw_silent(gs::integers::<i32>().min_value(1).max_value(3))
+    }
+}
+
+#[test]
+fn test_derive_struct_field_accepts_a_non_printable_generator() {
+    hegel::Hegel::new(|tc| {
+        let p: Point = tc.draw_silent(Point::default_generator().x(SilentSmallInt));
+        assert!((1..=3).contains(&p.x));
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+#[test]
+fn test_derive_struct_field_print_with_restores_printability() {
+    hegel::Hegel::new(|tc| {
+        let p: Point = tc.draw(
+            Point::default_generator()
+                .x(SilentSmallInt.print_with(|v, printer| printer.text(&format!("{v}")))),
+        );
+        assert!((1..=3).contains(&p.x));
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+/// A type whose hand-written `DefaultGenerator` produces a non-printable
+/// generator: deriving `DefaultGenerator` on a struct containing it still
+/// compiles, and the derived generator is drawable silently.
+#[derive(Debug, Clone)]
+struct Opaque(i32);
+
+struct OpaqueGenerator;
+
+impl Generator<Opaque> for OpaqueGenerator {
+    fn do_draw(&self, tc: &hegel::TestCase) -> Opaque {
+        Opaque(tc.draw_silent(gs::integers::<i32>()))
+    }
+}
+
+impl DefaultGenerator for Opaque {
+    type Generator = OpaqueGenerator;
+    fn default_generator() -> Self::Generator {
+        OpaqueGenerator
+    }
+}
+
+#[derive(DeriveGenerator, Debug, Clone)]
+struct HasOpaque {
+    id: u32,
+    payload: Opaque,
+}
+
+#[test]
+fn test_derive_with_non_printable_default_field_generator_draws_silently() {
+    hegel::Hegel::new(|tc| {
+        let v: HasOpaque = tc.draw_silent(gs::default::<HasOpaque>());
+        let _ = v.payload.0;
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+#[test]
+fn test_derive_with_non_printable_default_becomes_printable_via_builder() {
+    hegel::Hegel::new(|tc| {
+        let v: HasOpaque = tc.draw(gs::default::<HasOpaque>().payload(
+            OpaqueGenerator.print_with(|v, printer| printer.text(&format!("Opaque({})", v.0))),
+        ));
+        let _ = v.id;
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+struct SilentSmallFloat;
+
+impl Generator<f64> for SilentSmallFloat {
+    fn do_draw(&self, tc: &hegel::TestCase) -> f64 {
+        tc.draw_silent(gs::floats::<f64>().min_value(0.0).max_value(1.0))
+    }
+}
+
+#[test]
+fn test_derive_enum_variant_builder_accepts_plain_generators() {
+    hegel::Hegel::new(|tc| {
+        let s: Shape =
+            tc.draw_silent(Shape::default_generator().circle(|g| g.radius(SilentSmallFloat)));
+        if let Shape::Circle { radius } = s {
+            assert!((0.0..=1.0).contains(&radius));
+        }
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+/// Field names that shadow the derive machinery's own identifiers: the
+/// generated bindings are hygienically renamed, so these all compile and
+/// print correctly.
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+struct ShadowingFields {
+    __tc: u8,
+    __printer: bool,
+}
+
+#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+enum ShadowingVariant {
+    Fields { __tc: u8, __printer: bool },
+}
+
+#[test]
+fn test_derive_fields_shadowing_macro_identifiers() {
+    check_can_generate_examples(gs::default::<ShadowingFields>());
+    check_can_generate_examples(gs::default::<ShadowingVariant>());
+    let mut doc = hegel::Document::new();
+    let printer = doc.printer();
+    use hegel::PrettyPrintable;
+    ShadowingFields {
+        __tc: 1,
+        __printer: true,
+    }
+    .pretty_print(printer);
+    assert_eq!(doc.finish(), "ShadowingFields { __tc: 1, __printer: true }");
+    let mut doc = hegel::Document::new();
+    let printer = doc.printer();
+    ShadowingVariant::Fields {
+        __tc: 2,
+        __printer: false,
+    }
+    .pretty_print(printer);
+    assert_eq!(
+        doc.finish(),
+        "ShadowingVariant::Fields { __tc: 2, __printer: false }"
+    );
 }

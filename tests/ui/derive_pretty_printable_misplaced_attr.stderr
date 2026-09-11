@@ -1,0 +1,5 @@
+error: #[pretty(..)] applies to fields, not types
+ --> tests/ui/derive_pretty_printable_misplaced_attr.rs:4:1
+  |
+4 | #[pretty(debug)]
+  | ^^^^^^^^^^^^^^^^

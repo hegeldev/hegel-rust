@@ -1,8 +1,11 @@
 use std::sync::OnceLock;
 
-use super::{Generator, TestCase, labels};
+use super::generators::draw_and_print_value;
+use super::{Generator, PrintableGenerator, TestCase};
 use crate::control::hegel_internal_assert;
 use crate::ffi;
+use crate::ffi::sys as hegel_c;
+use crate::pretty::PrettyPrinter;
 use crate::test_case::{full_ranges, invalid_argument};
 
 /// Categories that include surrogate codepoints. Rust strings cannot contain
@@ -570,7 +573,7 @@ impl IpAddressGenerator {
 
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
-        tc.start_span(labels::ONE_OF);
+        tc.start_span(self.label());
         let addr = if tc.generate_integer_i64(0, 1) == 0 {
             std::net::IpAddr::V4(tc.generate_ipv4())
         } else {
@@ -611,16 +614,15 @@ pub(crate) fn format_date(d: hegel_c::hegel_date_t) -> String {
     format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
 }
 
-/// Format a drawn time as `HH:MM:SS` or `HH:MM:SS.ffffff`, matching
-/// `st.times().isoformat()`: the fractional part is present iff
-/// `microsecond != 0`.
+/// Format a drawn time as `HH:MM:SS` or `HH:MM:SS.fffffffff`. The fractional part is
+/// present iff `nanosecond != 0`.
 pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
-    if t.microsecond == 0 {
+    if t.nanosecond == 0 {
         format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second)
     } else {
         format!(
-            "{:02}:{:02}:{:02}.{:06}",
-            t.hour, t.minute, t.second, t.microsecond
+            "{:02}:{:02}:{:02}.{:09}",
+            t.hour, t.minute, t.second, t.nanosecond
         )
     }
 }
@@ -645,19 +647,18 @@ pub fn date_strings() -> DateStringGenerator {
     DateStringGenerator
 }
 
-/// Generator for time strings in `HH:MM:SS[.ffffff]` format. Created by
+/// Generator for time strings in `HH:MM:SS[.fffffffff]` format. Created by
 /// [`time_strings()`].
 pub struct TimeStringGenerator;
 
 impl Generator<String> for TimeStringGenerator {
     fn do_draw(&self, tc: &TestCase) -> String {
-        format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_MICROSECOND))
+        format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_NANOSECOND))
     }
 }
 
-/// Generate time `String`s in `HH:MM:SS` format, matching Python's
-/// `time.isoformat()`: a fractional `.ffffff` part (microseconds) is
-/// appended iff it is non-zero.
+/// Generate time `String`s in `HH:MM:SS` format. A fractional `.fffffffff`
+/// part (nanoseconds) is appended iff it is non-zero.
 ///
 /// This generator is not configurable. For typed time values with
 /// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
@@ -676,8 +677,8 @@ impl Generator<String> for DateTimeStringGenerator {
     }
 }
 
-/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.ffffff]`,
-/// years 1–9999), matching Python's `datetime.isoformat()`.
+/// Generate ISO 8601 datetime `String`s (`YYYY-MM-DDTHH:MM:SS[.fffffffff]`,
+/// years 1–9999).
 ///
 /// This generator is not configurable. For typed datetime values with
 /// configurable bounds, see [`extras::chrono`](crate::extras::chrono)
@@ -739,4 +740,88 @@ impl Generator<String> for UuidsGenerator {
 /// See [`UuidsGenerator`] for builder methods.
 pub fn uuids() -> UuidsGenerator {
     UuidsGenerator { version: None }
+}
+
+impl PrintableGenerator<String> for TextGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<char> for CharactersGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> char {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for RegexGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<Vec<u8>> for BinaryGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<u8> {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for EmailGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for UrlGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DomainGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::IpAddr> for IpAddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::IpAddr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::Ipv4Addr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> std::net::Ipv6Addr {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DateStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for TimeStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for DateTimeStringGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl PrintableGenerator<String> for UuidsGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> String {
+        draw_and_print_value(self, tc, printer)
+    }
 }

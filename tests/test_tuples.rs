@@ -4,11 +4,6 @@ use common::utils::{assert_all_examples, find_any};
 use hegel::TestCase;
 use hegel::generators::{self as gs, Generator};
 
-#[hegel::test]
-fn test_tuple0_basic(tc: TestCase) {
-    let _: () = tc.draw(gs::tuples!());
-}
-
 #[test]
 fn test_tuple0_all_examples() {
     assert_all_examples(gs::tuples!(), |_| true);
@@ -20,21 +15,9 @@ fn test_tuple0_default_generator() {
 }
 
 #[hegel::test]
-fn test_tuple1_basic(tc: TestCase) {
-    let (a,): (i32,) = tc.draw(gs::tuples!(gs::integers(),));
-    let _ = a;
-}
-
-#[hegel::test]
 fn test_tuple1_respects_bounds(tc: TestCase) {
     let (a,): (i32,) = tc.draw(gs::tuples!(gs::integers().min_value(0).max_value(10),));
     assert!((0..=10).contains(&a));
-}
-
-#[hegel::test]
-fn test_tuple2_basic(tc: TestCase) {
-    let (a, b): (i32, bool) = tc.draw(gs::tuples!(gs::integers(), gs::booleans(),));
-    let _ = (a, b);
 }
 
 #[hegel::test]
@@ -45,13 +28,6 @@ fn test_tuple2_respects_bounds(tc: TestCase) {
     ));
     assert!((0..=10).contains(&a));
     assert!((100..=200).contains(&b));
-}
-
-#[hegel::test]
-fn test_tuple3_basic(tc: TestCase) {
-    let (a, b, c): (i32, String, bool) =
-        tc.draw(gs::tuples!(gs::integers(), gs::text(), gs::booleans(),));
-    let _ = (a, b, c);
 }
 
 #[hegel::test]
@@ -248,27 +224,4 @@ fn test_tuple2_can_find_both_true_and_false() {
     find_any(gs::tuples!(gs::booleans(), gs::booleans()), |(a, b)| {
         !*a && *b
     });
-}
-
-#[test]
-fn test_tuple2_all_examples_in_bounds() {
-    assert_all_examples(
-        gs::tuples!(
-            gs::integers::<i32>().min_value(0).max_value(10),
-            gs::integers::<i32>().min_value(0).max_value(10),
-        ),
-        |(a, b)| (0..=10).contains(a) && (0..=10).contains(b),
-    );
-}
-
-#[test]
-fn test_tuple3_all_examples_in_bounds() {
-    assert_all_examples(
-        gs::tuples!(
-            gs::integers::<i32>().min_value(-5).max_value(5),
-            gs::integers::<i32>().min_value(10).max_value(20),
-            gs::integers::<i32>().min_value(100).max_value(200),
-        ),
-        |(a, b, c)| (-5..=5).contains(a) && (10..=20).contains(b) && (100..=200).contains(c),
-    );
 }

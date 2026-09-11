@@ -1,0 +1,14 @@
+error: tuples! supports at most 12 generators; for wider shapes, nest tuples! calls or write a composite generator
+  --> tests/ui/tuples_too_many_generators.rs:16:13
+   |
+16 |       tc.draw(hegel::tuples!(
+   |  _____________^
+17 | |         gs::just(0),
+18 | |         gs::just(1),
+19 | |         gs::just(2),
+...  |
+29 | |         gs::just(12),
+30 | |     ));
+   | |_____^
+   |
+   = note: this error originates in the macro `hegel::tuples` (in Nightly builds, run with -Z macro-backtrace for more info)

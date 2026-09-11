@@ -16,6 +16,8 @@
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
+use alloc::boxed::Box;
+use alloc::format;
 
 /// Synchronous driver for [`run_native_async`], retained for tests: runs the
 /// whole exploration on the calling thread, invoking `run_case` once per
@@ -28,7 +30,7 @@ use crate::settings::{Settings, Verbosity};
 /// with the test case's outcome. The callback **must** call `mark_complete`
 /// on its data source before returning; the engine reads the outcome back
 /// through the data source rather than from the callback's return value.
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 pub(crate) fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
@@ -42,9 +44,8 @@ pub(crate) fn run_native(
 /// Run the native test runner, offering each test case's raw data source to
 /// the driver through `exchange`.
 ///
-/// Dispatches on [`Mode`](crate::settings::Mode) and runs the whole
-/// exploration. Suspends only at the offers, so it can be driven with a
-/// no-op waker (see [`crate::exchange`]).
+/// Runs the whole exploration. Suspends only at the offers, so it can be
+/// driven with a no-op waker (see [`crate::exchange`]).
 ///
 /// The engine only *explores* — database replay, generation, and shrinking —
 /// and every test case is non-final. Each returned
@@ -59,16 +60,7 @@ pub(crate) async fn run_native_async(
     database_key: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
-    if settings.mode == crate::settings::Mode::SingleTestCase {
-        let failure =
-            crate::native::test_runner::run_single_case(settings, database_key, exchange).await;
-        return Ok(TestRunResult {
-            failures: failure.into_iter().collect(),
-        });
-    }
-
-    let failures = crate::native::test_runner::explore(settings, database_key, exchange).await?;
-    Ok(TestRunResult { failures })
+    crate::native::test_runner::explore(settings, database_key, exchange).await
 }
 
 /// Build a raw [`DataSource`] that replays the choice sequence encoded in a
@@ -81,12 +73,6 @@ pub(crate) async fn run_native_async(
 /// whether the blob reproduced its failure (the property failed) or is stale
 /// (it passed). A blob whose choices no longer match the caller's generators
 /// surfaces as a stop-test error from the draw that overruns.
-///
-/// `settings` accompany the replay — currently only
-/// [`Verbosity::Debug`](crate::Verbosity::Debug) and the output destination
-/// are consulted, logging the decoded choice count — but they intentionally
-/// travel with the blob so future settings reach the replay path without a
-/// signature break.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
@@ -104,6 +90,6 @@ pub fn data_source_for_blob(
     Some(Box::new(data_source))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../tests/embedded/embed_tests.rs"]
 mod tests;

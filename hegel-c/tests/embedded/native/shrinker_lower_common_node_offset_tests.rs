@@ -2,24 +2,28 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
+use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Spans};
+use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
 
 fn int_node(value: i128, shrink_towards: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(shrink_towards),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn int_value(node: &ChoiceNode) -> i128 {
-    match &node.value {
+    match &node.value() {
         ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
         _ => unreachable!(),
     }
@@ -52,11 +56,11 @@ fn lower_common_node_offset_collapses_zig_zag_pair() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let m = match &nodes[0].value {
+                let m = match &nodes[0].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
-                let n = match &nodes[1].value {
+                let n = match &nodes[1].value() {
                     ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
                     _ => unreachable!(),
                 };
@@ -109,21 +113,17 @@ fn lower_common_node_offset_handles_negative_shrink_target() {
 
 #[test]
 fn lower_common_node_offset_skips_non_integer_nodes() {
-    use crate::native::core::choices::{BooleanChoice, FloatChoice};
-    let bool_node = ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(true),
-        false,
-    );
-    let float_node = ChoiceNode::new(
-        ChoiceKind::Float(FloatChoice {
+    use crate::native::core::choices::FloatChoice;
+    let bool_node = ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false);
+    let float_node = ChoiceNode::float(
+        FloatChoice {
             min_value: f64::NEG_INFINITY,
             max_value: f64::INFINITY,
             allow_nan: false,
             allow_infinity: false,
             smallest_nonzero_magnitude: 5e-324,
-        }),
-        ChoiceValue::Float(3.0),
+        },
+        3.0,
         false,
     );
     let initial = vec![int_node(5, 0), bool_node, float_node, int_node(7, 0)];
@@ -137,20 +137,16 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
     );
     drive_no_yield(shrinker.consider(&[
         int_node(3, 0),
-        ChoiceNode::new(
-            ChoiceKind::Boolean(BooleanChoice),
-            ChoiceValue::Boolean(false),
-            false,
-        ),
-        ChoiceNode::new(
-            ChoiceKind::Float(FloatChoice {
+        ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false),
+        ChoiceNode::float(
+            FloatChoice {
                 min_value: f64::NEG_INFINITY,
                 max_value: f64::INFINITY,
                 allow_nan: false,
                 allow_infinity: false,
                 smallest_nonzero_magnitude: 5e-324,
-            }),
-            ChoiceValue::Float(0.0),
+            },
+            0.0,
             false,
         ),
         int_node(2, 0),
@@ -163,12 +159,12 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
 }
 
 fn bytes_node(value: Vec<u8>) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Bytes(crate::native::core::choices::BytesChoice {
+    ChoiceNode::bytes(
+        crate::native::core::choices::BytesChoice {
             min_size: 0,
             max_size: 1_000_000,
-        }),
-        ChoiceValue::Bytes(value),
+        },
+        value,
         false,
     )
 }
@@ -187,7 +183,7 @@ fn index_passes_skip_sequence_nodes_without_blowup() {
     drive_no_yield(shrinker.lower_and_bump()).unwrap();
     drive_no_yield(shrinker.try_shortening_via_increment()).unwrap();
     drive_no_yield(shrinker.mutate_and_shrink()).unwrap();
-    match &shrinker.current_nodes[0].value {
+    match &shrinker.current_nodes[0].value() {
         ChoiceValue::Bytes(v) => assert_eq!(v.len(), 300, "long value should be left untouched"),
         other => panic!("expected bytes, got {other:?}"),
     }

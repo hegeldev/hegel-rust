@@ -17,7 +17,7 @@ mod common;
 /// trait method) without importing the trait, so it only compiled when users
 /// happened to `use hegel::DefaultGenerator` (which brings both the derive
 /// macro AND the trait into scope).
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 struct Person {
     name: String,
@@ -39,13 +39,13 @@ fn test_derive_compiles_without_generator_trait_import() {
     .run();
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Point<T> {
     x: T,
     y: i32,
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 enum Shape<T: std::fmt::Debug> {
     Empty,
@@ -53,10 +53,13 @@ enum Shape<T: std::fmt::Debug> {
     Pair { a: T, b: bool },
 }
 
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Fixed<const N: usize> {
     xs: [u8; N],
 }
+
+#[derive(Debug, hegel::DefaultGenerator)]
+struct Wrap<T>(T, i32);
 
 #[test]
 fn test_derive_on_generic_types_compiles_and_generates() {
@@ -71,6 +74,8 @@ fn test_derive_on_generic_types_compiles_and_generates() {
         assert_eq!(f.xs.len(), 3);
         let q: Point<u8> = tc.draw(gs::default::<Point<u8>>());
         let _ = q;
+        let w: Wrap<bool> = tc.draw(gs::default::<Wrap<bool>>()._1(gs::just(3)));
+        assert_eq!(w.1, 3);
     })
     .settings(hegel::Settings::new().test_cases(5).database(None))
     .run();
@@ -79,7 +84,7 @@ fn test_derive_on_generic_types_compiles_and_generates() {
 /// `Foo` (tuple) generates `foo` and `foo_with` builders; `FooWith` (named)
 /// would generate `foo_with` too. Both must fall back to their raw variant
 /// idents rather than colliding.
-#[derive(Debug, hegel::DefaultGenerator)]
+#[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 #[allow(dead_code)]
 enum Tricky {
     Foo(u32),

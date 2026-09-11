@@ -28,17 +28,18 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 - `src/lib.rs` — Public API surface: `hegel()`, the `Hegel` builder, `TestCase`, the `Generator` trait, and the proc-macro re-exports (`#[hegel::test]`, `#[hegel::main]`, `#[derive(DefaultGenerator)]`, `#[composite]`, `#[state_machine]`, `#[reproduce_failure]`, …)
 - `src/ffi.rs` — The libhegel C-ABI boundary: the only module that touches the raw `hegel_*` functions; the rest of the frontend works against its safe wrappers (`SettingsHandle`, `RunHandle`, `CTestCase`, `RunResult`)
+- `src/ffi/sys.rs` — Where the `hegel_*` functions come from, in two interchangeable forms: by default mirrored `repr(C)` types (`sys/types.rs`) plus a runtime loader (`sys/loader.rs`) that dlopens the `libhegel_c` cdylib `build.rs` built, so `hegeltest-c` and its dependencies stay out of consumers' cargo graphs; with the public `static-engine` feature, a re-export of the `hegel_c` rlib (self-contained binaries, visible engine dependencies — also what Miri and the coverage workspace pass use). One macro, `for_each_hegel_fn!` in `sys/fns.rs`, is the single list of functions, generated from `hegel-c/src/lib.rs` by `scripts/gen-ffi-list.py` (`just c-header` refreshes it, `just check-ffi-list` checks it); embedded drift tests compile-assert it and the mirrors against `hegel_c` under `static-engine`
 - `src/run_lifecycle.rs` — Cross-cutting per-test-case lifecycle: panic hook, `catch_unwind` wrapping, translating panics into `TestCaseResult`, and the final re-raise
 - `src/backend.rs` — The result types the lifecycle speaks (`TestCaseResult`, `Failure`)
-- `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, the `Collection` helper, and the span `labels` module
-- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Mode`, `Backend`, `Verbosity`
+- `src/test_case.rs` — `TestCase` (the handle test bodies draw from) and its thread-local state, and the `Collection` helper
+- `src/runner.rs` — `Hegel` builder plus `Settings`, `HealthCheck`, `Phase`, `Backend`, `Verbosity`
 - `src/cli.rs` — CLI argument parsing for standalone `#[hegel::main]` binaries
 - `src/generators/` — All first-party generator implementations (the `Generator` trait lives in `generators.rs`)
 - `src/extras/` — Feature-gated third-party integrations (`chrono`, `jiff`, `serde_json`, `rand`)
 - `src/stateful.rs` — Stateful (model-based) testing via `#[state_machine]`
 - `src/explicit_test_case.rs` — Explicit test-case support (`#[explicit_test_case]`)
 - `src/control.rs` — Control-flow unwind payloads (`AssumeFailed`, `StopTest`) and their handling
-- `src/antithesis.rs` — Antithesis integration
+- `src/antithesis.rs` — Antithesis integration (always compiled in; activates when `ANTITHESIS_OUTPUT_DIR` is set)
 - `hegel-macros/` — Proc-macro crate (sub-crate with its own `Cargo.toml`)
 
 ### `hegel-c` — the engine, built as `libhegel`
@@ -47,13 +48,15 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/backend.rs` — The `DataSource` trait the engine implements and the C ABI drives
 - `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
-- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` mostly to reserve the name
+- `benches/` — Microbenchmarks of engine internals, exposed through the internal `__bench` feature
+- Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` — the crate the frontend's `build.rs` builds the shared library from (and links directly under `static-engine`)
 
 ### Feature Flags (root crate)
 
 - **`rand`**, **`chrono`**, **`jiff`**, **`serde_json`**, **`serde_json_raw_value`**: gate the corresponding `extras::` generator modules
-- **`antithesis`**: Antithesis SDK integration (Linux-only; `compile_error!` on Windows)
-- **`__bench`**: internal, re-exports engine internals for `benches/`; not part of the public API
+- **`static-engine`**: links the engine in as an rlib instead of loading the `libhegel_c` shared library at runtime; see `src/ffi/sys.rs` above
+
+The `__` prefix marks a feature as internal. The coverage run enables every root-crate feature except internal ones, computed from `cargo metadata` by `public_features()` in `scripts/check-coverage.py`, so a new feature needs no coverage wiring.
 
 ## Architecture
 
@@ -67,11 +70,11 @@ The frontend and engine communicate exclusively through the `hegel_*` functions 
 
 ### Generator Trait
 
-Generators implement `Generator<T>` (`src/generators/generators.rs`) with one required method, `do_draw(&self, tc: &TestCase) -> T`. Leaf generators call the typed draw methods on `TestCase` (`generate_integer_i64`, `generate_float`, `generate_string`, …), which wrap the C ABI; composite generators (tuples, collections, `one_of`, `map`/`filter`/`flat_map`) compose other generators' `do_draw` inside labeled spans. String-shaped generators cache a validated `ffi::StringGenerator` handle in a `OnceLock` so the alphabet/pattern work happens once, not per draw.
+Generators implement `Generator<T>` (`src/generators/generators.rs`) with one required method, `do_draw(&self, tc: &TestCase) -> T`, and one provided method, `label(&self) -> u64`. Leaf generators call the typed draw methods on `TestCase` (`generate_integer_i64`, `generate_float`, `generate_string`, …), which wrap the C ABI; composite generators (tuples, collections, `one_of`, `map`/`filter`/`flat_map`) compose other generators' `do_draw` inside a span labelled with `self.label()`. String-shaped generators cache a validated `ffi::StringGenerator` handle in a `OnceLock` so the alphabet/pattern work happens once, not per draw.
 
 ### Span System
 
-Spans (`start_span`/`stop_span`) group related generation calls so the shrinker can shrink effectively. Labels in `test_case::labels` identify span types (LIST, TUPLE, ONE_OF, FILTER, etc.); the label space is open — any stable `u64` works. The engine also emits its own spans around every draw (see `hegel_label_t` values 17–30): same-label spans are what the engine's mutation machinery duplicates to propose repeated values, so leaf draws each get a kind-specific span.
+Spans (`start_span`/`stop_span`) group related generation calls so the shrinker can shrink effectively. A span's label is an opaque `u64` identifying the generator that opened it, and nothing more: the engine treats same-label spans as coming from the same generator (candidates for swapping, duplicating and reordering) and never interprets a label. Labels are hashed from names with `generators::label_from_name` (FNV-1a 64, `const fn`) and folded together with `generators::combine_labels`; every generator reports its own through `Generator::label`, which defaults to a hash of the type name and which combinators override to combine a label of their own kind (`hegel.vec`, `hegel.one_of`, …) with their components' labels, so `vecs(integers())` and `vecs(text())` differ. The engine exposes the same two functions over the C ABI as `hegel_label_from_name` / `hegel_label_combine` (`hegel-c/src/native/labels.rs`) and labels its own spans around every draw with names like `hegel.integer` (`hegel-c/src/native/draws/mod.rs`): same-label spans are what the engine's mutation machinery duplicates to propose repeated values, so leaf draws each get a kind-specific span. There is no enumeration of labels anywhere; do not add one.
 
 ### Collections
 

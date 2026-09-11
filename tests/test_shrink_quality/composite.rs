@@ -1,5 +1,5 @@
 use crate::common::utils::{Minimal, minimal};
-use hegel::generators::{self as gs, Generator};
+use hegel::generators::{self as gs, Generator, PrintableGenerator};
 
 fn int_pair(lo: i64, hi: i64) -> impl Generator<(i64, i64)> {
     hegel::compose!(|tc| {
@@ -71,7 +71,7 @@ fn test_earlier_exit_produces_shorter_sequence() {
     assert!(v0, "shrinker should prefer the shorter v0=true path");
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 enum BoolOrFloat {
     Bool(bool),
     Float(f64),
@@ -81,12 +81,12 @@ enum BoolOrFloat {
 fn test_one_of_shrinks_branch_selector() {
     let result = minimal(
         gs::one_of(vec![
-            gs::booleans().map(BoolOrFloat::Bool).boxed(),
+            gs::booleans().map(BoolOrFloat::Bool).boxed_printable(),
             gs::floats::<f64>()
                 .allow_nan(false)
                 .allow_infinity(false)
                 .map(BoolOrFloat::Float)
-                .boxed(),
+                .boxed_printable(),
         ]),
         |v: &BoolOrFloat| match v {
             BoolOrFloat::Bool(b) => *b,
@@ -115,12 +115,12 @@ fn test_early_exit_via_flag_with_preceding_draws() {
 fn test_one_of_branch_switch_with_trailing_draws() {
     let test_data = hegel::compose!(|tc| {
         let v0 = tc.draw(gs::one_of(vec![
-            gs::booleans().map(BoolOrFloat::Bool).boxed(),
+            gs::booleans().map(BoolOrFloat::Bool).boxed_printable(),
             gs::floats::<f64>()
                 .allow_nan(false)
                 .allow_infinity(false)
                 .map(BoolOrFloat::Float)
-                .boxed(),
+                .boxed_printable(),
         ]));
         let _: (bool, bool) = tc.draw(hegel::compose!(|tc| {
             (tc.draw(gs::booleans()), tc.draw(gs::booleans()))
@@ -165,15 +165,15 @@ fn test_one_of_branch_switch_to_float() {
                 .allow_nan(false)
                 .allow_infinity(false)
                 .map(BoolOrFloat::Float)
-                .boxed(),
-            gs::booleans().map(BoolOrFloat::Bool).boxed(),
+                .boxed_printable(),
+            gs::booleans().map(BoolOrFloat::Bool).boxed_printable(),
         ]),
         |_: &BoolOrFloat| true,
     );
     assert_eq!(result, BoolOrFloat::Float(0.0));
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 enum TupOrBool {
     Tup((bool, bool)),
     Bool(bool),
@@ -185,8 +185,8 @@ fn test_one_of_shorter_branch_needs_non_simplest_value() {
         gs::one_of(vec![
             gs::tuples!(gs::booleans(), gs::booleans())
                 .map(TupOrBool::Tup)
-                .boxed(),
-            gs::booleans().map(TupOrBool::Bool).boxed(),
+                .boxed_printable(),
+            gs::booleans().map(TupOrBool::Bool).boxed_printable(),
         ]),
         |v: &TupOrBool| match v {
             TupOrBool::Tup((a, b)) => *a || *b,
@@ -269,7 +269,7 @@ fn test_shrinking_stale_indices_no_redistribute_crash() {
     assert_eq!(vals, vec![0, 51, 100]);
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 enum BoolOrInt {
     Bool(bool),
     Int(i64),
@@ -279,12 +279,12 @@ enum BoolOrInt {
 fn test_lower_and_bump_with_type_change() {
     let result = minimal(
         gs::one_of(vec![
-            gs::booleans().map(BoolOrInt::Bool).boxed(),
+            gs::booleans().map(BoolOrInt::Bool).boxed_printable(),
             gs::integers::<i64>()
                 .min_value(0)
                 .max_value(100)
                 .map(BoolOrInt::Int)
-                .boxed(),
+                .boxed_printable(),
         ]),
         |v: &BoolOrInt| matches!(v, BoolOrInt::Int(n) if *n > 50),
     );
@@ -334,8 +334,8 @@ fn test_lower_and_bump_tries_negative_values() {
                 .min_value(0)
                 .max_value(0)
                 .map(BoolOrInt::Int)
-                .boxed(),
-            gs::booleans().map(BoolOrInt::Bool).boxed(),
+                .boxed_printable(),
+            gs::booleans().map(BoolOrInt::Bool).boxed_printable(),
         ]));
         let v3: i64 = tc.draw(gs::integers::<i64>().min_value(-1).max_value(1));
         (v2, v3)
@@ -426,7 +426,7 @@ fn test_lower_and_bump_with_float_target() {
     assert_eq!(v0, "");
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 enum BoolIntOrInt {
     Bool(bool),
     Z,
@@ -437,18 +437,18 @@ enum BoolIntOrInt {
 fn test_redistribute_stale_indices_with_one_of() {
     let g = hegel::compose!(|tc| {
         let v0 = tc.draw(gs::one_of(vec![
-            gs::booleans().map(BoolIntOrInt::Bool).boxed(),
+            gs::booleans().map(BoolIntOrInt::Bool).boxed_printable(),
             gs::integers::<i64>()
                 .min_value(0)
                 .max_value(0)
                 .map(|_| BoolIntOrInt::Z)
-                .boxed(),
+                .boxed_printable(),
             gs::integers::<i64>()
                 .min_value(2)
                 .max_value(2)
                 .filter(|x: &i64| *x > 0)
                 .map(|_| BoolIntOrInt::Two)
-                .boxed(),
+                .boxed_printable(),
         ]));
         let _: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(0));
         v0
@@ -532,7 +532,7 @@ fn test_shrink_duplicates_three_copies() {
     assert_eq!(c, 1);
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 enum ListOrIntOrBool {
     List(Vec<i64>),
     Zero,
@@ -547,16 +547,16 @@ fn test_one_of_switches_to_shorter_branch() {
                 .min_value(0)
                 .max_value(0)
                 .map(|_| ListOrIntOrBool::Zero)
-                .boxed(),
-            gs::booleans().map(ListOrIntOrBool::Bool).boxed(),
+                .boxed_printable(),
+            gs::booleans().map(ListOrIntOrBool::Bool).boxed_printable(),
         ])
     };
     let outer = gs::one_of(vec![
         gs::vecs(gs::integers::<i64>().min_value(0).max_value(0))
             .max_size(10)
             .map(ListOrIntOrBool::List)
-            .boxed(),
-        inner().boxed(),
+            .boxed_printable(),
+        inner().boxed_printable(),
     ]);
     let result = minimal(outer, |v: &ListOrIntOrBool| match v {
         ListOrIntOrBool::List(xs) => !xs.is_empty(),

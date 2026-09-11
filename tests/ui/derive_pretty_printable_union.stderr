@@ -1,0 +1,8 @@
+error: PrettyPrintable cannot be derived for unions
+ --> tests/ui/derive_pretty_printable_union.rs:5:1
+  |
+5 | / union Bits {
+6 | |     int: i32,
+7 | |     float: f32,
+8 | | }
+  | |_^

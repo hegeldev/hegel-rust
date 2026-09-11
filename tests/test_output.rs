@@ -333,16 +333,6 @@ mod verbosity {
         .settings(Settings::new().verbosity(Verbosity::Verbose).database(None))
         .run();
     }
-
-    #[test]
-    fn test_no_indexerror_in_quiet_mode_report_multiple() {
-        report_failing("quiet").run();
-    }
-
-    #[test]
-    fn test_no_indexerror_in_quiet_mode_report_one() {
-        report_failing("quiet").run();
-    }
 }
 
 mod verbose_per_test_case_output {

@@ -11,6 +11,7 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     let main_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
+            profile: None,
             settings_args: Vec::new(),
         }
     } else {
@@ -19,6 +20,17 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
             Err(e) => return e.to_compile_error(),
         }
     };
+
+    for arg in &main_args.settings_args {
+        if arg.key == "test_cases" {
+            return syn::Error::new_spanned(
+                &arg.key,
+                "#[hegel::main] binaries always run a single test case; \
+                 remove the test_cases argument.",
+            )
+            .to_compile_error();
+        }
+    }
 
     let mut func: ItemFn = match syn::parse2(item) {
         Ok(f) => f,
@@ -77,9 +89,8 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let new_body: TokenStream = quote! {
         {
-            let __hegel_default_settings: ::hegel::Settings = #default_settings_expr;
             let __hegel_settings: ::hegel::Settings = match ::hegel::__apply_cli_args(
-                __hegel_default_settings,
+                || -> ::hegel::Settings { #default_settings_expr },
                 ::std::env::args(),
             ) {
                 ::hegel::CliOutcome::Success(s) => s,
@@ -99,6 +110,7 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             ::hegel::Hegel::new(|#param_pat: #param_ty| #body)
             .settings(__hegel_settings)
+            .__single_test_case()
             .__database_key(format!("{}::{}", module_path!(), #fn_name))
             .test_location(::hegel::TestLocation {
                 function: #fn_name.to_string(),

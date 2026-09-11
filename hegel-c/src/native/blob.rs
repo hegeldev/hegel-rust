@@ -21,18 +21,31 @@
 //! [`encode_failure`] computes both and keeps whichever is shorter — for the
 //! tiny choice sequences a shrunk counterexample usually has, the zlib header
 //! overhead loses and the raw form wins (so most blobs carry prefix `0`); for
-//! large sequences the compressed form wins. The inner `serialize_choices`
-//! encoding (see [`crate::native::database`]) is Hegel's own, so it is only
-//! guaranteed to reproduce a failure within a specific version of Hegel.
+//! large sequences the compressed form wins, except past
+//! [`MAX_DECOMPRESSED_LEN`], where the raw form is kept so
+//! [`decode_failure`]'s inflation bound never rejects the encoder's own
+//! output. The inner `serialize_choices` encoding (see
+//! [`crate::native::database`]) is Hegel's own, so it is only guaranteed to
+//! reproduce a failure within a specific version of Hegel.
 //!
 //! [`decode_failure`] reverses every step and returns `None` on *any*
 //! malformation (bad base64, unknown prefix byte, corrupt zlib stream, or a
 //! payload [`deserialize_choices`] rejects). Callers treat `None` as "this
-//! blob can't be replayed" and panic.
+//! blob can't be replayed" and panic. Compressed payloads decode under the
+//! [`MAX_DECOMPRESSED_LEN`] bound, and a stream that inflates past it counts
+//! as malformed.
+//!
+//! Every blob [`encode_failure`] returns decodes: the one input it refuses
+//! (returning `None`) is a sequence whose clone values nest deeper than
+//! [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH), which
+//! [`serialize_choices`] rejects for the same reason the decoder does. The
+//! engine never produces one.
 
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
 use crate::native::database::{deserialize_choices, serialize_choices};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// `payload` is the raw [`serialize_choices`] output.
 const PREFIX_RAW: u8 = 0;
@@ -42,14 +55,26 @@ const PREFIX_ZLIB: u8 = 1;
 /// zlib compression level used by [`encode_failure`]. 6 is the zlib default.
 const ZLIB_LEVEL: u8 = 6;
 
+/// Upper bound on the decompressed size of a zlib payload, so a hostile blob
+/// cannot force an arbitrarily large allocation. A choice sequence caps at
+/// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192) choices at
+/// [`serialize_choices`]' ~17-byte per-choice sizing, about 136 KiB. 16 MiB
+/// leaves generous headroom for content-carrying choices (bytes and strings
+/// also serialize their payloads). [`encode_failure`] keeps the raw form for
+/// payloads past this bound, so its output always decodes.
+const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
+
 /// Encode a choice sequence into a failure blob (see the module docs for the
 /// format). The returned string is safe to embed in source as a string
-/// literal and to round-trip through [`decode_failure`].
-pub fn encode_failure(choices: &[ChoiceValue]) -> String {
-    let raw = serialize_choices(choices);
+/// literal and to round-trip through [`decode_failure`]. Returns `None` only
+/// for a sequence [`serialize_choices`] rejects (clone values nested deeper
+/// than [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH)), which no
+/// blob could represent.
+pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
+    let raw = serialize_choices(choices)?;
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&raw, ZLIB_LEVEL);
 
-    let (prefix, body) = if compressed.len() < raw.len() {
+    let (prefix, body) = if compressed.len() < raw.len() && raw.len() <= MAX_DECOMPRESSED_LEN {
         (PREFIX_ZLIB, compressed)
     } else {
         (PREFIX_RAW, raw)
@@ -58,7 +83,7 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> String {
     let mut payload = Vec::with_capacity(body.len() + 1);
     payload.push(prefix);
     payload.extend_from_slice(&body);
-    base64_encode(&payload)
+    Some(base64_encode(&payload))
 }
 
 /// Decode a failure blob produced by [`encode_failure`] back into a choice
@@ -70,7 +95,10 @@ pub fn decode_failure(blob: &str) -> Option<Vec<ChoiceValue>> {
     let (&prefix, rest) = bytes.split_first()?;
     let raw = match prefix {
         PREFIX_RAW => rest.to_vec(),
-        PREFIX_ZLIB => miniz_oxide::inflate::decompress_to_vec_zlib(rest).ok()?,
+        PREFIX_ZLIB => {
+            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, MAX_DECOMPRESSED_LEN)
+                .ok()?
+        }
         _ => return None,
     };
     deserialize_choices(&raw)

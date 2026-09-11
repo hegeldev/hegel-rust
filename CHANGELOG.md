@@ -1,5 +1,609 @@
 # Changelog
 
+## 0.44.0 - 2026-09-11
+
+This release adds named settings profiles. Three ship with Hegel: `development` (what local runs get), `ci` (selected automatically on CI servers), and `workload` (selected automatically inside Antithesis). Modify a shipped profile or define your own in a `hegel.toml` at your package or workspace root:
+
+```toml
+default = "nightly"   # optional: the default profile for this project
+
+[profiles.ci]
+test_cases = 1000
+
+[profiles.nightly]
+test_cases = 10000
+```
+
+A profile layers over whichever profile the environment selects, so on CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` → `development`. To opt out, pin a parent with `extends`, where `extends = "base"` means the plain base settings. The shipped profiles are siblings rooted in the base settings, so a delta meant for every environment goes in a profile of its own that the others name with `extends`. Select a profile with `#[hegel::test(profile = "nightly")]` or `Settings::from_profile`, and set the suite-wide default — the reserved `default` profile — with the `default` entry in `hegel.toml`, the `HEGEL_DEFAULT_PROFILE` environment variable, or the new `--profile` flag on a `#[hegel::main]` binary. Profiles can also be registered programmatically with `Settings::register_profile`, and the default set with `Settings::set_default_profile`.
+
+The `hegel.toml` is found by searching upward from the test process's working directory; when tests run outside the source tree, set `HEGEL_CONFIG` to the file's path instead, and under debug verbosity each run logs which config file it loaded. The new `hegel::docs::settings` page in the crate documentation covers the whole settings system: every setting, where each can be set, how the layers combine, and profile resolution in full.
+
+Inside Antithesis, the `urandom` backend and health-check suppression are now selected by the shipped `workload` profile rather than forced by detection, so they can be changed under `[profiles.workload]`, and a test that selects a profile not extending `workload` runs the health checks on the default backend. The `backend` setting is therefore a plain choice between `default` and `urandom`: the automatic option is gone, `Settings::new()` reports `Backend::Default` outside Antithesis, and the C ABI's `HEGEL_BACKEND_AUTO` has been removed from `hegel_backend_t` (`hegel_settings_set_backend` rejects its old value, 0, as an invalid argument; `HEGEL_BACKEND_DEFAULT` and `HEGEL_BACKEND_URANDOM` keep their values).
+
+This changes one default: failing tests on CI now print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. The failure database is disabled on CI, so the printed blob is the only way to reproduce a CI failure locally. To restore the old behavior, set `print_blob = false` under `[profiles.ci]` in `hegel.toml`.
+
+## 0.43.1 - 2026-09-11
+
+This patch adds `Generator::label`, a provided method giving every generator a label of its own, and the functions `generators::label_from_name` and `generators::combine_labels` for deriving one. A label is an opaque `u64` identifying a generator to the engine, which treats two spans with the same label as coming from the same generator when it shrinks and mutates test cases; it has no other meaning. The default label is derived from the generator's type name, so hand-written generators get a stable label with no extra work; generators built from others should combine a label of their own with their components':
+
+```rust
+use hegel::generators::{self as gs, Generator};
+
+impl<T, G: Generator<T>> Generator<(T, T)> for Pairs<G> {
+    fn label(&self) -> u64 {
+        gs::combine_labels(&[gs::label_from_name("mycrate.pairs"), self.inner.label()])
+    }
+
+    fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
+        (self.inner.do_draw(tc), self.inner.do_draw(tc))
+    }
+}
+```
+
+Previously every collection shared one label, every `map` another and so on, regardless of what they contained. The built-in combinators, `#[derive(DefaultGenerator)]` and `#[composite]` now label their spans this way, so `vecs(integers())` and `vecs(text())` have different labels, which should let the engine's span-swapping shrink passes and mutations line up spans that actually correspond. The hidden `generators::labels` constants and `generators::fnv1a_hash` are gone; the engine's `hegel_label_t` enum they mirrored no longer exists.
+
+## 0.43.0 - 2026-09-11
+
+This release deprecates the `exclude_min(bool)` and `exclude_max(bool)` builder methods on `gs::floats()` in favour of `min_value_exclusive` and `max_value_exclusive`, which take the bound directly:
+
+```rust
+// before
+gs::floats::<f64>().min_value(0.0).exclude_min(true).max_value(1.0).exclude_max(true)
+
+// after
+gs::floats::<f64>().min_value_exclusive(0.0).max_value_exclusive(1.0)
+```
+
+`min_value` and `min_value_exclusive` set the same bound, so whichever is called last wins (likewise for `max_value` / `max_value_exclusive`). An exclusive bound can no longer be set without a bound value, so that `InvalidArgument` no longer exists; the remaining validation (an exclusive `+inf` minimum, an exclusive `-inf` maximum, or exclusive bounds on a single-point range) is unchanged.
+
+`exclude_min` and `exclude_max` remain as deprecated methods so existing call sites get a deprecation warning naming the replacement, but calling either now panics immediately rather than configuring the generator.
+
+## 0.42.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.38.1.
+
+## 0.42.0 - 2026-09-10
+
+This release replaces `hegel::stateful::run` and `hegel::stateful::run_concurrent` with a builder, `hegel::stateful::Machine`. `Settings::stateful_step_count` is removed. Each state machine chooses its own step count, instead of every stateful test in a run sharing one setting.
+
+```rust
+// before
+#[hegel::test(stateful_step_count = 200)]
+fn test_counter(tc: TestCase) {
+    hegel::stateful::run(Counter::new(), tc);
+}
+
+// after
+use hegel::stateful::machine;
+
+#[hegel::test]
+fn test_counter(tc: TestCase) {
+    machine(Counter::new()).steps(200).run(tc);
+}
+```
+
+For concurrent machines, `min_concurrency` and `max_concurrency` replace the concurrency parameters to `run_concurrent`. For example, `machine(m).max_concurrency(5).run_concurrent(tc)` replaces `run_concurrent(m, tc, 1, 5)`. `min_concurrency` and `max_concurrency` both default to 1. Giving a sequential machine concurrency bounds is a compile-time error.
+
+## 0.41.7 - 2026-09-10
+
+This patch improves the diagnostic for a flaky test. When a shrunk failure no longer fails on its final replay, the `Flaky test detected` message now also names the failure that did not reproduce, as the panic location the engine recorded for it.
+
+`PrettyPrinter::should_print` now also reports `false` for a printer whose region has died — a clone that outlived the document it was printing into — since its writes are discarded.
+
+In a concurrent state machine's failure report, every line of a multi-line `tc.note()` made from a worker thread now carries the `[worker N +X.XXXms]` attribution; previously only the note's first line did.
+
+Internally, the frontend now leaves the shape of its output to the engine: `TestCase::note` goes through the engine's own note primitive, the indentation of stateful rule bodies and `tc.repeat` iterations is the engine's block regions, and the worker attribution on concurrent workers' lines is stamped by the engine rather than assembled from lower-level printing calls.
+
+## 0.41.6 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.9.
+
+## 0.41.5 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.8.
+
+## 0.41.4 - 2026-09-09
+
+`#[hegel::main]` binaries now suppress the `TooSlow` and `TestCasesTooLarge` health checks. Stateful test cases no longer stop at random after tens of thousands of rounds: the engine's per-round stop probability is now 2^-32 instead of 2^-16.
+
+## 0.41.3 - 2026-09-09
+
+This patch updates the engine, which replaces its data tree with a flat execution cache. Runs are faster and cache memory is bounded. A test that flips between passing and failing on identical generated values now fails the run as flaky instead of being silently masked, and `HealthCheck::FilterTooMuch` fires after a streak of duplicate invalid test cases instead of on exhaustion of the generation space.
+
+## 0.41.2 - 2026-09-09
+
+Internal refactoring of how the frontend declares the engine's C ABI.
+
+## 0.41.1 - 2026-09-08
+
+This patch adds `.print_as_call("path::to::function")` on mapped generators, for when a `map` produces a foreign type whose `Debug` output is not pastable Rust (`let kd = 0v3;`) but the drawn input is. It prints the mapped expression, and requires the map's input generator to be printable ([#446](https://github.com/hegeldev/hegel-rust/issues/446)).
+
+```rust
+let keys = gs::integers::<u64>()
+    .map(KeyData::from_ffi)
+    .print_as_call("KeyData::from_ffi");
+```
+
+A failing draw from `keys` reports `let key = KeyData::from_ffi(3);`.
+
+## 0.41.0 - 2026-09-08
+
+This release changes how hegeltest links Hegel's engine. The engine crate (`hegeltest-c`) is no longer a Rust dependency of `hegeltest`: by default the build script compiles it into the `libhegel_c` shared library and your tests load it at runtime, the same way every other language binding consumes the engine. Its dependencies therefore no longer appear in your cargo graph, where they were subject to feature unification and could even change type inference in unrelated code ([#442](https://github.com/hegeldev/hegel-rust/issues/442)).
+
+`cargo test` and `cargo run` work unchanged. What changes is running a hegeltest binary outside cargo — a deployed `#[hegel::main]` fuzzer, a test binary copied to another machine — which now needs `libhegel_c` shipped next to the executable, its directory named in the `HEGEL_C_LIB_DIR` environment variable, or a copy findable by the platform's own library search (`LD_LIBRARY_PATH` and friends), tried in that order. Whichever copy is found must be the exact engine version this hegeltest release was built against. A mismatched library is refused on load with an error naming both versions. To keep self-contained binaries instead, enable the new `static-engine` feature, which links the engine in as a Rust dependency exactly as before, including its dependency tree:
+
+```toml
+hegeltest = { version = "0.40.0", features = ["static-engine"] }
+```
+
+Builds without access to crates.io need one of the same escape hatches: when there is no local engine checkout the build script fetches the pinned `hegeltest-c` source from crates.io, so either enable `static-engine` or set `HEGEL_C_LIB_DIR` (it also works at build time) to a directory containing a prebuilt library. Targets that cannot load shared libraries at runtime, such as statically linked musl, need `static-engine`.
+
+This release also removes the internal `__bench` feature (the engine microbenchmarks moved into `hegeltest-c`) and drops the unused `crc32fast`, `dashu-int`, `miniz_oxide`, and `rustc-hash` dependencies. `rand` is now a dependency only under the `rand` feature, and `tempfile` is now test-only.
+
+## 0.40.6 - 2026-09-08
+
+This patch fixes a panic in Hegel's backtrace formatting. When a failing test's short backtrace contained the `__rust_end_short_backtrace` and `__rust_begin_short_backtrace` markers in an arrangement where the frame the end marker selected came after the begin marker, the formatter computed a start index greater than its end index and panicked with `slice index starts at N but ends at M` while slicing the frame list. That panic replaced the real test failure with an unrelated engine-side crash. The formatter now detects the inconsistent range and falls back to keeping the full backtrace instead of panicking.
+
+## 0.40.5 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.5.
+
+## 0.40.4 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.4.
+
+## 0.40.3 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.3.
+
+## 0.40.2 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.37.2.
+
+## 0.40.1 - 2026-09-07
+
+This patch suppresses `HealthCheck::TooSlow` by default in CI, matching [Hypothesis's CI profile](https://github.com/HypothesisWorks/hypothesis/blob/13c3785854da056387aeac789300537e501a3c14/hypothesis-python/src/hypothesis/_settings.py#L759-L772). Explicit `Settings::suppress_health_check` calls still replace the default.
+
+## 0.40.0 - 2026-09-07
+
+This release adds `#[invariant(always_run)]` for stateful tests ([#449](https://github.com/hegeldev/hegel-rust/issues/449)). A plain `#[invariant]` is checked in full on the machine's initial and final state and sampled in between; an always-run invariant runs after every rule (at every join point, for concurrent machines) instead. Use it for invariants that must observe every intermediate state, including invariants that mutate state when checked:
+
+```rust
+#[invariant(always_run)]
+fn no_unobserved_writes(&mut self, _: TestCase) {
+    assert!(self.writes_since_last_check <= 1);
+    self.writes_since_last_check = 0;
+}
+```
+
+For hand-written `StateMachine` implementations this is a breaking change: `invariants()` now returns `Vec<Invariant<Self>>` instead of `Vec<Rule<Self>>` — construct entries with `Invariant::new` (sampled) or `Invariant::new_always_run`. `ConcurrentInvariant` gains the same `always_run` field and `new_always_run` constructor.
+
+## 0.39.9 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.6.
+
+## 0.39.8 - 2026-09-07
+
+This patch improves the failure reports of stateful tests. A failing `#[invariant]` now ends the report with `Invariant <name> failed:`, and a panicking `#[rule]` body with `Rule <name> failed:`, instead of leaving only the panic's file and line to identify the failing method. The `Initial invariant check.` line is reworded to `Checking invariants on the initial state.` (likewise for the final check) and no longer printed for machines with no invariants. ([#440](https://github.com/hegeldev/hegel-rust/issues/440))
+
+## 0.39.7 - 2026-09-07
+
+This patch adds `generators::btree_sets` and `generators::btree_maps` for generating `BTreeSet` and `BTreeMap` values, with the same `min_size`/`max_size` builders as `hashsets` and `hashmaps`. Both types also implement `DefaultGenerator`, so `gs::default::<BTreeMap<u8, u8>>()` and `#[derive(DefaultGenerator)]` on structs containing them now work.
+
+## 0.39.6 - 2026-09-07
+
+This release updates the `hegeltest-c` dependency to 0.36.5.
+
+## 0.39.5 - 2026-09-07
+
+This patch disables the failure database and all health checks by default when running inside Antithesis. It also disables the nondeterminism warning for concurrent stateful tests inside Antithesis.
+
+## 0.39.4 - 2026-09-04
+
+This patch improves shrinking for collections whose elements each cost
+more than eight choices to generate. Previously such an element could
+only be deleted a few choices at a time, so shrunk counterexamples kept
+collection elements with no effect on the failure.
+
+## 0.39.3 - 2026-09-04
+
+This patch improves the shrinking of stateful test failures: shrunk rule
+sequences no longer keep redundant steps, such as inserts whose effect a
+later step overwrites
+([#441](https://github.com/hegeldev/hegel-rust/issues/441)). Previously a
+step could only be deleted as a short run of individual choices, so machines
+with several invariants or draw-heavy rules shrank to sequences padded with
+no-op steps.
+
+## 0.39.2 - 2026-09-04
+
+This patch fixes shrinking and the `LargeInitialTestCase` health check for stateful tests.
+
+## 0.39.1 - 2026-09-04
+
+This patch improves the ergonomics of draw-time printing:
+
+- `BoxedGenerator<T>` is now a `PrintableGenerator` whenever `T` implements `PrettyPrintable`, printing drawn values by their own representation. A `.boxed()` in a generator definition no longer forces printing annotations onto every downstream draw site. `.boxed_printable()` remains the way to keep a custom printing strategy through the erasure.
+- `PrettyPrintable` is implemented for more standard-library types: the range types and `Bound`, `VecDeque`, `LinkedList`, `BinaryHeap`, the `NonZero` integers, `Cow`, and `Path`/`PathBuf`. The `chrono`, `jiff`, and `serde_json` integrations add impls for `Month`, `Days`, `Months`, `IsoWeek`, `TimeZone`, `AmbiguousOffset`, and `Map<String, Value>`. Every generator `gs::default()` returns can now be passed to `tc.draw` (several, such as `PathBuf`'s, could previously only be drawn silently).
+- Generators defined with `derive_generator!` implement `PrintableGenerator` whenever every field type is `PrettyPrintable`, printing `Name { field: value }` expressions.
+- Draws in helper functions no longer have to print as the anonymous `draw_1`, `draw_2`, …. Marking the helper `#[hegel::test_helper]` names its draws after their bindings, the same rewrite `#[hegel::test]` applies to a test body, and the new `TestCase::draw_named` reports a single draw under an explicit name.
+- The new `hegel::prelude` module exports the traits and entry points most tests need, so one `use hegel::prelude::*;` covers them.
+- `#[derive(PrettyPrintable)]` on a type with a non-printable field now reports an error pointing at that field, stating that every field must be `PrettyPrintable` and suggesting `#[pretty(debug)]`, instead of draw-site advice attached to the derive. Draw-site printability errors now lead with the once-per-type fix (implementing `PrettyPrintable`) and explain how `-> impl Generator<..>` return types and `.boxed()` interact with printability.
+- The `hegel::pretty` module docs now explain the whole printing system: what is printable out of the box, how to make your own types printable, the escape hatches for foreign types, type erasure, and draw naming.
+
+## 0.39.0 - 2026-09-03
+
+This release removes the `antithesis` cargo feature. The Antithesis integration is now always compiled in and activates automatically when the `ANTITHESIS_OUTPUT_DIR` environment variable is set, so running inside Antithesis no longer requires a feature flag and no longer fails when the flag is missing. Remove `features = ["antithesis"]` from your `hegeltest` dependency; Cargo rejects unknown features, so builds that still name it will not compile until it is removed.
+
+## 0.38.1 - 2026-09-03
+
+This patch fixes the ordering of step labels in stateful counterexamples. Each label used to print after the draws its rule made, so reading a failing sequence meant shifting every label back by one. Notes are also no longer deferred while an engine span is open, only while a drawn value is mid-print, so a note can never trail the output of a later draw.
+
+Each step now prints as a block, with the rule's draws and notes scoped to it:
+
+```
+Step 1: add {
+  let n = 1;
+}
+```
+
+`#[rule]` and `#[invariant]` bodies now rewrite `tc.draw` calls the way `#[hegel::test]` bodies do, so a rule's draws print under their variable names (`let n = 1;` instead of `let draw_1 = 1;`) and `tc.target` calls get per-expression labels. Draw names are scoped to the rule invocation: a name drawn once per rule prints bare in every step, and only names drawn repeatedly within one invocation get a numeric suffix.
+
+## 0.38.0 - 2026-09-02
+
+This release makes generated times and datetimes nanosecond resolution instead of microsecond.
+
+`extras::jiff::times()` now generates every `jiff::civil::Time`. A range whose bounds are between two consecutive microseconds is no longer an error.
+
+## 0.37.0 - 2026-09-02
+
+This release removes `Mode::SingleTestCase` and, with it, the ways it silently changed test semantics: state machines no longer run rules forever in any configuration (they are always bounded by `stateful_step_count`), and `tc.repeat(...)` always uses the engine-driven loop protocol. The `Mode` enum, `Settings::mode`, and the `--single-test-case` CLI flag are gone.
+
+Instead, `#[hegel::main]` binaries now always run exactly one test case per invocation. The run otherwise behaves like any property test: invalid test cases (a failed `assume()`) are retried until one valid case has run, health checks apply, and failures are shrunk, reported, and persisted to the failure database, so a failure found by one invocation is replayed by the next. The test-case count is the one thing that cannot be changed — the `test_cases` attribute argument is rejected at compile time, the `--test-cases` CLI flag has been removed, and `HEGEL_TEST_CASES` has no effect on these binaries.
+
+## 0.36.1 - 2026-09-02
+
+This patch adds event statistics. `tc.event(label)` records that a labelled situation occurred in the current test case, and `tc.event_value(label, value)` records a numeric observation; with statistics enabled — `Settings::show_statistics(true)`, or the `HEGEL_STATISTICS` environment variable — the end of the run reports, per label, the fraction of generation-phase test cases each event occurred in and a distribution summary (count, min, median, mean, p90, max) of each numeric observation. Use it to check that the situations a test is meant to exercise actually occur, and at the sizes you expect.
+
+## 0.36.0 - 2026-09-02
+
+This release removes the 12-component limit on `one_of!`: it now accepts any number of generators. Components stay unboxed, and the result is a `PrintableGenerator` exactly when every component is one.
+
+`one_of!` now builds the same `OneOfGenerator` the vec-based `one_of` function returns, holding a `OneOfCons`/`OneOfLast` chain of its components and dispatching through the new `Alternatives` and `PrintableAlternatives` traits, instead of one of twelve fixed-arity generator types. This breaks code that named those types:
+
+- `OneOf1Generator` through `OneOf12Generator` are gone. To name the type of a `one_of!` result, write the chain out (e.g. `OneOfGenerator<'static, T, OneOfCons<G1, OneOfLast<G2>>>`), or box the components and store a `OneOfGenerator<'static, T>`.
+- `OneOfGenerator`'s third type parameter is now the alternatives store rather than the boxed element type: `OneOfGenerator<'a, T, BoxedGenerator<'a, T>>` becomes `OneOfGenerator<'a, T, Vec<BoxedGenerator<'a, T>>>`. The default `OneOfGenerator<'a, T>` form is unchanged.
+
+## 0.35.0 - 2026-09-01
+
+This release changes when stateful invariants run. `#[invariant]` methods previously ran after every rule; they now run in full on the machine's initial and final state, and are sampled in between — after any given rule, each invariant runs with probability 1/`stateful_step_count`. This keeps an invariant's expected cost per test case constant as the step count grows, and a violation that persists to the end of a test case is still always caught; what is given up is observing most intermediate states, so a violation a later rule *undoes* is only caught when a sampled check lands inside the window. This applies to both sequential and concurrent state machines.
+
+## 0.34.1 - 2026-09-01
+
+This patch fixes a silent size collapse in `generators::recursive()` values whose branch generator stacks several combinators per recursion level (e.g. `one_of!` arms pairing subtrees with `tuples!`). Each combinator layer opens a span, and the engine's span-depth guard sat low enough that deep values were discarded as invalid, collapsing typical sizes by roughly 7x. The guard now sits far above any depth legitimate generation reaches.
+
+`compose!` now also accepts the `move` keyword on its closure; captures were already by move, so `compose!(move |tc| { .. })` is identical to `compose!(|tc| { .. })`.
+
+## 0.34.0 - 2026-09-01
+
+This release makes `generators::recursive()` print compositionally: the result is a `PrintableGenerator` exactly when the leaf generator and the generator the branch function returns both are, and drawn values print with those generators' own representations. Previously the result was printable whenever the produced type implemented `PrettyPrintable`, printing by value and ignoring how the component generators print. `SubtreeGenerator` is now a `PrintableGenerator` too, so branch functions can pass subtrees to printable combinators and draw them with `tc.draw(..)`.
+
+Migration notes:
+
+- `RecursiveGenerator` now carries its component generator types (`RecursiveGenerator<T, G, F, R>`), which include closure types, so helper functions can no longer name it as a return type: return `impl Generator<T>` (or `impl PrintableGenerator<T>`) instead, applying `max_depth`/`max_leaves` before returning.
+- A recursive generator whose leaf or branch generator is not printable no longer satisfies `tc.draw(..)` even when the produced type implements `PrettyPrintable`; make the component printable (`.print_as_value()`, `.print_as_debug()`, or `.print_with(..)`) or draw with `tc.draw_silent(..)`.
+
+## 0.33.1 - 2026-09-01
+
+This patch adds three new generators that draw from a fixed list of values: `gs::permutations()` generates all of the elements in a randomly chosen order, `gs::subsequences()` generates subsets of the elements in their original order, and `gs::samples()` generates samples of the elements — with replacement by default, or without replacement via `without_replacement()`.
+
+```rust
+use hegel::generators as gs;
+
+#[hegel::test]
+fn my_test(tc: hegel::TestCase) {
+    let perm: Vec<i32> = tc.draw(gs::permutations(vec![1, 2, 3, 4, 5]));
+    let sub: Vec<i32> = tc.draw(gs::subsequences(vec![1, 2, 3, 4, 5]));
+    let sample: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3, 4, 5]).max_size(10));
+}
+```
+
+`subsequences` and `samples` support `min_size` and `max_size` bounds on how many elements are included. Permutations shrink towards the original order; subsequences and samples shrink towards fewer elements, taken from earlier in the list.
+
+## 0.33.0 - 2026-09-01
+
+This release replaces `Debug`-based reporting of drawn values with a
+pretty-printing system. Failing examples now print each drawn value as a
+valid Rust expression — `vec![1, 2]`, `HashMap::from([(1, false)])`,
+`Some("x".to_string())`, `Ipv4Addr::new(10, 0, 0, 1)` — laid out and
+wrapped like source code, so a reported counterexample can be pasted
+straight back into a test. Values print as they are drawn, which is what
+lets rejected attempts (filter retries, duplicate collection elements)
+disappear from the report and lets a value whose representation is only
+known during test execution — a Hegel-controlled RNG, say — fill in its
+output as it is used. Notes made mid-draw (from inside a composite body)
+now flush after the enclosing draw's line instead of splicing into it, and
+draws made from cloned `TestCase`s on other threads appear at the point
+where the clone was made, deterministically, regardless of how the threads
+interleave.
+
+The printing protocol is two new traits and a document type. A value
+describes its own representation through `PrettyPrintable` (implemented
+for the standard types the generator library produces, derivable with
+`#[derive(PrettyPrintable)]`, and available for any `Debug` type through
+`pretty_print_as_debug!` or `pretty::print_debug_repr`); a generator that
+can print what it draws implements `PrintableGenerator`, which every
+built-in generator does — structural combinators (collections, tuples,
+`optional`, `one_of!`, `flat_map`) whenever their components are printable,
+value combinators (`map`, `filter`, composites) whenever the produced type
+is `PrettyPrintable`. `Document` and `PrettyPrinter` expose the layout
+engine directly for custom representations.
+
+The headline breaking change: `TestCase::draw` now takes an
+`impl PrintableGenerator<T>` instead of any generator of a `Debug` type.
+Most call sites compile unchanged. A hand-written `Generator`
+implementation passed to `tc.draw` needs one of the escape hatches —
+`.print_as_value()` prints the value's own `PrettyPrintable`
+representation, `.print_as_debug()` prints any `Debug` type,
+`.print_with(f)` prints a custom representation (and can mask secrets) —
+or can switch to `tc.draw_silent`, which accepts any `Generator` and skips
+reporting:
+
+```rust
+// before
+let value = tc.draw(my_generator);
+
+// after: say how the drawn value should be reported ...
+let value = tc.draw(my_generator.print_as_debug());
+// ... or skip reporting it
+let value = tc.draw_silent(my_generator);
+```
+
+To make a hand-written generator printable itself, implement
+`PrintableGenerator::do_draw_and_print` and define `do_draw` as
+`self.do_draw_and_print(tc, &mut PrettyPrinter::noop())`, so both draw
+paths share one body and consume identical choices by construction.
+
+Other breaking changes, all small:
+
+- `#[derive(DefaultGenerator)]` now generates printable generators that
+  print field by field, in the same layout `#[derive(PrettyPrintable)]`
+  produces. The generated builder methods accept any printable generator
+  and are type-changing; a plain `Generator` argument needs one of the
+  printing escape hatches above.
+- `one_of!` expands to per-arity generator types (`OneOf1Generator` ..
+  `OneOf12Generator`, mirroring `tuples!`), printable exactly when every
+  arm is. More than 12 arms is now a compile error pointing at the
+  vec-based `one_of()`.
+- `HegelRandom` is now an opaque struct rather than a public enum. It
+  reports the random values the test actually consumed
+  (`HegelRandom { consumed: [..] }`) or the seed in true-random mode.
+- The settings enums (`HealthCheck`, `Phase`, `Mode`, `Backend`,
+  `Verbosity`) are `#[non_exhaustive]`; matches on them need a wildcard
+  arm.
+- The `Generator::enumerate_values` fast path is gone. Filtered draws and
+  unique collections always rejection-sample; a set or map whose
+  `min_size` exceeds what its element or key generator can produce now
+  surfaces as a `FilterTooMuch` health check at run time instead of an
+  eager argument error. Draws that are satisfiable but that rejection
+  sampling rarely satisfies — a filter that keeps one value in a hundred,
+  a set that must contain most of a small alphabet — fail the same health
+  check, where the fast path used to make them reliable.
+
+## 0.32.5 - 2026-08-28
+
+This patch fixes the distribution of `generators::recursive` to cover a broader range of leaves up to `max_leaves`. Previously for some uses (especially ones where the branch case often drew 0 or 1 leaves) the recursive generator ended up biased very heavily towards small values.
+
+## 0.32.4 - 2026-08-27
+
+This patch adds `generators::recursive`, a combinator for generating recursively defined data such as trees or JSON documents. It takes a generator for the leaf values and a function that builds one level of branch structure from a generator of subtrees:
+
+```rust
+let json = gs::recursive(
+    gs::floats::<f64>().map(Json::Number),
+    |json| gs::vecs(json).max_size(5).map(Json::Array),
+);
+```
+
+Generated sizes cover everything the caps allow, from a single leaf up to the limits set by the `max_depth` and `max_leaves` builder methods; a generation attempt that outgrows `max_leaves` is discarded and retried with a lower branching probability.
+
+## 0.32.3 - 2026-08-27
+
+This patch adds support for `#[derive(DefaultGenerator)]` on tuple structs ([#183](https://github.com/hegeldev/hegel-rust/issues/183)). The generated builder methods are positional, matching the `._0(...)` field builders already used by enum tuple variants:
+
+```rust
+#[derive(DefaultGenerator)]
+struct Meters(f64);
+
+let g = gs::default::<Meters>()._0(gs::floats().min_value(0.0).max_value(3.0));
+```
+
+Deriving on a struct with no fields (unit, empty named, or empty tuple) now produces a clear error in all three cases. Empty named structs previously failed with a confusing "unused lifetime parameter" error from inside the generated code.
+
+## 0.32.2 - 2026-08-26
+
+This patch improves the distribution of `generators::integers` for large and full-width ranges, by way of an engine update. Each test case now draws its own mix of value categories (a form of swarm testing), so the values that property tests rely on to surface off-by-one, overflow, and sign bugs — the range endpoints and their neighbours, zero, ±1, and small magnitudes — appear several times more often than before (boundary values on about 2% of full-width draws, up from about 0.3%) and cluster within test cases, so several operands go extreme at once: a full-width `x + y` now overflows about 1.5% of the time. The middle of the range stays well covered. See the `hegeltest-c` changelog for measurements and details.
+
+This patch also fixes the distribution of `generators::floats::<f32>()`, which previously generated infinities on about a third of unbounded draws and produced large finite values essentially never. Unbounded `f32` draws now match the `f64` shape: infinities are rare (about 2%) and large finite magnitudes are common. The underlying clamp fix also affects `f64` generators configured with `allow_nan(false)` or `allow_subnormal(false)`, which previously produced `-inf` on a small fraction of unbounded draws.
+
+## 0.32.1 - 2026-08-25
+
+This patch documents that a violated assumption inside a state machine rule is not transactional. Place assumptions at the start of the rule.
+
+## 0.32.0 - 2026-08-25
+
+This release redesigns the `derive_generator!` macro for externally defined structs. Previously the macro implemented `DefaultGenerator` for the target type, which Rust's orphan rule rejects whenever that type comes from another crate, so every use the macro was designed for failed to compile. The only invocations that did compile were those in the same crate as the type definition, where `#[derive(DefaultGenerator)]` already works, so the macro was entirely redundant with the derive.
+
+The macro now takes an explicit generator name and generates a standalone public generator struct with `new()` and a builder method per field, and no longer implements `DefaultGenerator`:
+
+```rust
+// before
+derive_generator!(Person {
+    name: String,
+    age: u32,
+});
+let person: Person = tc.draw(gs::default::<Person>());
+
+// after
+derive_generator!(PersonGenerator for Person {
+    name: String,
+    age: u32,
+});
+let person: Person = tc.draw(PersonGenerator::new());
+```
+
+Because the orphan rule makes a `DefaultGenerator` impl impossible for foreign types, `gs::default::<T>()` cannot support types handled by `derive_generator!`; draw from the generated generator directly instead. For types defined in your own crate, keep using `#[derive(DefaultGenerator)]`.
+
+This release also removes hegel's dependency on the `paste` crate, along with the hidden `hegel::paste` re-export.
+
+## 0.31.0 - 2026-08-20
+
+This release adds concurrent stateful testing: stateful tests where rules run concurrently from a number of worker threads. See the new stateful module documentation for details.
+
+## 0.30.0 - 2026-08-14
+
+This release changes `one_of!` to expand to arity-specific generator types
+(`OneOf1Generator` through `OneOf12Generator`, mirroring the `tuples!`
+design) instead of boxing every alternative into a `OneOfGenerator`. The
+component generators keep their concrete types, so the macro's result is a
+nameable type that can be stored in a struct field or returned from a
+function, and building it no longer allocates per alternative. The drawn
+choice sequence (a ONE_OF span around one index draw) is unchanged, so
+saved failures replay identically.
+
+Two things can break. Code that annotated the macro's result as
+`OneOfGenerator` must now name the arity-specific type (or box the
+alternatives explicitly and call `one_of()`):
+
+```rust
+// before
+let g: gs::OneOfGenerator<i64> = hegel::one_of!(gs::integers(), gs::just(7));
+
+// after
+let g: gs::OneOf2Generator<gs::IntegerGenerator<i64>, gs::JustGenerator<i64>, i64> =
+    hegel::one_of!(gs::integers(), gs::just(7));
+```
+
+And `one_of!` now supports at most 12 alternatives; a longer list is a
+compile error pointing at the vec-based `one_of()`, which remains the way
+to choose among a runtime-sized (or very large) collection of boxed
+generators. `one_of()` itself now accepts any iterable of generators of
+one type — `OneOfGenerator` is generic over the stored generator type,
+defaulting to `BoxedGenerator`, so most existing uses keep compiling
+unchanged. The exception is calls that spelled out the type arguments:
+`one_of` gained a type parameter, so e.g. `one_of::<i64, _>(gens)` must
+drop the turbofish (plain `one_of(gens)` infers everything).
+
+For parity, the arity-specific tuple generator types (`Tuple0Generator`
+through `Tuple12Generator`) are now exported as well, so `tuples!` results
+can be named the same way, and `tuples!` reports the same clear compile
+error as `one_of!` when given more than 12 generators.
+
+## 0.29.10 - 2026-08-13
+
+This patch significantly improves shrinking for stateful tests that use `stateful::Pool`.
+
+## 0.29.9 - 2026-08-13
+
+This patch improves shrinking: finding the minimal counterexample for a failing test typically takes around 10x fewer test executions, and inputs whose true minimum sits in another `one_of`-style branch reach it more often than before.
+
+## 0.29.8 - 2026-08-11
+
+This patch adds `weighted_booleans` for generating boolean values with probability 
+`p` in `[0.0, 1.0]` of true.
+
+## 0.29.7 - 2026-08-11
+
+This patch fixes the replay of stateful counterexamples that need more than 50 steps ([#396](https://github.com/hegeldev/hegel-rust/issues/396)). Previously, the replay of the shrunk counterexample stopped at 50 steps and incorrectly triggered a flaky test error.
+
+## 0.29.6 - 2026-08-11
+
+This patch brings various minor improvements to the `#[composite]` macro.
+
+- Adds support for passing parameters by reference without an explicit lifetime, if the lifetime is not used in the return type.
+- Stops the items_after_statements clippy lint from firing if constants/ functions are defined in the function body.
+- Tries to output generator even if errors are found as to not raise errors elsewhere
+
+## 0.29.5 - 2026-08-11
+
+This patch adds two environment variables that override settings at runtime, so a whole test suite's behavior can be adjusted without editing source:
+
+- `HEGEL_TEST_CASES` overrides the number of test cases each test runs, taking precedence over values configured in source (including explicit `test_cases` settings). For example, `HEGEL_TEST_CASES=10000 cargo test` runs a deep exploration of every property test.
+- `HEGEL_DATABASE` overrides the failure database location: `HEGEL_DATABASE=disabled` turns the database off (the same keyword the `--database` CLI flag uses), and any other non-empty value relocates the database to that path.
+
+## 0.29.4 - 2026-08-10
+
+This patch improves random generation for tests with repeated structure (recursive generators, collections, state machines). The engine proposes new test cases by splicing the choices of one span over another with the same label; a spliced sequence that diverged from its donor's path was previously discarded, and is now completed with fresh random draws instead, so every such proposal becomes a real test case seeded with the mutation.
+
+## 0.29.3 - 2026-08-07
+
+This release updates the `hegeltest-c` dependency to 0.32.1.
+
+## 0.29.2 - 2026-08-07
+
+This patch improves rule generation for stateful tests. Rules that reject via `assume()` no longer cause test cases to run fewer steps than they should.
+
+## 0.29.1 - 2026-08-07
+
+This patch updates the native engine as part of making libhegel safe to unload and portable beyond std platforms. Two of the engine changes are visible from hegel-rust:
+
+- Bugs in hegel itself now surface as run-level errors carrying a bug-report diagnostic instead of panics raised inside the engine. A panic that escapes that reporting — which would indicate a further bug in hegel — now aborts the process at the engine boundary instead of being converted into a run-level error.
+- Engine diagnostics are written directly to the stderr file descriptor, so the Rust test harness's output capture no longer intercepts them.
+
+## 0.29.0 - 2026-08-06
+
+This release changes `#[hegel::composite]` generators and `hegel::compose!` closures to receive the `TestCase` by reference instead of by value:
+
+```rust
+# before
+#[hegel::composite]
+fn sorted_vec(tc: TestCase, min_len: usize) -> Vec<i32> { ... }
+
+# after
+#[hegel::composite]
+fn sorted_vec(tc: &TestCase, min_len: usize) -> Vec<i32> { ... }
+```
+
+Since all `TestCase` methods take `&self`, the body of a composite rarely needs any change beyond the signature; code that moved the owned `TestCase` elsewhere (for example into a spawned thread) should call `tc.clone()` to get an independent handle, which was already the supported way to drive a test case from another thread.
+
+The motivation is that `#[composite]` now expands to a named generator struct (`sorted_vec` above gets a `SortedVecCompositeGenerator`) instead of a function returning an opaque `impl`-typed generator. This makes composite generators much more capable:
+
+- A composite can now recursively draw from itself, directly or through combinators like `one_of!`, which previously failed to compile. Recursive generators for tree-shaped data can now be written as ordinary recursive composites.
+- The generator returned by a composite has a nameable type, so it can be stored in structs, returned from functions, and passed as an argument to other composites.
+- Composite generators implement `Clone`.
+
+Arguments to a composite (the parameters after the `TestCase`) are now stored on the generated struct and cloned into each draw, so they must implement `Clone`. Most argument types already do; to pass a non-`Clone` generator as an argument, box it first with `.boxed()`.
+
+This release also fixes a bug where an explicit `return` inside a composite or `compose!` body left the generator's span open, unbalancing the span tree the shrinker uses and degrading shrinking for such generators.
+
+## 0.28.8 - 2026-08-04
+
+This patch adds a `stateful_step_count` setting controlling how many steps a stateful (`#[state_machine]`) test case runs. It defaults to 50, and each case now runs at least one step and at most `stateful_step_count`.
+
+```rust
+Settings::new().stateful_step_count(20)
+```
+
+## 0.28.7 - 2026-08-04
+
+This release updates the `hegeltest-c` dependency to 0.30.4.
+
+## 0.28.6 - 2026-07-29
+
+This patch fixes incorrect attribute forwarding on some `#[rule]` and `#[invariant]` methods.
+
+## 0.28.5 - 2026-07-28
+
+This patch stops packaging internal agent instruction files (`AGENTS.md` and `.agents/`) in the published crate.
+
+## 0.28.4 - 2026-07-27
+
+This release updates the `hegeltest-c` dependency to 0.30.3.
+
+## 0.28.3 - 2026-07-27
+
+This release updates the `hegeltest-c` dependency to 0.30.2.
+
 ## 0.28.2 - 2026-07-21
 
 This patch removes the background thread that drove each test run's engine. The engine now runs on the same thread as the test itself, resumed each time the test asks for its next test case. Test behaviour is unchanged; the `hegel-worker` thread simply no longer exists (e.g. in debugger thread lists), and each test case costs two fewer thread context switches. This is groundwork for supporting platforms without threads, such as WebAssembly.

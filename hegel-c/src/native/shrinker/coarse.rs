@@ -8,7 +8,8 @@
 //! separate one-shot phase.
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceKind, ChoiceValue};
+use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue};
+use alloc::vec::Vec;
 
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::hegel_internal_debug_assert;
@@ -35,13 +36,11 @@ impl<'a> Shrinker<'a> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            let (ic, current_val) = match (node.kind.as_ref(), &node.value) {
-                (ChoiceKind::Integer(ic), ChoiceValue::Integer(v)) => (ic.clone(), v.clone()),
-                _ => {
-                    i += 1;
-                    continue;
-                }
+            let ChoiceData::Integer(ic, current_val) = &node.data else {
+                i += 1;
+                continue;
             };
+            let (ic, current_val) = (alloc::sync::Arc::clone(ic), current_val.clone());
             if node.was_forced
                 || current_val > BigInt::from(10)
                 || ic.min_value.clone() != BigInt::from(0)
@@ -49,17 +48,17 @@ impl<'a> Shrinker<'a> {
                 i += 1;
                 continue;
             }
-            let zero_val = ic
-                .value_from_bigint(&BigInt::from(0))
-                .expect("0 fits a min==0 integer choice");
             let mut zeroed = self.current_nodes.clone();
-            zeroed[i] = zeroed[i].with_value(ChoiceValue::Integer(zero_val));
+            zeroed[i] = ChoiceNode::new(
+                ChoiceData::Integer(alloc::sync::Arc::clone(&ic), BigInt::from(0)),
+                zeroed[i].was_forced,
+            );
             let (_, zero_actual, _) = self.run_test_fn(ShrinkRun::Full(&zeroed)).await?;
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()
-                        || std::mem::discriminant(self.current_nodes[j].kind.as_ref())
-                            != std::mem::discriminant(zero_actual[j].kind.as_ref())
+                        || core::mem::discriminant(&self.current_nodes[j].data)
+                            != core::mem::discriminant(&zero_actual[j].data)
                 });
             if shape_changed {
                 let mut v = BigInt::from(0);
@@ -82,10 +81,8 @@ impl<'a> Shrinker<'a> {
         if self.replace_int(i, v).await? {
             return Ok(true);
         }
-        let mut prefix: Vec<ChoiceValue> = self.current_nodes[..i]
-            .iter()
-            .map(|n| n.value.clone())
-            .collect();
+        let mut prefix: Vec<ChoiceValue> =
+            self.current_nodes[..i].iter().map(|n| n.value()).collect();
         prefix.push(ChoiceValue::Integer(v.clone()));
         let max_size = crate::native::core::flattened_len(&self.current_nodes) + 16;
         let epoch = self.improvements;

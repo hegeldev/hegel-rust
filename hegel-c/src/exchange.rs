@@ -17,12 +17,14 @@
 //! resumes the engine, which immediately reads the case's outcome off its
 //! handle.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Mutex;
-use std::task::{Context, Poll};
+use alloc::boxed::Box;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use crate::backend::DataSource;
+use crate::control::{InternalError, hegel_internal_unwrap};
+use crate::sys::sync::Mutex;
 
 /// A data source handed across the exchange, one per test case.
 pub(crate) type BoxedDataSource = Box<dyn DataSource + Send + Sync>;
@@ -49,14 +51,16 @@ impl CaseExchange {
         }
     }
 
-    /// Take the case the engine just offered. Panics if the engine suspended
-    /// without offering one, which the alternation protocol rules out.
-    pub(crate) fn take(&self) -> BoxedDataSource {
-        self.slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .expect("engine suspended without offering a test case")
+    /// Take the case the engine just offered. `Err` if the engine suspended
+    /// without offering one, which the alternation protocol rules out — a
+    /// bug in the engine, surfaced by the driver as a run-level error
+    /// instead of a panic.
+    pub(crate) fn take(&self) -> Result<BoxedDataSource, InternalError> {
+        let taken = self.slot.lock().take();
+        Ok(hegel_internal_unwrap!(
+            taken,
+            "the engine suspended without offering a test case"
+        ))
     }
 }
 
@@ -80,7 +84,7 @@ impl Future for Offer<'_> {
         let this = self.get_mut();
         match this.ds.take() {
             Some(ds) => {
-                *this.exchange.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(ds);
+                *this.exchange.slot.lock() = Some(ds);
                 Poll::Pending
             }
             None => Poll::Ready(()),
@@ -99,12 +103,12 @@ pub(crate) fn drive<F: Future>(
     fut: F,
     mut run_case: impl FnMut(BoxedDataSource),
 ) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
-    let mut cx = Context::from_waker(std::task::Waker::noop());
+    let mut fut = core::pin::pin!(fut);
+    let mut cx = Context::from_waker(core::task::Waker::noop());
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(out) => return out,
-            Poll::Pending => run_case(exchange.take()),
+            Poll::Pending => run_case(exchange.take().unwrap()),
         }
     }
 }
@@ -113,10 +117,10 @@ pub(crate) fn drive<F: Future>(
 /// case — e.g. a shrinker driven by a synchronous probe.
 #[cfg(test)]
 pub(crate) fn drive_no_yield<F: Future>(fut: F) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
+    let mut fut = core::pin::pin!(fut);
     match fut
         .as_mut()
-        .poll(&mut Context::from_waker(std::task::Waker::noop()))
+        .poll(&mut Context::from_waker(core::task::Waker::noop()))
     {
         Poll::Ready(out) => out,
         Poll::Pending => unreachable!("future offered a test case but none was expected"),

@@ -1,0 +1,5 @@
+error: #[hegel::test_helper] requires the `TestCase` parameter to be a simple identifier.
+ --> tests/ui/test_helper_non_ident_test_case.rs:5:11
+  |
+5 | fn helper(_: &hegel::TestCase) -> bool {
+  |           ^

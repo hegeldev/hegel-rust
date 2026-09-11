@@ -34,30 +34,16 @@ fn test_multiple_explicit_cases(tc: TestCase) {
 }
 
 #[hegel::test(test_cases = 1)]
-#[hegel::explicit_test_case(x = 42i32)]
-fn test_explicit_case_with_property_test(tc: TestCase) {
-    let x: i32 = tc.draw(generators::integers());
-    assert_eq!(x, x);
-}
-
-#[hegel::test(test_cases = 1)]
 #[hegel::explicit_test_case(x = 42u32)]
 fn test_explicit_case_type_annotated_draw_uses_name(tc: TestCase) {
     let x: u32 = tc.draw(generators::integers());
     let _ = x;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
 struct Point {
     x: i32,
     y: i32,
-}
-
-#[hegel::test(test_cases = 1)]
-#[hegel::explicit_test_case(p = Point { x: 3, y: 4 })]
-fn test_explicit_case_with_user_defined_struct(tc: TestCase) {
-    let p: Point = tc.draw(generators::just(Point { x: 0, y: 0 }));
-    assert_eq!(p, p);
 }
 
 #[hegel::test(test_cases = 1)]
@@ -66,13 +52,6 @@ fn test_explicit_case_with_multiple_structs(tc: TestCase) {
     let p: Point = tc.draw(generators::just(Point { x: 0, y: 0 }));
     let q: Point = tc.draw(generators::just(Point { x: 0, y: 0 }));
     let _ = (p, q);
-}
-
-#[hegel::test(test_cases = 1)]
-#[hegel::explicit_test_case(n = vec![1i32, 2, 3].into_iter().sum::<i32>())]
-fn test_explicit_case_with_function_evaluation(tc: TestCase) {
-    let n: i32 = tc.draw(generators::integers());
-    let _ = n;
 }
 
 #[hegel::test(test_cases = 1)]

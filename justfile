@@ -7,12 +7,6 @@ check-tests:
 check-tests-all-features:
     RUST_BACKTRACE=1 cargo test --all-features
 
-# Same as `check-tests-all-features` but drops `antithesis`, which
-# emits a `compile_error!` on Windows because the upstream SDK is
-# Linux-only.
-check-tests-all-features-windows:
-    RUST_BACKTRACE=1 cargo test --features rand,chrono,jiff,serde_json,serde_json_raw_value
-
 check-tests-minimal-versions:
     # This is an annoyingly specific check and feels like it overly couples CI concerns and check
     # concerns. I don't have a better proposal right now.
@@ -40,6 +34,9 @@ check-format-nix:
 
 check-clippy:
     cargo clippy --workspace --all-features --all-targets -- -D warnings
+    # Without --all-features so the default mode's engine loader (compiled
+    # out under `static-engine`, which --all-features enables) is linted too.
+    cargo clippy --workspace --all-targets -- -D warnings
 
 check-docs:
     cargo +nightly docs-rs
@@ -62,7 +59,12 @@ check-generator-imports:
 check-release-script:
     .github/scripts/test_release.py
 
-check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-generator-imports check-release-script
+# The frontend's list of `hegel_*` functions is generated from the engine
+# source; `just c-header` refreshes it alongside the C header.
+check-ffi-list:
+    scripts/gen-ffi-list.py --check
+
+check-lint: check-format check-clippy check-nocov-style check-test-modules check-internal-asserts check-generator-imports check-release-script check-ffi-list
 
 check-coverage:
     # requires cargo-llvm-cov and llvm-tools-preview
@@ -74,6 +76,12 @@ check-coverage:
 # Build the libhegel C shared library + checked-in C header.
 c-build:
     cargo build -p hegeltest-c --release
+
+# Type-check and build the browser-oriented raw WebAssembly artifact.
+c-build-wasm:
+    cargo check -p hegeltest-c --target wasm32-unknown-unknown
+    cargo build -p hegeltest-c --release --target wasm32-unknown-unknown
+    cargo rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
 
 # Run the hegel-c smoke tests (Rust integration test that dlopens
 # libhegel) and build + run every example C program against both the
@@ -99,7 +107,6 @@ c-test-smoke:
 # follow-up.
 [unix]
 c-test-examples:
-    mkdir -p target/c-examples
     scripts/c-examples-run.sh
 
 [windows]
@@ -119,16 +126,40 @@ c-test-examples:
 c-test-abort:
     RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/abort cargo build -p hegeltest-c
     HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug cargo test -p hegeltest-c
-    mkdir -p target/c-examples
     HEGEL_C_LIB_DIR={{justfile_directory()}}/target/abort/debug scripts/c-examples-run.sh
 
 [windows]
 c-test-abort:
     @echo "Skipping c-test-abort on Windows (bash-based driver, follow-up)"
 
-# Regenerate hegel-c/include/hegel.h from the Rust source (no diff check).
+# Build libhegel as a self-contained no-std cdylib (`--no-default-features
+# --features runtime`, `panic = "abort"` because there is no unwinder
+# without std), check with `nm -D`/`readelf` that it registers no
+# thread-local state and exports only hegel_* (the dlclose-safety
+# contract), and run the smoke tests — including the dlopen/dlclose replay
+# test — against it. Built `--release` so the gate certifies the profile a
+# shipped artifact would use, and into a separate target dir so it doesn't
+# clobber the default std-backed artifacts.
+[linux]
+c-test-runtime:
+    RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/runtime cargo build --release -p hegeltest-c --no-default-features --features runtime
+    RUSTFLAGS="-C panic=abort" CARGO_TARGET_DIR=target/runtime cargo clippy --release -p hegeltest-c --no-default-features --features runtime -- -D warnings
+    scripts/check-no-tls.sh target/runtime/release/libhegel_c.so
+    HEGEL_C_LIB_DIR={{justfile_directory()}}/target/runtime/release cargo test -p hegeltest-c
+
+[macos]
+c-test-runtime:
+    @echo "Skipping c-test-runtime on macOS (GNU nm -D based check, Linux-only for now)"
+
+[windows]
+c-test-runtime:
+    @echo "Skipping c-test-runtime on Windows (GNU nm -D based check, Linux-only for now)"
+
+# Regenerate hegel-c/include/hegel.h and the frontend's src/ffi/sys/fns.rs
+# from the Rust source (no diff check).
 c-header:
-    HEGEL_C_HEADER_WRITE=1 cargo build -p hegeltest-c
+    HEGEL_C_HEADER_WRITE=1 cargo test -p hegeltest-c --test header_drift
+    scripts/gen-ffi-list.py
 
 # Run a fast core of the suite under Miri to catch undefined behaviour in the
 # native engine and the in-process C-ABI boundary hegeltest drives it through.
@@ -155,8 +186,10 @@ c-header:
 #
 # CI=1 disables the on-disk failure database (we don't want Miri writing files);
 # isolation is disabled because the engine seeds its PRNG from OS entropy.
+# --features static-engine links the engine in as an rlib: Miri cannot call
+# into a real shared library, but this way it interprets the whole engine.
 check-miri:
-    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --test test_miri
+    CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test --features static-engine --test test_miri
     CI=1 MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p hegeltest-c --test c_abi_miri
 
 # these aliases are provided as ux improvements for local developers. CI should use the longer

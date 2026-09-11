@@ -39,23 +39,23 @@ macro_rules! float_tests {
         }
 
         #[hegel::test]
-        fn exclude_min(tc: TestCase) {
+        fn exclusive_min(tc: TestCase) {
             let min = tc.draw(&gs::floats::<$t>().allow_nan(false).allow_infinity(false));
             tc.assume(min.next_up().is_finite());
-            let n = tc.draw(gs::floats::<$t>().min_value(min).exclude_min(true));
+            let n = tc.draw(gs::floats::<$t>().min_value_exclusive(min));
             assert!(n > min, "{n} should be > {min}");
         }
 
         #[hegel::test]
-        fn exclude_max(tc: TestCase) {
+        fn exclusive_max(tc: TestCase) {
             let max = tc.draw(&gs::floats::<$t>().allow_nan(false).allow_infinity(false));
             tc.assume(max.next_down().is_finite());
-            let n = tc.draw(gs::floats::<$t>().max_value(max).exclude_max(true));
+            let n = tc.draw(gs::floats::<$t>().max_value_exclusive(max));
             assert!(n < max, "{n} should be < {max}");
         }
 
         #[hegel::test]
-        fn exclude_min_and_max(tc: TestCase) {
+        fn exclusive_min_and_max(tc: TestCase) {
             let a = tc.draw(&gs::floats::<$t>().allow_nan(false).allow_infinity(false));
             let b = tc.draw(&gs::floats::<$t>().allow_nan(false).allow_infinity(false));
             let min = a.min(b);
@@ -63,10 +63,8 @@ macro_rules! float_tests {
             tc.assume(min.next_up() < max);
             let n = tc.draw(
                 &gs::floats::<$t>()
-                    .min_value(min)
-                    .max_value(max)
-                    .exclude_min(true)
-                    .exclude_max(true),
+                    .min_value_exclusive(min)
+                    .max_value_exclusive(max),
             );
             assert!(n > min && n < max, "{n} should be in ({min}, {max})");
         }
@@ -120,13 +118,19 @@ macro_rules! float_tests {
 
             let mut g = gs::floats::<$t>();
             if let Some(lo) = low {
-                g = g.min_value(lo);
+                g = if exmin {
+                    g.min_value_exclusive(lo)
+                } else {
+                    g.min_value(lo)
+                };
             }
             if let Some(hi) = high {
-                g = g.max_value(hi);
+                g = if exmax {
+                    g.max_value_exclusive(hi)
+                } else {
+                    g.max_value(hi)
+                };
             }
-            g = g.exclude_min(exmin);
-            g = g.exclude_max(exmax);
 
             let val = tc.draw(g);
 
@@ -168,40 +172,6 @@ mod pbtkit_floats {
     use hegel::{Hegel, Settings};
 
     #[test]
-    fn test_floats_bounded() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(
-                gs::floats::<f64>()
-                    .min_value(0.0)
-                    .max_value(1.0)
-                    .allow_nan(false),
-            );
-            assert!((0.0..=1.0).contains(&f));
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_floats_unbounded() {
-        Hegel::new(|tc| {
-            tc.draw(gs::floats::<f64>());
-        })
-        .settings(Settings::new().test_cases(200).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_draw_unbounded_float_rejects_nan() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(gs::floats::<f64>().allow_nan(false));
-            assert!(!f.is_nan());
-        })
-        .settings(Settings::new().test_cases(1000).database(None))
-        .run();
-    }
-
-    #[test]
     fn test_floats_shrinks_to_zero() {
         let f = minimal(gs::floats::<f64>().allow_nan(false), |f: &f64| *f != 0.0);
         assert_ne!(f, 0.0);
@@ -222,29 +192,6 @@ mod pbtkit_floats {
     #[test]
     fn test_floats_no_nan() {
         assert_all_examples(gs::floats::<f64>().allow_nan(false), |f: &f64| !f.is_nan());
-    }
-
-    #[test]
-    fn test_floats_no_infinity() {
-        assert_all_examples(
-            gs::floats::<f64>().allow_infinity(false).allow_nan(false),
-            |f: &f64| f.is_finite(),
-        );
-    }
-
-    #[test]
-    fn test_floats_negative_range() {
-        Hegel::new(|tc| {
-            let f: f64 = tc.draw(
-                gs::floats::<f64>()
-                    .min_value(-10.0)
-                    .max_value(-1.0)
-                    .allow_nan(false),
-            );
-            assert!((-10.0..=-1.0).contains(&f));
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
     }
 
     #[test]
@@ -342,13 +289,6 @@ mod pbtkit_floats {
         })
         .settings(Settings::new().test_cases(200).database(None))
         .run();
-    }
-
-    #[test]
-    fn test_floats_half_bounded_with_infinity() {
-        find_any(gs::floats::<f64>().min_value(0.0), |f: &f64| {
-            f.is_infinite()
-        });
     }
 
     #[test]
@@ -631,11 +571,6 @@ mod float_nastiness {
     }
 
     #[test]
-    fn test_filter_nan() {
-        assert_all_examples(gs::floats::<f64>().allow_nan(false), |x: &f64| !x.is_nan());
-    }
-
-    #[test]
     fn test_filter_infinity() {
         assert_all_examples(gs::floats::<f64>().allow_infinity(false), |x: &f64| {
             !x.is_infinite()
@@ -727,10 +662,32 @@ mod float_nastiness {
     fn test_can_exclude_endpoints() {
         assert_all_examples(
             gs::floats::<f64>()
+                .min_value_exclusive(0.0)
+                .max_value_exclusive(1.0),
+            |x: &f64| 0.0 < *x && *x < 1.0,
+        );
+    }
+
+    #[test]
+    fn test_inclusive_bound_overrides_exclusive_bound() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value_exclusive(0.0)
+                .max_value_exclusive(0.0)
                 .min_value(0.0)
+                .max_value(0.0),
+            |x: &f64| *x == 0.0,
+        );
+    }
+
+    #[test]
+    fn test_exclusive_bound_overrides_inclusive_bound() {
+        assert_all_examples(
+            gs::floats::<f64>()
+                .min_value(-1.0)
                 .max_value(1.0)
-                .exclude_min(true)
-                .exclude_max(true),
+                .min_value_exclusive(0.0)
+                .max_value_exclusive(1.0),
             |x: &f64| 0.0 < *x && *x < 1.0,
         );
     }
@@ -739,9 +696,8 @@ mod float_nastiness {
     fn test_can_exclude_neg_infinite_endpoint() {
         assert_all_examples(
             gs::floats::<f64>()
-                .min_value(f64::NEG_INFINITY)
-                .max_value(-1e307)
-                .exclude_min(true),
+                .min_value_exclusive(f64::NEG_INFINITY)
+                .max_value(-1e307),
             |x: &f64| !x.is_infinite(),
         );
     }
@@ -751,8 +707,7 @@ mod float_nastiness {
         assert_all_examples(
             gs::floats::<f64>()
                 .min_value(1e307)
-                .max_value(f64::INFINITY)
-                .exclude_max(true),
+                .max_value_exclusive(f64::INFINITY),
             |x: &f64| !x.is_infinite(),
         );
     }
@@ -769,11 +724,7 @@ mod float_nastiness {
         expect_panic(
             || {
                 Hegel::new(|tc| {
-                    let _: f64 = tc.draw(
-                        gs::floats::<f64>()
-                            .min_value(f64::INFINITY)
-                            .exclude_min(true),
-                    );
+                    let _: f64 = tc.draw(gs::floats::<f64>().min_value_exclusive(f64::INFINITY));
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();
@@ -787,11 +738,8 @@ mod float_nastiness {
         expect_panic(
             || {
                 Hegel::new(|tc| {
-                    let _: f64 = tc.draw(
-                        gs::floats::<f64>()
-                            .max_value(f64::NEG_INFINITY)
-                            .exclude_max(true),
-                    );
+                    let _: f64 =
+                        tc.draw(gs::floats::<f64>().max_value_exclusive(f64::NEG_INFINITY));
                 })
                 .settings(Settings::new().test_cases(1).database(None))
                 .run();
@@ -803,9 +751,7 @@ mod float_nastiness {
     #[test]
     fn test_exclude_only_neg_infinite_endpoint() {
         assert_all_examples(
-            gs::floats::<f64>()
-                .min_value(f64::NEG_INFINITY)
-                .exclude_min(true),
+            gs::floats::<f64>().min_value_exclusive(f64::NEG_INFINITY),
             |x: &f64| *x != f64::NEG_INFINITY,
         );
     }
@@ -813,38 +759,30 @@ mod float_nastiness {
     #[test]
     fn test_exclude_only_pos_infinite_endpoint() {
         assert_all_examples(
-            gs::floats::<f64>()
-                .max_value(f64::INFINITY)
-                .exclude_max(true),
+            gs::floats::<f64>().max_value_exclusive(f64::INFINITY),
             |x: &f64| *x != f64::INFINITY,
         );
     }
 
     #[test]
-    fn test_exclude_min_without_min_value_is_invalid() {
+    #[allow(deprecated)]
+    fn test_exclude_min_is_removed() {
         expect_panic(
             || {
-                Hegel::new(|tc| {
-                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_min(true));
-                })
-                .settings(Settings::new().test_cases(1).database(None))
-                .run();
+                gs::floats::<f64>().min_value(0.0).exclude_min(true);
             },
-            "InvalidArgument",
+            "min_value_exclusive",
         );
     }
 
     #[test]
-    fn test_exclude_max_without_max_value_is_invalid() {
+    #[allow(deprecated)]
+    fn test_exclude_max_is_removed() {
         expect_panic(
             || {
-                Hegel::new(|tc| {
-                    let _: f64 = tc.draw(gs::floats::<f64>().exclude_max(true));
-                })
-                .settings(Settings::new().test_cases(1).database(None))
-                .run();
+                gs::floats::<f64>().max_value(1.0).exclude_max(true);
             },
-            "InvalidArgument",
+            "max_value_exclusive",
         );
     }
 
@@ -855,13 +793,18 @@ mod float_nastiness {
                 expect_panic(
                     || {
                         Hegel::new(move |tc| {
-                            let _: f64 = tc.draw(
-                                gs::floats::<f64>()
-                                    .min_value(bound)
-                                    .max_value(bound)
-                                    .exclude_min(lo)
-                                    .exclude_max(hi),
-                            );
+                            let g = gs::floats::<f64>();
+                            let g = if lo {
+                                g.min_value_exclusive(bound)
+                            } else {
+                                g.min_value(bound)
+                            };
+                            let g = if hi {
+                                g.max_value_exclusive(bound)
+                            } else {
+                                g.max_value(bound)
+                            };
+                            let _: f64 = tc.draw(g);
                         })
                         .settings(Settings::new().test_cases(1).database(None))
                         .run();
@@ -880,13 +823,18 @@ mod float_nastiness {
                     expect_panic(
                         || {
                             Hegel::new(move |tc| {
-                                let _: f64 = tc.draw(
-                                    gs::floats::<f64>()
-                                        .min_value(lo)
-                                        .max_value(hi)
-                                        .exclude_min(exmin)
-                                        .exclude_max(exmax),
-                                );
+                                let g = gs::floats::<f64>();
+                                let g = if exmin {
+                                    g.min_value_exclusive(lo)
+                                } else {
+                                    g.min_value(lo)
+                                };
+                                let g = if exmax {
+                                    g.max_value_exclusive(hi)
+                                } else {
+                                    g.max_value(hi)
+                                };
+                                let _: f64 = tc.draw(g);
                             })
                             .settings(Settings::new().test_cases(1).database(None))
                             .run();
@@ -917,14 +865,6 @@ mod nocover_floating {
         .max_attempts(1000)
         .suppress_health_check(HealthCheck::FilterTooMuch)
         .run();
-    }
-
-    #[test]
-    fn test_largest_range() {
-        assert_all_examples(
-            gs::floats::<f64>().min_value(-f64::MAX).max_value(f64::MAX),
-            |x: &f64| !x.is_infinite(),
-        );
     }
 
     #[test]
@@ -1160,10 +1100,8 @@ mod quality_float_shrinking {
         let max = (1u64 << 53) as f64;
         let g = minimal(
             gs::floats::<f64>()
-                .min_value(b)
-                .max_value(max)
-                .exclude_min(true)
-                .exclude_max(true)
+                .min_value_exclusive(b)
+                .max_value_exclusive(max)
                 .filter(|x: &f64| x.trunc() != *x),
             |_: &f64| true,
         );

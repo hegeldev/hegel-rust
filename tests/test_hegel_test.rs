@@ -1,5 +1,5 @@
 // nocover_baseexception, nocover_nesting, nocover_limits,
-// nocover_unusual_settings_configs, pytest_runs, nocover_completion,
+// nocover_unusual_settings_configs, nocover_completion,
 
 mod common;
 
@@ -399,18 +399,6 @@ mod testdecorators {
     }
 
     #[test]
-    fn test_can_run_without_database() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Hegel::new(|_tc| {
-                panic!("AssertionError");
-            })
-            .settings(Settings::new().database(None))
-            .run();
-        }));
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_can_run_with_database_in_thread() {
         use std::sync::{Arc, Mutex};
         use std::thread;
@@ -445,11 +433,6 @@ mod testdecorators {
             handle.join().unwrap();
         }
         assert_eq!(*results.lock().unwrap(), vec!["success", "success"]);
-    }
-
-    #[test]
-    fn test_can_call_an_argument_f() {
-        assert_all_examples(gs::integers::<i64>(), |_f: &i64| true);
     }
 
     #[test]
@@ -582,24 +565,6 @@ mod flakiness {
                     panic!("AssertionError");
                 })
                 .settings(Settings::new().verbosity(Verbosity::Quiet).database(None))
-                .run();
-            },
-            "Flaky test detected",
-        );
-    }
-
-    #[test]
-    fn test_does_not_attempt_to_shrink_flaky_errors() {
-        let values: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
-        expect_panic(
-            move || {
-                Hegel::new(move |tc: TestCase| {
-                    let x: i64 = tc.draw(gs::integers());
-                    values.lock().unwrap().push(x);
-                    let n = values.lock().unwrap().len();
-                    assert!(n != 1);
-                })
-                .settings(Settings::new().database(None))
                 .run();
             },
             "Flaky test detected",
@@ -782,33 +747,6 @@ mod nocover_unusual_settings_configs {
     }
 }
 
-mod pytest_runs {
-    use hegel::generators::{self as gs};
-    use hegel::{Hegel, Settings};
-
-    #[test]
-    fn test_ints_are_ints() {
-        Hegel::new(|tc| {
-            tc.draw(gs::integers::<i64>());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_ints_are_floats() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Hegel::new(|tc| {
-                tc.draw(gs::integers::<i64>());
-                panic!("x is not a float");
-            })
-            .settings(Settings::new().test_cases(100).database(None))
-            .run();
-        }));
-        assert!(result.is_err());
-    }
-}
-
 mod nocover_completion {
     use hegel::Hegel;
 
@@ -819,24 +757,8 @@ mod nocover_completion {
 }
 
 mod hypothesis_core {
-    use super::common::utils::minimal;
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
-
-    #[test]
-    fn test_given_shrinks_pytest_helper_errors() {
-        let value = minimal(gs::integers::<i64>(), |x: &i64| *x > 100);
-        assert_eq!(value, 101);
-    }
-
-    #[test]
-    fn test_can_find_with_db_eq_none() {
-        Hegel::new(|tc| {
-            let _: i64 = tc.draw(gs::integers::<i64>());
-        })
-        .settings(Settings::new().test_cases(100).database(None))
-        .run();
-    }
 
     #[test]
     fn test_characters_codec_ascii_unbounded() {

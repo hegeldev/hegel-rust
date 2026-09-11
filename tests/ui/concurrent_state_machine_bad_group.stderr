@@ -1,0 +1,5 @@
+error: unsupported #[rule] argument; expected `group = "..."`
+ --> tests/ui/concurrent_state_machine_bad_group.rs:8:12
+  |
+8 |     #[rule(grp = "rw")]
+  |            ^^^

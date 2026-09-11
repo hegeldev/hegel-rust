@@ -1,13 +1,6 @@
 use super::*;
 use crate::runner::Phase;
 
-static CI_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[test]
-fn test_settings_verbosity() {
-    let _ = Settings::new().verbosity(Verbosity::Debug);
-}
-
 #[test]
 fn test_settings_phases() {
     let s = Settings::new().phases([Phase::Explicit, Phase::Generate]);
@@ -39,17 +32,17 @@ fn test_settings_report_multiple_failures_setter() {
 }
 
 #[test]
-fn test_settings_backend_default_unset() {
+fn test_settings_backend_defaults_to_the_prng() {
     let s = Settings::new();
-    assert_eq!(s.backend, None);
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
 fn test_settings_backend_setter() {
     let s = Settings::new().backend(Backend::Urandom);
-    assert_eq!(s.backend, Some(Backend::Urandom));
+    assert_eq!(s.backend, Backend::Urandom);
     let s = s.backend(Backend::Default);
-    assert_eq!(s.backend, Some(Backend::Default));
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
@@ -62,24 +55,85 @@ fn test_settings_has_phase() {
 }
 
 #[test]
-fn test_is_in_ci_some_expected_variant() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let ci = std::env::var_os("CI");
-    unsafe {
-        std::env::remove_var("CI");
-        std::env::set_var("TF_BUILD", "true");
-    }
-    let result = is_in_ci();
-    unsafe {
-        std::env::remove_var("TF_BUILD");
-        if let Some(val) = ci {
-            std::env::set_var("CI", val);
-        }
-    }
-    assert!(
-        result,
-        "TF_BUILD=true should be detected as a CI environment"
-    );
+fn test_env_override_replaces_test_cases() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "17".to_string()));
+    assert_eq!(s.test_cases, 17);
+}
+
+#[test]
+fn test_env_override_test_cases_absent_is_ignored() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|_| None);
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+fn test_env_override_test_cases_empty_is_ignored() {
+    let s = Settings::new()
+        .test_cases(5)
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(String::new));
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_TEST_CASES must be a positive integer, got \"lots\"")]
+fn test_env_override_test_cases_non_numeric_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "lots".to_string()));
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_TEST_CASES must be a positive integer, got \"0\"")]
+fn test_env_override_test_cases_zero_is_a_usage_error() {
+    Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_TEST_CASES").then(|| "0".to_string()));
+}
+
+#[test]
+fn test_env_override_database_disabled_keyword() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(Some("custom".to_string()))
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(|| "disabled".to_string()));
+    assert_eq!(s.database, Database::Disabled);
+}
+
+#[test]
+fn test_env_override_database_path() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(None)
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(|| "my-db".to_string()));
+    assert_eq!(s.database, Database::Path("my-db".to_string()));
+}
+
+#[test]
+fn test_env_override_database_empty_is_ignored() {
+    use crate::runner::Database;
+    let s = Settings::new()
+        .database(Some("custom".to_string()))
+        .with_env_overrides_from(|key| (key == "HEGEL_DATABASE").then(String::new));
+    assert_eq!(s.database, Database::Path("custom".to_string()));
+}
+
+#[test]
+fn test_env_override_statistics_enables_reporting() {
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "1".to_string()));
+    assert!(s.show_statistics);
+}
+
+#[test]
+fn test_env_override_statistics_zero_and_empty_are_ignored() {
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(|| "0".to_string()));
+    assert!(!s.show_statistics);
+    let s = Settings::new()
+        .with_env_overrides_from(|key| (key == "HEGEL_STATISTICS").then(String::new));
+    assert!(!s.show_statistics);
 }
 
 #[test]
@@ -88,7 +142,22 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::generators as gs;
     use crate::runner::Database;
 
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if std::env::var_os("HEGEL_DOT_HEGEL_TEST_CHILD").is_some() {
+        let settings = Settings::new();
+        assert_eq!(settings.database, Database::Unset);
+        let result = std::panic::catch_unwind(|| {
+            Hegel::new(|tc| {
+                let _ = tc.draw(gs::booleans());
+                panic!("stored failure");
+            })
+            .__database_key("dot_hegel_child".to_string())
+            .settings(Settings::new().test_cases(1))
+            .run();
+        });
+        assert!(result.is_err());
+        assert!(std::path::Path::new(".hegel").is_dir());
+        return;
+    }
 
     const CI_VAR_NAMES: &[&str] = &[
         "CI",
@@ -103,53 +172,100 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
         "TEAMCITY_VERSION",
         "bamboo.buildKey",
     ];
-    let saved: Vec<(&str, Option<std::ffi::OsString>)> = CI_VAR_NAMES
-        .iter()
-        .map(|name| (*name, std::env::var_os(name)))
-        .collect();
-    unsafe {
-        for (name, _) in &saved {
-            std::env::remove_var(name);
-        }
-    }
     let tmp = tempfile::TempDir::new().unwrap();
-    let prev_cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tmp.path()).unwrap();
-
-    let settings = Settings::new();
-    assert_eq!(settings.database, Database::Unset);
-    Hegel::new(|tc| {
-        let _ = tc.draw(gs::booleans());
-    })
-    .settings(settings.test_cases(1))
-    .run();
-
-    std::env::set_current_dir(&prev_cwd).unwrap();
-    unsafe {
-        for (name, val) in saved {
-            if let Some(v) = val {
-                std::env::set_var(name, v);
-            }
-        }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "runner::tests::test_native_engine_creates_default_dot_hegel_when_database_unset",
+        ])
+        .current_dir(tmp.path())
+        .env("HEGEL_DOT_HEGEL_TEST_CHILD", "1");
+    for name in CI_VAR_NAMES {
+        child.env_remove(name);
     }
+    child.env_remove("HEGEL_DEFAULT_PROFILE");
+    child.env_remove("HEGEL_CONFIG");
+    child.env_remove("ANTITHESIS_OUTPUT_DIR");
+    let output = child.output().unwrap();
+    assert!(
+        output.status.success(),
+        "child test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
-fn test_settings_new_in_ci_disables_database() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let key = "TEAMCITY_VERSION";
-    let had_key = std::env::var_os(key).is_some();
-    unsafe {
-        std::env::set_var(key, "1");
-    }
-    let settings = Settings::new();
-    if !had_key {
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
+fn test_from_profile_ci_disables_database_derandomizes_and_prints_blobs() {
+    use crate::runner::Database;
+    let settings = Settings::from_profile("ci");
     assert_eq!(settings.database, Database::Disabled);
     assert!(settings.derandomize);
+    assert!(settings.print_blob);
+}
+
+#[test]
+fn test_from_profile_base_is_environment_independent() {
+    use crate::runner::Database;
+    let settings = Settings::from_profile("base");
+    assert_eq!(settings.database, Database::Unset);
+    assert!(!settings.derandomize);
+    assert!(!settings.print_blob);
+    assert_eq!(settings.test_cases, 100);
+    assert_eq!(settings.seed, None);
+    assert_eq!(settings.backend, crate::runner::Backend::Default);
+    assert!(settings.suppress_health_check.is_empty());
+    assert_eq!(settings.phases.len(), 5);
+    assert!(!settings.report_multiple_failures);
+    assert!(!settings.show_statistics);
+}
+
+#[test]
+#[should_panic(expected = "unknown settings profile \"no_such_profile\"")]
+fn test_from_profile_unknown_name_is_a_usage_error() {
+    Settings::from_profile("no_such_profile");
+}
+
+#[test]
+fn test_register_profile_round_trips() {
+    Settings::register_profile(
+        "runner_tests_registered",
+        Settings::from_profile("base").test_cases(17),
+    );
+    let settings = Settings::from_profile("runner_tests_registered");
+    assert_eq!(settings.test_cases, 17);
+}
+
+#[test]
+#[should_panic(expected = "invalid profile name \"bad name\"")]
+fn test_register_profile_rejects_invalid_names() {
+    Settings::register_profile("bad name", Settings::from_profile("base"));
+}
+
+#[test]
+#[should_panic(expected = "reserved profile name \"base\"")]
+fn test_register_profile_rejects_reserved_names() {
+    Settings::register_profile("base", Settings::from_profile("base"));
+}
+
+#[test]
+fn test_try_from_profile_reports_failure_without_panicking() {
+    assert!(Settings::try_from_profile("base").is_ok());
+    let e = Settings::try_from_profile("no_such_profile").unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("unknown settings profile \"no_such_profile\""),
+        "got: {e}"
+    );
+    let dyn_err: &dyn std::error::Error = &e;
+    assert!(dyn_err.source().is_none());
+}
+
+#[test]
+#[should_panic(expected = "invalid profile name \"bad name\"")]
+fn test_set_default_profile_rejects_invalid_names() {
+    Settings::set_default_profile("bad name");
 }
 
 #[test]
@@ -185,6 +301,45 @@ fn hegel_run_skips_when_generate_phase_disabled() {
         .run();
 }
 
+#[test]
+fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
+    let s = Settings::new().test_cases(50).for_single_test_case();
+    assert_eq!(s.test_cases, 1);
+    assert_eq!(
+        s.suppress_health_check,
+        vec![HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge]
+    );
+}
+
+#[test]
+fn test_settings_for_single_test_case_keeps_existing_suppressions() {
+    let s = Settings::new()
+        .suppress_health_check([HealthCheck::TestCasesTooLarge, HealthCheck::FilterTooMuch])
+        .for_single_test_case();
+    assert_eq!(
+        s.suppress_health_check,
+        vec![
+            HealthCheck::TestCasesTooLarge,
+            HealthCheck::FilterTooMuch,
+            HealthCheck::TooSlow
+        ]
+    );
+}
+
+#[test]
+fn hegel_single_test_case_runs_exactly_one_case() {
+    use crate::generators as gs;
+    let mut count = 0;
+    Hegel::new(|tc: TestCase| {
+        tc.draw(gs::booleans());
+        count += 1;
+    })
+    .settings(Settings::new().test_cases(50).verbosity(Verbosity::Quiet))
+    .__single_test_case()
+    .run();
+    assert_eq!(count, 1);
+}
+
 mod reproduce {
     use super::*;
     use crate::ffi::{RunHandle, SettingsHandle};
@@ -214,9 +369,9 @@ mod reproduce {
                 c_tc,
                 &mut test_fn,
                 false,
-                Mode::TestRun,
                 Verbosity::Quiet,
                 &crate::test_case::RunOutput::resolve(),
+                None,
             );
         }
         let result = run.result();

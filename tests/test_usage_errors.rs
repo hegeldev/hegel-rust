@@ -1,8 +1,8 @@
 //! Tests for the unified invalid-argument (usage) error mechanism.
 //!
 //! A usage error — a generator configured with `max < min`, a float range that
-//! contains no values, an empty `sampled_from`/`one_of`, an unsatisfiable
-//! filter, a non-finite `tc.target()` score, ... — is a mistake in how the
+//! contains no values, an empty `sampled_from`/`one_of`, a non-finite
+//! `tc.target()` score, ... — is a mistake in how the
 //! test is *written*, not a property that failed on some input. The framework
 //! must abort the run with the error message directly, rather than catching it
 //! mid-draw and misreporting (and shrinking) it as a discovered counterexample
@@ -72,11 +72,7 @@ fn target_duplicate_label_is_a_clean_usage_error() {
 #[test]
 fn float_range_with_no_values_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
-        let _: f64 = tc.draw(
-            gs::floats::<f64>()
-                .min_value(f64::INFINITY)
-                .exclude_min(true),
-        );
+        let _: f64 = tc.draw(gs::floats::<f64>().min_value_exclusive(f64::INFINITY));
     });
     assert_clean_usage_error(&msg, "InvalidArgument");
 }
@@ -95,6 +91,14 @@ fn integer_max_below_min_is_a_clean_usage_error() {
         let _: i32 = tc.draw(gs::integers::<i32>().min_value(5).max_value(3));
     });
     assert_clean_usage_error(&msg, "Cannot have max_value < min_value");
+}
+
+#[test]
+fn print_as_call_empty_function_name_is_a_clean_usage_error() {
+    let msg = capture_run_panic(|tc| {
+        tc.draw(gs::integers::<u64>().map(|n| n + 1).print_as_call(""));
+    });
+    assert_clean_usage_error(&msg, "non-empty function name");
 }
 
 #[test]
@@ -122,30 +126,6 @@ fn uuid_version_outside_1_to_5_is_a_clean_usage_error() {
 }
 
 #[test]
-fn hashset_min_size_above_distinct_pool_is_a_clean_usage_error() {
-    let msg = capture_run_panic(|tc| {
-        let _: std::collections::HashSet<i64> =
-            tc.draw(gs::hashsets(gs::sampled_from(vec![1_i64, 2, 3])).min_size(5));
-    });
-    assert_clean_usage_error(
-        &msg,
-        "min_size 5 is larger than the 3 distinct values the element generator can produce",
-    );
-}
-
-#[test]
-fn hashmap_min_size_above_distinct_key_pool_is_a_clean_usage_error() {
-    let msg = capture_run_panic(|tc| {
-        let _: std::collections::HashMap<i64, bool> =
-            tc.draw(gs::hashmaps(gs::sampled_from(vec![1_i64, 2, 3]), gs::booleans()).min_size(5));
-    });
-    assert_clean_usage_error(
-        &msg,
-        "min_size 5 is larger than the 3 distinct keys the key generator can produce",
-    );
-}
-
-#[test]
 fn sampled_from_empty_drawn_inline_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
         let _: i32 = tc.draw(gs::sampled_from(Vec::<i32>::new()));
@@ -156,7 +136,7 @@ fn sampled_from_empty_drawn_inline_is_a_clean_usage_error() {
 #[test]
 fn one_of_empty_drawn_inline_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
-        let _: i32 = tc.draw(gs::one_of(
+        let _: i32 = tc.draw_silent(gs::one_of(
             Vec::<hegel::generators::BoxedGenerator<'_, i32>>::new(),
         ));
     });
@@ -173,14 +153,6 @@ fn duration_max_below_min_is_a_clean_usage_error() {
         );
     });
     assert_clean_usage_error(&msg, "Cannot have max_value < min_value");
-}
-
-#[test]
-fn unsatisfiable_filter_is_a_clean_usage_error() {
-    let msg = capture_run_panic(|tc| {
-        let _: i64 = tc.draw(gs::sampled_from(vec![0_i64, 1]).filter(|x: &i64| *x < 0));
-    });
-    assert_clean_usage_error(&msg, "Unsatisfiable filter");
 }
 
 #[test]

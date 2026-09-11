@@ -1,6 +1,12 @@
-use crate::test_case::{TestCase, invalid_argument, labels};
+use super::{combine_labels, label_from_name};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::test_case::{TestCase, invalid_argument};
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+const MAP_LABEL: u64 = label_from_name("hegel.map");
+const FLAT_MAP_LABEL: u64 = label_from_name("hegel.flat_map");
+const FILTER_LABEL: u64 = label_from_name("hegel.filter");
 
 /// The core trait for all generators.
 ///
@@ -10,6 +16,27 @@ pub trait Generator<T> {
     /// Produce a value.
     #[doc(hidden)]
     fn do_draw(&self, tc: &TestCase) -> T;
+
+    /// The label identifying this generator to the engine.
+    ///
+    /// A label is an opaque `u64` with no meaning beyond identity: the engine
+    /// treats two spans with the same label as coming from the same
+    /// generator, and so as candidates for swapping, duplicating and
+    /// reordering when it shrinks and mutates test cases. Two generators that
+    /// draw the same shape of value should share a label, and generators
+    /// that draw different shapes should not.
+    ///
+    /// The default label is derived from the generator's type name, which is
+    /// right for a generator with no component generators. A generator built
+    /// from other generators should combine a label of its own with its
+    /// components' labels, so that, say, a list of integers and a list of
+    /// strings get different labels while every list of integers gets the
+    /// same one; see [`combine_labels`](super::combine_labels) for how. A
+    /// generator that merely wraps another without changing what it draws
+    /// should return the wrapped generator's label.
+    fn label(&self) -> u64 {
+        label_from_name(std::any::type_name::<Self>())
+    }
 
     /// Transform generated values using a function.
     ///
@@ -81,19 +108,8 @@ pub trait Generator<T> {
         Filtered {
             source: self,
             predicate,
-            enumerated: std::sync::OnceLock::new(),
             _phantom: PhantomData,
         }
-    }
-
-    /// Return all possible values if this generator has a known finite value set.
-    ///
-    /// Used by [`Filtered`]: instead of rejection sampling, enumerate the
-    /// valid elements and pick one directly. Mirrors Hypothesis's
-    /// `SampledFromStrategy.do_filtered_draw` optimization.
-    #[doc(hidden)]
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        None
     }
 
     /// Convert this generator into a type-erased boxed generator.
@@ -101,6 +117,14 @@ pub trait Generator<T> {
     /// This is needed when you have generators of different concrete types
     /// but the same output type and need to store them together, e.g. in a
     /// `Vec` or when passing to [`one_of()`](super::one_of).
+    ///
+    /// A `BoxedGenerator<T>` is a [`PrintableGenerator`] whenever `T`
+    /// implements [`PrettyPrintable`], printing each drawn value's own
+    /// representation. For a `T` that is not [`PrettyPrintable`], or to keep
+    /// a custom printing strategy (a
+    /// [`print_with`](Generator::print_with), say) through the type erasure,
+    /// box with [`boxed_printable`](PrintableGenerator::boxed_printable)
+    /// instead.
     ///
     /// # Example
     ///
@@ -123,15 +147,255 @@ pub trait Generator<T> {
             inner: Arc::new(self),
         }
     }
+
+    /// Make this generator printable by describing each drawn value with `print`.
+    ///
+    /// This is the fine-grained control point for printing: the resulting
+    /// generator satisfies [`PrintableGenerator`] for any source generator,
+    /// with the drawn value's representation produced by `print` instead of
+    /// the value's own [`PrettyPrintable`] implementation.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// let masked = gs::text().print_with(|_, printer| printer.text("<secret>"));
+    /// ```
+    fn print_with<F>(self, print: F) -> PrintedWith<Self, F>
+    where
+        Self: Sized,
+        F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
+    {
+        PrintedWith {
+            source: self,
+            print,
+        }
+    }
+
+    /// Make this generator printable by printing each drawn value's own
+    /// [`PrettyPrintable`] representation.
+    ///
+    /// Useful when a combinator chain loses printability — e.g. a `map` to a
+    /// type that does implement [`PrettyPrintable`] but whose source cannot
+    /// prove it, or a hand-written [`Generator`] implementation.
+    fn print_as_value(self) -> PrintedAsValue<Self>
+    where
+        Self: Sized,
+        T: PrettyPrintable,
+    {
+        PrintedAsValue { source: self }
+    }
+
+    /// Make this generator printable by printing each drawn value's `Debug`
+    /// representation.
+    ///
+    /// This works for any `Debug` type, so it is the escape hatch for types
+    /// the orphan rule keeps out of [`PrettyPrintable`] — standard-library
+    /// and third-party types alike. Derived-`Debug` output is re-laid-out
+    /// through the printer (see
+    /// [`print_debug_repr`](crate::pretty::print_debug_repr)), so large
+    /// values wrap like natively printed ones. On a `map` whose `Debug`
+    /// output is not pastable Rust,
+    /// [`print_as_call`](Mapped::print_as_call) can report the mapped
+    /// expression instead.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = gs::text().map(PathBuf::from).print_as_debug();
+    /// ```
+    fn print_as_debug(self) -> PrintedAsDebug<Self>
+    where
+        Self: Sized,
+        T: std::fmt::Debug,
+    {
+        PrintedAsDebug { source: self }
+    }
+}
+
+/// A [`Generator`] that can print each value's representation as it draws it.
+///
+/// Only printable generators can be passed to [`TestCase::draw`]; a plain
+/// [`Generator`] can still be drawn with [`TestCase::draw_silent`]. Most
+/// generators in the library are printable — leaves unconditionally,
+/// structural combinators (collections, tuples, `optional`, `one_of!`,
+/// `flat_map`, `recursive`) whenever their component generators are, and value-transforming
+/// combinators (`map`, `filter`, `just`, `sampled_from`, `boxed`, composites) whenever
+/// the produced type implements [`PrettyPrintable`]. For everything else
+/// there are [`Generator::print_as_value`], [`Generator::print_as_debug`],
+/// and [`Generator::print_with`].
+///
+/// # Contract
+///
+/// `do_draw_and_print` must draw **exactly** the same choices as
+/// [`Generator::do_draw`] — the engine explores with the silent path and
+/// replays failures with the printing path, so any divergence makes failures
+/// unreplayable. The reliable way to satisfy this is to write the drawing
+/// logic once: implement `do_draw_and_print`, and implement
+/// [`Generator::do_draw`] as
+/// `self.do_draw_and_print(tc, &mut PrettyPrinter::noop())` — the no-op
+/// printer discards all output, so both paths run the same body by
+/// construction. Guard any work done purely for printing (formatting a
+/// value, say) with [`PrettyPrinter::should_print`] to keep the silent path
+/// cheap.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot print the values it draws",
+    label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
+    note = "if `{T}` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(hegel::PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `{T}` at once",
+    note = "otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(|value, printer| ..)`",
+    note = "a `map` whose input draw is printable can report the mapped expression instead with `.print_as_call(\"path::to::function\")`",
+    note = "a `-> impl Generator<..>` return type or `.boxed()` erases printability: return `impl PrintableGenerator<..>` instead, and box a printing generator with `.boxed_printable()`",
+    note = "or draw without reporting the value via `tc.draw_silent(..)`",
+    note = "the `hegel::pretty` module docs walk through the whole printing system"
+)]
+pub trait PrintableGenerator<T>: Generator<T> {
+    /// Produce a value, printing its representation to `printer` as it is
+    /// drawn.
+    ///
+    /// A compositional implementation draws each inner generator with
+    /// [`TestCase::draw_and_print`], the framework's one entry point for
+    /// printed inner draws; a generator that merely forwards to an inner
+    /// printable generator without printing or drawing anything itself calls
+    /// the inner generator's `do_draw_and_print` directly instead, so the
+    /// forwarding layer doesn't register as a second region.
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
+
+    /// Convert this generator into a type-erased boxed printable generator,
+    /// as accepted by [`one_of!`](crate::one_of).
+    fn boxed_printable<'a>(self) -> BoxedPrintableGenerator<'a, T>
+    where
+        Self: Sized + Send + Sync + 'a,
+    {
+        BoxedPrintableGenerator {
+            inner: Arc::new(self),
+        }
+    }
+}
+
+/// Draw from `generator` silently, then print the drawn value's own
+/// [`PrettyPrintable`] representation. The shared implementation for every
+/// generator that prints by value.
+pub(crate) fn draw_and_print_value<T: PrettyPrintable>(
+    generator: &impl Generator<T>,
+    tc: &TestCase,
+    printer: &mut PrettyPrinter,
+) -> T {
+    let value = generator.do_draw(tc);
+    value.pretty_print(printer);
+    value
+}
+
+/// Result of [`Generator::print_with`].
+pub struct PrintedWith<G, F> {
+    source: G,
+    print: F,
+}
+
+impl<T, G, F> Generator<T> for PrintedWith<G, F>
+where
+    G: Generator<T>,
+    F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
+{
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.source.do_draw(tc)
+    }
+}
+
+impl<T, G, F> PrintableGenerator<T> for PrintedWith<G, F>
+where
+    G: Generator<T>,
+    F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        let value = self.source.do_draw(tc);
+        (self.print)(&value, printer);
+        value
+    }
+}
+
+/// Result of [`Generator::print_as_value`].
+pub struct PrintedAsValue<G> {
+    source: G,
+}
+
+impl<T, G> Generator<T> for PrintedAsValue<G>
+where
+    G: Generator<T>,
+    T: PrettyPrintable,
+{
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.source.do_draw(tc)
+    }
+}
+
+impl<T, G> PrintableGenerator<T> for PrintedAsValue<G>
+where
+    G: Generator<T>,
+    T: PrettyPrintable,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(&self.source, tc, printer)
+    }
+}
+
+/// Result of [`Generator::print_as_debug`].
+pub struct PrintedAsDebug<G> {
+    source: G,
+}
+
+impl<T, G> Generator<T> for PrintedAsDebug<G>
+where
+    G: Generator<T>,
+    T: std::fmt::Debug,
+{
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.source.do_draw(tc)
+    }
+}
+
+impl<T, G> PrintableGenerator<T> for PrintedAsDebug<G>
+where
+    G: Generator<T>,
+    T: std::fmt::Debug,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        let value = self.source.do_draw(tc);
+        if printer.should_print() {
+            crate::pretty::print_debug_repr(&format!("{value:?}"), printer);
+        }
+        value
+    }
 }
 
 impl<T, G: Generator<T>> Generator<T> for &G {
+    fn label(&self) -> u64 {
+        (*self).label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
+}
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        (*self).enumerate_values()
+impl<T, G: PrintableGenerator<T>> PrintableGenerator<T> for &G {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        (*self).do_draw_and_print(tc, printer)
     }
 }
 
@@ -147,17 +411,112 @@ where
     G: Generator<T>,
     F: Fn(T) -> U + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[MAP_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> U {
-        tc.start_span(labels::MAPPED);
+        tc.start_span(self.label());
         let result = (self.f)(self.source.do_draw(tc));
         tc.stop_span(false);
         result
     }
+}
 
-    fn enumerate_values(&self) -> Option<Vec<U>> {
-        self.source
-            .enumerate_values()
-            .map(|vals| vals.into_iter().map(|v| (self.f)(v)).collect())
+impl<T, U, F, G> PrintableGenerator<U> for Mapped<T, U, F, G>
+where
+    G: Generator<T>,
+    F: Fn(T) -> U + Send + Sync,
+    U: PrettyPrintable,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+impl<T, U, F, G> Mapped<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    /// Make this mapped generator printable by printing `function` applied
+    /// to the drawn input: `function(input)`.
+    ///
+    /// A `map` to a foreign type usually resorts to
+    /// [`print_as_debug`](Generator::print_as_debug), whose output framed as
+    /// `let x = …;` can look like Rust without being pastable. The drawn
+    /// input often is pastable, so this prints it through the source
+    /// generator, wrapped in a call of `function` — the mapping function's
+    /// path, which cannot be recovered from the closure.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators::{self as gs, Generator};
+    ///
+    /// struct KeyData(u64);
+    ///
+    /// impl KeyData {
+    ///     fn from_ffi(value: u64) -> KeyData {
+    ///         KeyData(value)
+    ///     }
+    /// }
+    ///
+    /// let keys = gs::integers::<u64>()
+    ///     .map(KeyData::from_ffi)
+    ///     .print_as_call("KeyData::from_ffi");
+    /// ```
+    ///
+    /// A failing draw from `keys` reports `let key = KeyData::from_ffi(3);`
+    /// rather than the `Debug` form `let key = 3v0;`.
+    pub fn print_as_call(self, function: &str) -> PrintedAsCall<T, U, F, G> {
+        if function.is_empty() {
+            invalid_argument!("print_as_call requires a non-empty function name");
+        }
+        PrintedAsCall {
+            source: self.source,
+            f: self.f,
+            open: format!("{function}("),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// Result of [`Mapped::print_as_call`].
+pub struct PrintedAsCall<T, U, F, G> {
+    source: G,
+    f: Arc<F>,
+    open: String,
+    _phantom: PhantomData<fn(T) -> U>,
+}
+
+impl<T, U, F, G> Generator<U> for PrintedAsCall<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[MAP_LABEL, self.source.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> U {
+        self.do_draw_and_print(tc, &mut PrettyPrinter::noop())
+    }
+}
+
+impl<T, U, F, G> PrintableGenerator<U> for PrintedAsCall<T, U, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(T) -> U + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
+        tc.start_span(self.label());
+        printer.begin_group(self.open.chars().count(), &self.open);
+        let input = tc.draw_and_print(&self.source, printer);
+        printer.end_group(")");
+        let result = (self.f)(input);
+        tc.stop_span(false);
+        result
     }
 }
 
@@ -168,19 +527,46 @@ pub struct FlatMapped<T, U, G2, F, G1> {
     _phantom: PhantomData<fn(T) -> (U, G2)>,
 }
 
+impl<T, U, G2, F, G1> FlatMapped<T, U, G2, F, G1>
+where
+    G1: Generator<T>,
+    F: Fn(T) -> G2 + Send + Sync,
+{
+    /// The one flat-map body both draw paths run; only how the derived
+    /// generator is drawn (silently or printing) is injected.
+    fn draw_flat_mapped(&self, tc: &TestCase, draw_next: impl FnOnce(G2, &TestCase) -> U) -> U {
+        tc.start_span(combine_labels(&[FLAT_MAP_LABEL, self.source.label()]));
+        let intermediate = self.source.do_draw(tc);
+        let next_gen = (self.f)(intermediate);
+        let result = draw_next(next_gen, tc);
+        tc.stop_span(false);
+        result
+    }
+}
+
 impl<T, U, G2, F, G1> Generator<U> for FlatMapped<T, U, G2, F, G1>
 where
     G1: Generator<T>,
     G2: Generator<U>,
     F: Fn(T) -> G2 + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[FLAT_MAP_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> U {
-        tc.start_span(labels::FLAT_MAP);
-        let intermediate = self.source.do_draw(tc);
-        let next_gen = (self.f)(intermediate);
-        let result = next_gen.do_draw(tc);
-        tc.stop_span(false);
-        result
+        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.do_draw(tc))
+    }
+}
+
+impl<T, U, G2, F, G1> PrintableGenerator<U> for FlatMapped<T, U, G2, F, G1>
+where
+    G1: Generator<T>,
+    G2: PrintableGenerator<U>,
+    F: Fn(T) -> G2 + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
+        self.draw_flat_mapped(tc, |next_gen, tc| tc.draw_and_print(next_gen, printer))
     }
 }
 
@@ -188,61 +574,70 @@ where
 pub struct Filtered<T, F, G> {
     source: G,
     predicate: F,
-    /// The source's enumerated values with the predicate applied, computed
-    /// once: for an enumerable source like `sampled_from`, re-enumerating
-    /// (which clones the whole element vector) on every draw is the dominant
-    /// cost of a filtered draw.
-    enumerated: std::sync::OnceLock<Option<Vec<T>>>,
     _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T, F, G> Filtered<T, F, G>
 where
-    T: Clone + Send + Sync,
-    G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
-    fn enumerated(&self) -> &Option<Vec<T>> {
-        self.enumerated.get_or_init(|| {
-            self.source
-                .enumerate_values()
-                .map(|vals| vals.into_iter().filter(|v| (self.predicate)(v)).collect())
-        })
-    }
-}
-
-impl<T, F, G> Generator<T> for Filtered<T, F, G>
-where
-    T: Clone + Send + Sync,
-    G: Generator<T>,
-    F: Fn(&T) -> bool + Send + Sync,
-{
-    fn do_draw(&self, tc: &TestCase) -> T {
-        if let Some(valid) = self.enumerated() {
-            if valid.is_empty() {
-                invalid_argument!(
-                    "Unsatisfiable filter: all values from the source generator \
-                     are rejected by the filter predicate"
-                );
-            }
-            let index = tc.generate_integer_i64(0, valid.len() as i64 - 1) as usize;
-            return valid[index].clone();
-        }
+    /// The one filtering loop both draw paths run: each attempt draws
+    /// inside a speculative print region, so a rejected attempt discards
+    /// whatever the injected `draw` printed — only the accepted value's
+    /// representation survives. The silent path passes the no-op printer
+    /// and a print-free `draw`.
+    fn draw_filtered(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> T {
         for _ in 0..3 {
-            tc.start_span(labels::FILTER);
-            let value = self.source.do_draw(tc);
+            tc.start_span(label);
+            let mut speculation = printer.speculate();
+            let value = draw(&self.source, tc, speculation.printer());
             if (self.predicate)(&value) {
+                speculation.commit();
                 tc.stop_span(false);
                 return value;
             }
+            speculation.abort();
             tc.stop_span(true);
         }
         tc.assume(false);
         unreachable!()
     }
+}
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.enumerated().clone()
+impl<T, F, G> Generator<T> for Filtered<T, F, G>
+where
+    G: Generator<T>,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[FILTER_LABEL, self.source.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.draw_filtered(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |source, tc, _| source.do_draw(tc),
+        )
+    }
+}
+
+impl<T, F, G> PrintableGenerator<T> for Filtered<T, F, G>
+where
+    G: PrintableGenerator<T>,
+    F: Fn(&T) -> bool + Send + Sync,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        self.draw_filtered(tc, self.label(), printer, |source, tc, printer| {
+            tc.draw_and_print(source, printer)
+        })
     }
 }
 
@@ -260,12 +655,12 @@ impl<T> Clone for BoxedGenerator<'_, T> {
 }
 
 impl<T> Generator<T> for BoxedGenerator<'_, T> {
-    fn do_draw(&self, tc: &TestCase) -> T {
-        self.inner.do_draw(tc)
+    fn label(&self) -> u64 {
+        self.inner.label()
     }
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        self.inner.enumerate_values()
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.inner.do_draw(tc)
     }
 
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>
@@ -273,5 +668,53 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
         Self: Sized + Send + Sync + 'b,
     {
         BoxedGenerator { inner: self.inner }
+    }
+}
+
+/// A boxed generator prints by value: the erased generator draws silently
+/// and the drawn value's own representation is printed. A custom printing
+/// strategy on the erased generator is not preserved — for that, erase with
+/// [`PrintableGenerator::boxed_printable`].
+impl<T: PrettyPrintable> PrintableGenerator<T> for BoxedGenerator<'_, T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
+    }
+}
+
+/// A type-erased printable generator with a lifetime parameter, as produced
+/// by [`PrintableGenerator::boxed_printable`] and consumed by
+/// [`one_of!`](crate::one_of).
+pub struct BoxedPrintableGenerator<'a, T> {
+    inner: Arc<dyn PrintableGenerator<T> + Send + Sync + 'a>,
+}
+
+impl<T> Clone for BoxedPrintableGenerator<'_, T> {
+    fn clone(&self) -> Self {
+        BoxedPrintableGenerator {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<T> Generator<T> for BoxedPrintableGenerator<'_, T> {
+    fn label(&self) -> u64 {
+        self.inner.label()
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> T {
+        self.inner.do_draw(tc)
+    }
+}
+
+impl<T> PrintableGenerator<T> for BoxedPrintableGenerator<'_, T> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        self.inner.do_draw_and_print(tc, printer)
+    }
+
+    fn boxed_printable<'b>(self) -> BoxedPrintableGenerator<'b, T>
+    where
+        Self: Sized + Send + Sync + 'b,
+    {
+        BoxedPrintableGenerator { inner: self.inner }
     }
 }

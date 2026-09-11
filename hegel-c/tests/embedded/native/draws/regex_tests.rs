@@ -9,13 +9,13 @@
 //! generator's draw distribution.
 
 use super::*;
+use crate::native::HashMap;
 use crate::native::bignum::BigInt;
 use crate::native::core::ChoiceValue;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
 use crate::native::re::parser::{OpCode, SetItem, SubPattern};
-use std::collections::HashMap;
 
 fn chars(s: &str) -> Vec<char> {
     s.chars().collect()
@@ -31,19 +31,19 @@ fn sub(ops: Vec<OpCode>) -> SubPattern {
 
 #[test]
 fn match_seq_literal_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(match_seq(&[lit('a')], 0, &chars("a"), 0, &groups), Some(1));
 }
 
 #[test]
 fn match_seq_literal_no_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(match_seq(&[lit('a')], 0, &chars("b"), 0, &groups), None);
 }
 
 #[test]
 fn match_seq_not_literal_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(
             &[OpCode::NotLiteral('a' as u32)],
@@ -58,7 +58,7 @@ fn match_seq_not_literal_match() {
 
 #[test]
 fn match_seq_not_literal_no_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(
             &[OpCode::NotLiteral('a' as u32)],
@@ -73,7 +73,7 @@ fn match_seq_not_literal_no_match() {
 
 #[test]
 fn match_seq_any_matches_non_newline() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::Any], 0, &chars("x"), 0, &groups),
         Some(1)
@@ -82,13 +82,13 @@ fn match_seq_any_matches_non_newline() {
 
 #[test]
 fn match_seq_any_does_not_match_newline_without_dotall() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(match_seq(&[OpCode::Any], 0, &chars("\n"), 0, &groups), None);
 }
 
 #[test]
 fn match_seq_any_matches_newline_with_dotall() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::Any], 0, &chars("\n"), SRE_FLAG_DOTALL, &groups),
         Some(1)
@@ -97,7 +97,7 @@ fn match_seq_any_matches_newline_with_dotall() {
 
 #[test]
 fn match_seq_in_set_literal_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal('b' as u32)];
     assert_eq!(
         match_seq(&[OpCode::In(items.clone())], 0, &chars("a"), 0, &groups),
@@ -111,7 +111,7 @@ fn match_seq_in_set_literal_match() {
 
 #[test]
 fn match_seq_in_set_range_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let items = vec![SetItem::Range('a' as u32, 'z' as u32)];
     assert_eq!(
         match_seq(&[OpCode::In(items.clone())], 0, &chars("m"), 0, &groups),
@@ -125,7 +125,7 @@ fn match_seq_in_set_range_match() {
 
 #[test]
 fn match_seq_in_set_range_ignorecase() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let items = vec![SetItem::Range('a' as u32, 'z' as u32)];
     assert_eq!(
         match_seq(
@@ -141,7 +141,7 @@ fn match_seq_in_set_range_ignorecase() {
 
 #[test]
 fn match_seq_in_set_category_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let items = vec![SetItem::Category(ChCode::Digit)];
     assert_eq!(
         match_seq(&[OpCode::In(items.clone())], 0, &chars("5"), 0, &groups),
@@ -155,7 +155,7 @@ fn match_seq_in_set_category_match() {
 
 #[test]
 fn match_seq_in_set_negated() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let items = vec![SetItem::Negate, SetItem::Literal('a' as u32)];
     assert_eq!(
         match_seq(&[OpCode::In(items.clone())], 0, &chars("b"), 0, &groups),
@@ -169,7 +169,7 @@ fn match_seq_in_set_negated() {
 
 #[test]
 fn match_seq_at_beginning_string() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(
             &[OpCode::At(AtCode::BeginningString)],
@@ -194,7 +194,7 @@ fn match_seq_at_beginning_string() {
 
 #[test]
 fn match_seq_at_beginning() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::Beginning)], 0, &chars("a"), 0, &groups),
         Some(0)
@@ -223,7 +223,7 @@ fn match_seq_at_beginning() {
 
 #[test]
 fn match_seq_at_end() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::End)], 1, &chars("a"), 0, &groups),
         Some(1)
@@ -250,7 +250,7 @@ fn match_seq_at_end() {
 
 #[test]
 fn match_seq_at_end_string() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::EndString)], 1, &chars("a"), 0, &groups),
         Some(1)
@@ -269,7 +269,7 @@ fn match_seq_at_end_string() {
 
 #[test]
 fn match_seq_at_word_boundary() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::At(AtCode::Boundary)], 1, &chars("ab"), 0, &groups),
         None
@@ -292,7 +292,7 @@ fn match_seq_at_word_boundary() {
 
 #[test]
 fn match_seq_branch_first_arm_matches() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Branch(vec![
         sub(vec![lit('a')]),
         sub(vec![lit('b')]),
@@ -302,7 +302,7 @@ fn match_seq_branch_first_arm_matches() {
 
 #[test]
 fn match_seq_branch_second_arm_matches() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Branch(vec![
         sub(vec![lit('a')]),
         sub(vec![lit('b')]),
@@ -312,7 +312,7 @@ fn match_seq_branch_second_arm_matches() {
 
 #[test]
 fn match_seq_branch_no_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Branch(vec![
         sub(vec![lit('a')]),
         sub(vec![lit('b')]),
@@ -322,7 +322,7 @@ fn match_seq_branch_no_match() {
 
 #[test]
 fn match_seq_subpattern() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Subpattern {
         group: Some(1),
         add_flags: 0,
@@ -334,7 +334,7 @@ fn match_seq_subpattern() {
 
 #[test]
 fn match_seq_subpattern_inline_flags() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Subpattern {
         group: None,
         add_flags: SRE_FLAG_IGNORECASE,
@@ -346,7 +346,7 @@ fn match_seq_subpattern_inline_flags() {
 
 #[test]
 fn match_seq_atomic_group() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::AtomicGroup(sub(vec![lit('a')]))];
     assert_eq!(match_seq(&ops, 0, &chars("a"), 0, &groups), Some(1));
     assert_eq!(match_seq(&ops, 0, &chars("b"), 0, &groups), None);
@@ -354,7 +354,7 @@ fn match_seq_atomic_group() {
 
 #[test]
 fn match_seq_groupref_match() {
-    let mut groups = HashMap::new();
+    let mut groups = HashMap::default();
     groups.insert(1, "ab".to_string());
     let ops = vec![OpCode::GroupRef(1)];
     assert_eq!(match_seq(&ops, 0, &chars("ab"), 0, &groups), Some(2));
@@ -362,7 +362,7 @@ fn match_seq_groupref_match() {
 
 #[test]
 fn match_seq_groupref_too_short() {
-    let mut groups = HashMap::new();
+    let mut groups = HashMap::default();
     groups.insert(1, "abc".to_string());
     let ops = vec![OpCode::GroupRef(1)];
     assert_eq!(match_seq(&ops, 0, &chars("ab"), 0, &groups), None);
@@ -370,7 +370,7 @@ fn match_seq_groupref_too_short() {
 
 #[test]
 fn match_seq_groupref_mismatched() {
-    let mut groups = HashMap::new();
+    let mut groups = HashMap::default();
     groups.insert(1, "ab".to_string());
     let ops = vec![OpCode::GroupRef(1)];
     assert_eq!(match_seq(&ops, 0, &chars("xy"), 0, &groups), None);
@@ -378,14 +378,14 @@ fn match_seq_groupref_mismatched() {
 
 #[test]
 fn match_seq_groupref_unset() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::GroupRef(1)];
     assert_eq!(match_seq(&ops, 0, &chars("ab"), 0, &groups), None);
 }
 
 #[test]
 fn match_seq_groupref_exists_yes_arm() {
-    let mut groups = HashMap::new();
+    let mut groups = HashMap::default();
     groups.insert(1, "x".to_string());
     let ops = vec![OpCode::GroupRefExists {
         cond_group: 1,
@@ -397,7 +397,7 @@ fn match_seq_groupref_exists_yes_arm() {
 
 #[test]
 fn match_seq_groupref_exists_no_arm() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::GroupRefExists {
         cond_group: 1,
         yes: sub(vec![lit('a')]),
@@ -408,7 +408,7 @@ fn match_seq_groupref_exists_no_arm() {
 
 #[test]
 fn match_seq_groupref_exists_no_arm_missing() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::GroupRefExists {
         cond_group: 1,
         yes: sub(vec![lit('a')]),
@@ -419,7 +419,7 @@ fn match_seq_groupref_exists_no_arm_missing() {
 
 #[test]
 fn match_seq_positive_lookaround_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::Assert {
             direction: 1,
@@ -432,7 +432,7 @@ fn match_seq_positive_lookaround_match() {
 
 #[test]
 fn match_seq_positive_lookaround_no_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::Assert {
         direction: 1,
         p: sub(vec![lit('a')]),
@@ -442,7 +442,7 @@ fn match_seq_positive_lookaround_no_match() {
 
 #[test]
 fn match_seq_negative_lookaround_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::AssertNot {
             direction: 1,
@@ -455,7 +455,7 @@ fn match_seq_negative_lookaround_match() {
 
 #[test]
 fn match_seq_negative_lookaround_blocks() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::AssertNot {
         direction: 1,
         p: sub(vec![lit('a')]),
@@ -465,7 +465,7 @@ fn match_seq_negative_lookaround_blocks() {
 
 #[test]
 fn match_seq_failure_never_matches() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     assert_eq!(
         match_seq(&[OpCode::Failure], 0, &chars(""), 0, &groups),
         None
@@ -474,7 +474,7 @@ fn match_seq_failure_never_matches() {
 
 #[test]
 fn match_seq_max_repeat_unbounded() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MaxRepeat {
         min: 0,
         max: u32::MAX,
@@ -486,7 +486,7 @@ fn match_seq_max_repeat_unbounded() {
 
 #[test]
 fn match_seq_max_repeat_bounded() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MaxRepeat {
         min: 2,
         max: 3,
@@ -497,7 +497,7 @@ fn match_seq_max_repeat_bounded() {
 
 #[test]
 fn match_seq_max_repeat_min_unsatisfied() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MaxRepeat {
         min: 3,
         max: 5,
@@ -508,7 +508,7 @@ fn match_seq_max_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_max_repeat_with_trailing() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::MaxRepeat {
             min: 1,
@@ -522,7 +522,7 @@ fn match_seq_max_repeat_with_trailing() {
 
 #[test]
 fn match_seq_min_repeat_lazy() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::MinRepeat {
             min: 0,
@@ -536,7 +536,7 @@ fn match_seq_min_repeat_lazy() {
 
 #[test]
 fn match_seq_min_repeat_bounded() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MinRepeat {
         min: 1,
         max: 2,
@@ -547,7 +547,7 @@ fn match_seq_min_repeat_bounded() {
 
 #[test]
 fn match_seq_min_repeat_no_match() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::MinRepeat {
             min: 0,
@@ -561,7 +561,7 @@ fn match_seq_min_repeat_no_match() {
 
 #[test]
 fn match_seq_min_repeat_min_unsatisfied() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MinRepeat {
         min: 3,
         max: 5,
@@ -572,7 +572,7 @@ fn match_seq_min_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_min_repeat_max_exhausted() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::MinRepeat {
             min: 0,
@@ -586,7 +586,7 @@ fn match_seq_min_repeat_max_exhausted() {
 
 #[test]
 fn match_seq_possessive_repeat() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::PossessiveRepeat {
         min: 0,
         max: u32::MAX,
@@ -597,7 +597,7 @@ fn match_seq_possessive_repeat() {
 
 #[test]
 fn match_seq_possessive_repeat_bounded() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::PossessiveRepeat {
         min: 0,
         max: 2,
@@ -608,7 +608,7 @@ fn match_seq_possessive_repeat_bounded() {
 
 #[test]
 fn match_seq_possessive_repeat_min_unsatisfied() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::PossessiveRepeat {
         min: 3,
         max: 5,
@@ -619,7 +619,7 @@ fn match_seq_possessive_repeat_min_unsatisfied() {
 
 #[test]
 fn match_seq_min_repeat_zero_width_item_at_min() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![OpCode::MinRepeat {
         min: 1,
         max: u32::MAX,
@@ -630,7 +630,7 @@ fn match_seq_min_repeat_zero_width_item_at_min() {
 
 #[test]
 fn match_seq_min_repeat_zero_width_item_after_min() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let ops = vec![
         OpCode::MinRepeat {
             min: 0,
@@ -645,33 +645,33 @@ fn match_seq_min_repeat_zero_width_item_after_min() {
 #[test]
 fn build_in_set_ascii_only_drops_nonascii_positive_literal() {
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal(0xFF)];
-    let out = build_in_set(&items, SRE_FLAG_ASCII, &None);
+    let out = build_in_set(&items, SRE_FLAG_ASCII, &None).unwrap();
     assert_eq!(out, vec!['a']);
 }
 
 #[test]
 fn build_in_set_alphabet_drops_disallowed_positive_literal() {
     let items = vec![SetItem::Literal('a' as u32), SetItem::Literal('b' as u32)];
-    let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]);
-    let out = build_in_set(&items, 0, &Some(alphabet));
+    let alphabet = IntervalSet::new(vec![('a' as u32, 'a' as u32)]).unwrap();
+    let out = build_in_set(&items, 0, &Some(alphabet)).unwrap();
     assert_eq!(out, vec!['a']);
 }
 
 #[test]
 fn build_in_set_negated_ascii_only_excludes_nonascii() {
     let items = vec![SetItem::Negate, SetItem::Literal('a' as u32)];
-    let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]);
-    let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet));
+    let alphabet = IntervalSet::new(vec![(b' ' as u32, 0x100)]).unwrap();
+    let out = build_in_set(&items, SRE_FLAG_ASCII, &Some(alphabet)).unwrap();
     assert!(out.iter().all(|c| (*c as u32) < 128 && *c != 'a'));
 }
 
 #[test]
 fn generate_op_ignorecase_literal_outside_alphabet_marks_invalid() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
-    let cache = Mutex::new(HashMap::new());
-    let char_cache = Mutex::new(HashMap::new());
+    let cache = Mutex::new(HashMap::default());
+    let char_cache = Mutex::new(HashMap::default());
     let mut state = ignorecase_state(&cache, &char_cache);
-    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]));
+    let alphabet = Some(IntervalSet::new(vec![('A' as u32, 'A' as u32)]).unwrap());
     let mut out = String::new();
     let result = generate_op(&mut ntc, &lit('a'), &mut state, &alphabet, &mut out);
     assert!(result.is_err());
@@ -691,7 +691,7 @@ fn ignorecase_state<'a>(
     char_cache: &'a Mutex<HashMap<CharKey, Arc<[char]>>>,
 ) -> GenState<'a> {
     GenState {
-        groups: HashMap::new(),
+        groups: HashMap::default(),
         flags: SRE_FLAG_IGNORECASE,
         fullmatch: false,
         pending_anchors: Vec::new(),
@@ -706,10 +706,10 @@ fn ignorecase_state<'a>(
 #[test]
 fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
     use crate::native::rng::EngineRng;
-    let cache = Mutex::new(HashMap::new());
-    let char_cache = Mutex::new(HashMap::new());
+    let cache = Mutex::new(HashMap::default());
+    let char_cache = Mutex::new(HashMap::default());
     for seed in 0..50 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('ß'), &mut state, &None, &mut out).unwrap();
@@ -720,11 +720,11 @@ fn generate_op_ignorecase_eszett_never_emits_truncated_uppercase() {
 #[test]
 fn generate_op_ignorecase_plain_letter_emits_both_cases() {
     use crate::native::rng::EngineRng;
-    let mut seen = std::collections::HashSet::new();
-    let cache = Mutex::new(HashMap::new());
-    let char_cache = Mutex::new(HashMap::new());
+    let mut seen = HashSet::default();
+    let cache = Mutex::new(HashMap::default());
+    let char_cache = Mutex::new(HashMap::default());
     for seed in 0..50 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(&mut ntc, &lit('a'), &mut state, &None, &mut out).unwrap();
@@ -736,17 +736,20 @@ fn generate_op_ignorecase_plain_letter_emits_both_cases() {
 #[test]
 fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![
-        ('I' as u32, 'I' as u32),
-        ('i' as u32, 'i' as u32),
-        ('x' as u32, 'x' as u32),
-        (0x130, 0x130),
-        (0x307, 0x307),
-    ]));
-    let cache = Mutex::new(HashMap::new());
-    let char_cache = Mutex::new(HashMap::new());
+    let alphabet = Some(
+        IntervalSet::new(vec![
+            ('I' as u32, 'I' as u32),
+            ('i' as u32, 'i' as u32),
+            ('x' as u32, 'x' as u32),
+            (0x130, 0x130),
+            (0x307, 0x307),
+        ])
+        .unwrap(),
+    );
+    let cache = Mutex::new(HashMap::default());
+    let char_cache = Mutex::new(HashMap::default());
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let mut state = ignorecase_state(&cache, &char_cache);
         let mut out = String::new();
         generate_op(
@@ -764,7 +767,7 @@ fn generate_op_ignorecase_not_literal_blacklists_swapcase_fixpoint() {
 #[test]
 fn generate_regex_handles_huge_character_class_ranges() {
     use crate::native::rng::EngineRng;
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0));
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let re = CompiledRegex::compile("[\\x20-\\U0010FFFF]", None).unwrap();
     let s = generate_regex(&mut ntc, &re, false).unwrap();
     assert!(!s.is_empty());
@@ -776,7 +779,7 @@ fn generate_regex_word_boundaries_hold_in_the_final_string() {
     let re = CompiledRegex::compile(r"\bfoo\b", None).unwrap();
     let mut produced = 0;
     for seed in 0..300 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -798,7 +801,7 @@ fn generate_regex_end_anchor_inside_branch_holds_in_the_final_string() {
     let re = CompiledRegex::compile("foo$|bar", None).unwrap();
     let mut produced = 0;
     for seed in 0..300 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -817,7 +820,7 @@ fn generate_regex_fullmatch_lookahead_does_not_emit_the_assertion_body() {
     let re = CompiledRegex::compile("(?=a)ab", None).unwrap();
     let mut produced = 0;
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, true) else {
             continue;
         };
@@ -832,9 +835,9 @@ fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string()
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("a*+a", None).unwrap();
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         for fullmatch in [false, true] {
-            let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000));
+            let mut ntc2 = NativeTestCase::new_random(EngineRng::seeded(seed + 1000)).unwrap();
             let ntc_ref = if fullmatch { &mut ntc2 } else { &mut ntc };
             if let Ok(s) = generate_regex(ntc_ref, &re, fullmatch) {
                 panic!(
@@ -848,18 +851,21 @@ fn generate_regex_unsatisfiable_possessive_pattern_never_yields_a_wrong_string()
 #[test]
 fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![
-        ('I' as u32, 'I' as u32),
-        ('a' as u32, 'a' as u32),
-        ('i' as u32, 'i' as u32),
-        ('x' as u32, 'x' as u32),
-        (0x130, 0x130),
-        (0x307, 0x307),
-    ]));
+    let alphabet = Some(
+        IntervalSet::new(vec![
+            ('I' as u32, 'I' as u32),
+            ('a' as u32, 'a' as u32),
+            ('i' as u32, 'i' as u32),
+            ('x' as u32, 'x' as u32),
+            (0x130, 0x130),
+            (0x307, 0x307),
+        ])
+        .unwrap(),
+    );
     let re = CompiledRegex::compile("(?i)[^\u{130}a]", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..100 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, true) else {
             continue;
         };
@@ -874,7 +880,7 @@ fn generate_regex_ignorecase_negated_class_excludes_swapcase_fixpoint() {
 
 #[test]
 fn match_seq_max_repeat_counts_zero_width_iterations_toward_min() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let optional_a = sub(vec![OpCode::MaxRepeat {
         min: 0,
         max: 1,
@@ -891,7 +897,7 @@ fn match_seq_max_repeat_counts_zero_width_iterations_toward_min() {
 
 #[test]
 fn match_seq_min_repeat_counts_zero_width_iterations_toward_min() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let optional_a = sub(vec![OpCode::MaxRepeat {
         min: 0,
         max: 1,
@@ -910,7 +916,7 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("(?<=a)b", None).unwrap();
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         assert!(
             generate_regex(&mut ntc, &re, true).is_err(),
             "a fixed-width lookbehind can never hold at the start of a fullmatch"
@@ -920,7 +926,7 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
     let re = CompiledRegex::compile("(?<=a*)b", None).unwrap();
     let mut produced = 0;
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         if let Ok(s) = generate_regex(&mut ntc, &re, true) {
             produced += 1;
             assert_eq!(s, "b");
@@ -932,11 +938,11 @@ fn generate_regex_fullmatch_lookbehind_is_validated_against_the_final_string() {
 #[test]
 fn generate_regex_end_anchor_with_no_newline_in_alphabet_does_not_pad() {
     use crate::native::rng::EngineRng;
-    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]));
+    let alphabet = Some(IntervalSet::new(vec![('a' as u32, 'b' as u32)]).unwrap());
     let re = CompiledRegex::compile("a$", alphabet).unwrap();
     let mut produced = 0;
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let Ok(s) = generate_regex(&mut ntc, &re, false) else {
             continue;
         };
@@ -951,7 +957,7 @@ fn generate_regex_multiline_caret_in_the_middle_generates_nothing() {
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("(?m)a^b", None).unwrap();
     for seed in 0..20 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         assert!(
             generate_regex(&mut ntc, &re, false).is_err(),
             "a mid-pattern ^ preceded by a literal can never match"
@@ -961,7 +967,7 @@ fn generate_regex_multiline_caret_in_the_middle_generates_nothing() {
 
 #[test]
 fn match_seq_possessive_repeat_counts_zero_width_iterations_toward_min() {
-    let groups = HashMap::new();
+    let groups = HashMap::default();
     let optional_a = sub(vec![OpCode::MaxRepeat {
         min: 0,
         max: 1,
@@ -974,4 +980,10 @@ fn match_seq_possessive_repeat_counts_zero_width_iterations_toward_min() {
     }];
     assert_eq!(match_seq(&pattern, 0, &chars(""), 0, &groups), Some(0));
     assert_eq!(match_seq(&pattern, 0, &chars("aa"), 0, &groups), Some(2));
+}
+
+#[test]
+fn codepoint_to_char_reports_surrogates_as_internal_errors() {
+    assert_eq!(codepoint_to_char('a' as u32).unwrap(), 'a');
+    assert!(codepoint_to_char(0xD800).is_err());
 }

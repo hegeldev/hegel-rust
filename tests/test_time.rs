@@ -56,8 +56,8 @@ mod datetimes {
         let minute: u32 = parts[1].parse().unwrap();
         let mut frac = parts[2].splitn(2, '.');
         let second: u32 = frac.next().unwrap().parse().unwrap();
-        let microsecond: u32 = frac.next().map_or(0, |f| f.parse().unwrap_or(0));
-        (hour, minute, second, microsecond)
+        let nanosecond: u32 = frac.next().map_or(0, |f| f.parse().unwrap_or(0));
+        (hour, minute, second, nanosecond)
     }
 
     fn datetime_parts(s: &str) -> (i32, u32, u32, u32, u32, u32, u32) {
@@ -66,21 +66,21 @@ mod datetimes {
         let year: i32 = d.next().unwrap().parse().unwrap();
         let month: u32 = d.next().unwrap().parse().unwrap();
         let day: u32 = d.next().unwrap().parse().unwrap();
-        let (hour, minute, second, microsecond) = parse_time_parts(time_str);
-        (year, month, day, hour, minute, second, microsecond)
+        let (hour, minute, second, nanosecond) = parse_time_parts(time_str);
+        (year, month, day, hour, minute, second, nanosecond)
     }
 
     #[test]
     fn test_simplifies_towards_millenium() {
         let d = minimal(gs::datetime_strings(), |_: &String| true);
-        let (year, month, day, hour, minute, second, microsecond) = datetime_parts(&d);
+        let (year, month, day, hour, minute, second, nanosecond) = datetime_parts(&d);
         assert_eq!(year, 2000);
         assert_eq!(month, 1);
         assert_eq!(day, 1);
         assert_eq!(hour, 0);
         assert_eq!(minute, 0);
         assert_eq!(second, 0);
-        assert_eq!(microsecond, 0);
+        assert_eq!(nanosecond, 0);
     }
 
     #[test]
@@ -88,11 +88,6 @@ mod datetimes {
         assert_all_examples(gs::datetime_strings(), |s: &String| {
             !s.contains('+') && !s.contains('Z')
         });
-    }
-
-    #[test]
-    fn test_allow_imaginary_is_not_an_error_for_naive_datetimes() {
-        assert_all_examples(gs::datetime_strings(), |_: &String| true);
     }
 
     #[test]
@@ -141,18 +136,11 @@ mod datetimes {
     #[test]
     fn test_simplifies_towards_midnight() {
         let t = minimal(gs::time_strings(), |_: &String| true);
-        let (hour, minute, second, microsecond) = parse_time_parts(&t);
+        let (hour, minute, second, nanosecond) = parse_time_parts(&t);
         assert_eq!(hour, 0);
         assert_eq!(minute, 0);
         assert_eq!(second, 0);
-        assert_eq!(microsecond, 0);
-    }
-
-    #[test]
-    fn test_can_generate_naive_time() {
-        find_any(gs::time_strings(), |s: &String| {
-            !s.contains('+') && !s.contains('Z')
-        });
+        assert_eq!(nanosecond, 0);
     }
 
     #[test]

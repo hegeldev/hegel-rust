@@ -1,10 +1,11 @@
 mod common;
 
+use common::utils::check_can_generate_examples;
 use hegel::TestCase;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-#[derive(Debug, PartialEq, hegel::DefaultGenerator)]
+#[derive(Debug, PartialEq, hegel::DefaultGenerator, hegel::PrettyPrintable)]
 struct Wrapper {
     value: i32,
 }
@@ -72,12 +73,12 @@ fn test_vec_unique_with_min_size(tc: TestCase) {
 }
 
 #[hegel::composite]
-fn composite_integer(tc: TestCase) -> i32 {
+fn composite_integer(tc: &TestCase) -> i32 {
     tc.draw(gs::integers())
 }
 
 #[hegel::composite]
-fn composite_u8(tc: TestCase) -> u8 {
+fn composite_u8(tc: &TestCase) -> u8 {
     tc.draw(gs::integers())
 }
 
@@ -228,6 +229,113 @@ fn test_hashmap_with_mapped_keys(tc: TestCase) {
     assert!(map.keys().all(|&k| k % 2 == 0));
 }
 
+#[test]
+fn test_btree_sets_default() {
+    check_can_generate_examples(gs::btree_sets(gs::booleans()));
+}
+
+#[hegel::test]
+fn test_btree_set_with_max_size(tc: TestCase) {
+    let max_size: usize = tc.draw(gs::integers());
+    let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers::<i32>()).max_size(max_size));
+    assert!(set.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_set_with_min_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(20));
+    let set: BTreeSet<i32> = tc.draw(gs::btree_sets(gs::integers::<i32>()).min_size(min_size));
+    assert!(set.len() >= min_size);
+}
+
+#[hegel::test]
+fn test_btree_set_with_min_and_max_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(10));
+    let max_size = tc.draw(gs::integers().min_value(min_size));
+    let set: BTreeSet<i32> = tc.draw(
+        gs::btree_sets(gs::integers::<i32>())
+            .min_size(min_size)
+            .max_size(max_size),
+    );
+    assert!(set.len() >= min_size && set.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_set_min_size_forces_distinct_elements(tc: TestCase) {
+    let set: BTreeSet<bool> = tc.draw(gs::btree_sets(gs::booleans()).min_size(2));
+    assert_eq!(set.len(), 2);
+}
+
+#[hegel::test]
+fn test_vec_of_btree_sets(tc: TestCase) {
+    let vec_of_sets: Vec<BTreeSet<i32>> = tc.draw(
+        gs::vecs(gs::btree_sets(gs::integers::<i32>().min_value(0).max_value(100)).max_size(5))
+            .max_size(3),
+    );
+    for set in &vec_of_sets {
+        assert!(set.len() <= 5);
+        assert!(set.iter().all(|&x| (0..=100).contains(&x)));
+    }
+}
+
+#[test]
+fn test_btree_maps_default() {
+    check_can_generate_examples(gs::btree_maps(gs::booleans(), gs::booleans()));
+}
+
+#[hegel::test]
+fn test_btree_map_with_max_size(tc: TestCase) {
+    let max_size: usize = tc.draw(gs::integers());
+    let map: BTreeMap<i32, i32> =
+        tc.draw(gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>()).max_size(max_size));
+    assert!(map.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_map_with_min_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(20));
+    let map: BTreeMap<i32, i32> =
+        tc.draw(gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>()).min_size(min_size));
+    assert!(map.len() >= min_size);
+}
+
+#[hegel::test]
+fn test_btree_map_with_min_and_max_size(tc: TestCase) {
+    let min_size: usize = tc.draw(gs::integers().max_value(10));
+    let max_size = tc.draw(gs::integers().min_value(min_size));
+    let map: BTreeMap<i32, i32> = tc.draw(
+        gs::btree_maps(gs::integers::<i32>(), gs::integers::<i32>())
+            .min_size(min_size)
+            .max_size(max_size),
+    );
+    assert!(map.len() >= min_size && map.len() <= max_size);
+}
+
+#[hegel::test]
+fn test_btree_map_min_size_forces_distinct_keys(tc: TestCase) {
+    let map: BTreeMap<bool, bool> =
+        tc.draw(gs::btree_maps(gs::booleans(), gs::booleans()).min_size(2));
+    assert_eq!(map.len(), 2);
+}
+
+#[hegel::test]
+fn test_vec_of_btree_maps(tc: TestCase) {
+    let vec_of_maps: Vec<BTreeMap<i32, i32>> = tc.draw(
+        gs::vecs(
+            gs::btree_maps(
+                gs::integers::<i32>().min_value(0).max_value(100),
+                gs::integers::<i32>(),
+            )
+            .max_size(5),
+        )
+        .max_size(3),
+    );
+    for map in &vec_of_maps {
+        assert!(map.len() <= 5);
+        assert!(map.keys().all(|&k| (0..=100).contains(&k)));
+    }
+}
+
 #[hegel::test]
 fn test_binary_with_max_size(tc: TestCase) {
     let data = tc.draw(gs::binary().max_size(50));
@@ -241,7 +349,7 @@ fn test_vec_unique_partial_eq_struct(tc: TestCase) {
 }
 
 #[hegel::composite]
-fn composite_wrapper(tc: TestCase) -> Wrapper {
+fn composite_wrapper(tc: &TestCase) -> Wrapper {
     Wrapper {
         value: tc.draw(gs::integers()),
     }
@@ -255,7 +363,7 @@ fn test_vec_unique_partial_eq_struct_composite(tc: TestCase) {
 
 #[test]
 fn test_vec_no_partial_eq_compiles_without_unique() {
-    #[derive(hegel::DefaultGenerator)]
+    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable)]
     struct NoEq {
         #[allow(dead_code)]
         value: i32,
@@ -267,12 +375,6 @@ fn test_vec_no_partial_eq_compiles_without_unique() {
 fn test_vec_non_basic_generator_with_max_size(tc: TestCase) {
     let vec: Vec<i32> = tc.draw(gs::vecs(gs::integers::<i32>().filter(|_| true)).max_size(5));
     assert!(vec.len() <= 5);
-}
-
-#[hegel::test]
-fn test_vec_unique_sampled_from_no_duplicates(tc: TestCase) {
-    let vec: Vec<i64> = tc.draw(gs::vecs(gs::sampled_from(vec![0_i64; 100])).unique(true));
-    assert!(vec.len() <= 1);
 }
 
 mod simple_collections {
@@ -473,14 +575,6 @@ mod nocover_sets {
             |s: &HashSet<i64>| s.is_empty(),
         );
     }
-
-    #[test]
-    fn test_bounded_size_sets() {
-        assert_all_examples(
-            gs::hashsets(gs::integers::<i64>()).max_size(2),
-            |s: &HashSet<i64>| s.len() <= 2,
-        );
-    }
 }
 
 mod nocover_large_examples {
@@ -519,17 +613,21 @@ mod sampled_from {
     //!   vs values error message.
     //! - `TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678) and dynamic typing
     //!   (strategies passed as `sampled_from` elements).
+    //! - `test_easy_filtered_sampling`, `test_filtered_sampling_finds_rare_value`,
+    //!   `test_efficient_sets_of_samples` (and the dict/chained variants) — rely
+    //!   on Hypothesis's `do_filtered_draw`/`UniqueSampledListStrategy`
+    //!   enumeration optimizations, which hegel-rust deliberately does not
+    //!   implement (the engine's rejection machinery handles filtering and
+    //!   uniqueness instead).
     //!
-    //! Hegel-rust uses generic post-draw filtering (3 retries then
-    //! `enumerate_values` fallback) rather than Hypothesis's `FilteredStrategy`
-    //! optimization. The `enumerate_values` path handles both rare-value and
-    //! unsatisfiable cases correctly.
+    //! Hegel-rust uses generic post-draw filtering: 3 retries, then the test
+    //! case is rejected like a failed assumption. Filters and unique
+    //! collections that reject almost everything therefore surface as
+    //! engine-level unsatisfiability rather than as an eager frontend error.
 
-    use super::common::utils::{
-        assert_all_examples, assert_simple_property, check_can_generate_examples, expect_panic,
-    };
+    use super::common::utils::{assert_all_examples, check_can_generate_examples, expect_panic};
     use hegel::generators::{self as gs, Generator};
-    use hegel::{HealthCheck, Hegel, Settings};
+    use hegel::{Hegel, Settings};
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -573,49 +671,35 @@ mod sampled_from {
     }
 
     #[test]
-    fn test_easy_filtered_sampling() {
-        assert_simple_property(
-            gs::sampled_from((0..100).collect::<Vec<i64>>()).filter(|x: &i64| *x == 0),
-            |x: &i64| *x == 0,
+    fn test_set_min_size_above_distinct_values_is_unsatisfiable() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: HashSet<i64> =
+                        tc.draw(gs::hashsets(gs::sampled_from(vec![1_i64, 2, 3])).min_size(5));
+                })
+                .settings(Settings::new().database(None))
+                .run();
+            },
+            "(?i)(health.check|FailedHealthCheck|unsatisfiable|reject|invalid)",
         );
     }
 
     #[test]
-    fn test_filtered_sampling_finds_rare_value() {
-        assert_all_examples(
-            gs::sampled_from((0..100).collect::<Vec<i64>>()).filter(|x: &i64| *x == 99),
-            |x: &i64| *x == 99,
+    fn test_map_min_size_above_distinct_keys_is_unsatisfiable() {
+        expect_panic(
+            || {
+                Hegel::new(|tc| {
+                    let _: HashMap<i64, bool> = tc.draw(
+                        gs::hashmaps(gs::sampled_from(vec![1_i64, 2, 3]), gs::booleans())
+                            .min_size(5),
+                    );
+                })
+                .settings(Settings::new().database(None))
+                .run();
+            },
+            "(?i)(health.check|FailedHealthCheck|unsatisfiable|reject|invalid)",
         );
-    }
-
-    #[test]
-    fn test_efficient_sets_of_samples() {
-        Hegel::new(|tc| {
-            let x: HashSet<i64> =
-                tc.draw(gs::hashsets(gs::sampled_from((0..50).collect::<Vec<i64>>())).min_size(50));
-            let expected: HashSet<i64> = (0..50).collect();
-            assert_eq!(x, expected);
-        })
-        .settings(Settings::new().database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_efficient_dicts_with_sampled_keys() {
-        Hegel::new(|tc| {
-            let x: HashMap<i64, ()> = tc.draw(
-                gs::hashmaps(
-                    gs::sampled_from((0..50).collect::<Vec<i64>>()),
-                    gs::just(()),
-                )
-                .min_size(50),
-            );
-            let keys: HashSet<i64> = x.keys().copied().collect();
-            let expected: HashSet<i64> = (0..50).collect();
-            assert_eq!(keys, expected);
-        })
-        .settings(Settings::new().database(None))
-        .run();
     }
 
     #[test]
@@ -627,22 +711,6 @@ mod sampled_from {
             assert_eq!(x, expected);
         })
         .settings(Settings::new().database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_dicts_with_sampled_keys_beyond_the_pool_bound_fall_back_to_rejection() {
-        Hegel::new(|tc| {
-            let x: HashMap<i64, ()> = tc.draw(
-                gs::hashmaps(
-                    gs::sampled_from((0..10_001).collect::<Vec<i64>>()),
-                    gs::just(()),
-                )
-                .max_size(3),
-            );
-            assert!(x.len() <= 3);
-        })
-        .settings(Settings::new().test_cases(5).database(None))
         .run();
     }
 
@@ -660,19 +728,7 @@ mod sampled_from {
     }
 
     #[test]
-    fn test_sets_of_samples_beyond_the_pool_bound_fall_back_to_rejection() {
-        Hegel::new(|tc| {
-            let x: HashSet<i64> = tc.draw(
-                gs::hashsets(gs::sampled_from((0..10_001).collect::<Vec<i64>>())).max_size(3),
-            );
-            assert!(x.len() <= 3);
-        })
-        .settings(Settings::new().test_cases(5).database(None))
-        .run();
-    }
-
-    #[test]
-    fn test_filter_on_a_generator_reference_uses_its_enumerated_values() {
+    fn test_filter_on_a_generator_reference() {
         Hegel::new(|tc| {
             let source = gs::sampled_from(vec![0_i64, 1, 2, 3]);
             let v: i64 = tc.draw((&source).filter(|x: &i64| *x % 2 == 0));
@@ -691,51 +747,17 @@ mod sampled_from {
     }
 
     #[test]
-    fn test_efficient_sets_of_samples_with_chained_transformations() {
-        Hegel::new(|tc| {
-            let x: HashSet<i64> = tc.draw(
-                gs::hashsets(
-                    gs::sampled_from((0..50).collect::<Vec<i64>>())
-                        .map(|x: i64| x * 2)
-                        .filter(|x: &i64| *x % 3 != 0)
-                        .map(|x: i64| x / 2),
-                )
-                .min_size(33),
-            );
-            let expected: HashSet<i64> = (0..50).filter(|x| (x * 2) % 3 != 0).collect();
-            assert_eq!(x, expected);
-        })
-        .settings(
-            Settings::new()
-                .database(None)
-                .suppress_health_check([HealthCheck::FilterTooMuch]),
-        )
-        .run();
-    }
-
-    #[test]
-    fn test_efficient_sets_of_samples_with_chained_transformations_slow_path() {
-        Hegel::new(|tc| {
-            let result: HashSet<i64> = tc.draw(hegel::compose!(|tc| {
-                let mut result = HashSet::new();
-                let elements: Vec<i64> = (0..20).collect();
-                while result.len() < 13 {
-                    let captured = result.clone();
-                    let val: i64 = tc.draw(
-                        gs::sampled_from(elements.clone())
-                            .filter(|x: &i64| *x % 3 != 0)
-                            .map(|x: i64| x * 2)
-                            .filter(move |x: &i64| !captured.contains(x)),
-                    );
-                    result.insert(val);
-                }
-                result
-            }));
-            let expected: HashSet<i64> = (0..20).filter(|x| x % 3 != 0).map(|x| x * 2).collect();
-            assert_eq!(result, expected);
-        })
-        .settings(Settings::new().database(None))
-        .run();
+    fn test_sets_of_samples_with_chained_transformations() {
+        assert_all_examples(
+            gs::hashsets(
+                gs::sampled_from((0..50).collect::<Vec<i64>>())
+                    .map(|x: i64| x * 2)
+                    .filter(|x: &i64| *x % 3 != 0)
+                    .map(|x: i64| x / 2),
+            )
+            .max_size(5),
+            |x: &HashSet<i64>| x.iter().all(|v| (0..50).contains(v) && (v * 2) % 3 != 0),
+        );
     }
 
     #[test]

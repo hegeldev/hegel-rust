@@ -2,7 +2,162 @@ use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
-use crate::generators::{BoxedGenerator, Generator, TestCase, integers};
+use crate::ffi::sys as hegel_c;
+use crate::generators::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
+
+impl PrettyPrintable for Date {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "date({}, {}, {})",
+            self.year(),
+            self.month(),
+            self.day()
+        ));
+    }
+}
+
+impl PrettyPrintable for Time {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "time({}, {}, {}, {})",
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for DateTime {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "datetime({}, {}, {}, {}, {}, {}, {})",
+            self.year(),
+            self.month(),
+            self.day(),
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for Timestamp {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Timestamp::new({}, {}).unwrap()",
+            self.as_second(),
+            self.subsec_nanosecond()
+        ));
+    }
+}
+
+impl PrettyPrintable for Span {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        let mut repr = String::from("Span::new()");
+        for (unit, value) in [
+            ("years", i64::from(self.get_years())),
+            ("months", i64::from(self.get_months())),
+            ("weeks", i64::from(self.get_weeks())),
+            ("days", i64::from(self.get_days())),
+            ("hours", i64::from(self.get_hours())),
+            ("minutes", self.get_minutes()),
+            ("seconds", self.get_seconds()),
+            ("milliseconds", self.get_milliseconds()),
+            ("microseconds", self.get_microseconds()),
+            ("nanoseconds", self.get_nanoseconds()),
+        ] {
+            if value != 0 {
+                repr.push_str(&format!(".{unit}({value})"));
+            }
+        }
+        printer.text(&repr);
+    }
+}
+
+impl PrettyPrintable for SignedDuration {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "SignedDuration::new({}, {})",
+            self.as_secs(),
+            self.subsec_nanos()
+        ));
+    }
+}
+
+impl PrettyPrintable for Offset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!(
+            "Offset::from_seconds({}).unwrap()",
+            self.seconds()
+        ));
+    }
+}
+
+impl PrettyPrintable for Zoned {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        printer.text(&format!("{:?}.parse::<Zoned>().unwrap()", self.to_string()));
+    }
+}
+
+/// Prints the constructor for the time zone's representation: `TimeZone::UTC`,
+/// `TimeZone::unknown()`, `TimeZone::get("…").unwrap()` for an IANA zone, or
+/// `TimeZone::fixed(…)`. A zone with none of those representations (an
+/// unnamed TZif or POSIX zone) prints its `Debug` output.
+impl PrettyPrintable for jiff::tz::TimeZone {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        if self.is_unknown() {
+            printer.text("TimeZone::unknown()");
+        } else if let Some(name) = self.iana_name() {
+            if name == "UTC" {
+                printer.text("TimeZone::UTC");
+            } else {
+                printer.text(&format!("TimeZone::get({name:?}).unwrap()"));
+            }
+        } else if let Ok(offset) = self.to_fixed_offset() {
+            printer.begin_group(16, "TimeZone::fixed(");
+            offset.pretty_print(printer);
+            printer.end_group(")");
+        } else {
+            crate::pretty::print_debug_repr(&format!("{self:?}"), printer);
+        }
+    }
+}
+
+impl PrettyPrintable for jiff::tz::AmbiguousOffset {
+    fn pretty_print(&self, printer: &mut PrettyPrinter) {
+        use jiff::tz::AmbiguousOffset;
+        match self {
+            AmbiguousOffset::Unambiguous { offset } => {
+                printer.begin_group(4, "AmbiguousOffset::Unambiguous {");
+                printer.breakable(" ");
+                printer.text("offset: ");
+                offset.pretty_print(printer);
+                printer.end_group(" }");
+            }
+            AmbiguousOffset::Gap { before, after } => {
+                pretty_before_after("AmbiguousOffset::Gap {", before, after, printer);
+            }
+            AmbiguousOffset::Fold { before, after } => {
+                pretty_before_after("AmbiguousOffset::Fold {", before, after, printer);
+            }
+        }
+    }
+}
+
+fn pretty_before_after(open: &str, before: &Offset, after: &Offset, printer: &mut PrettyPrinter) {
+    printer.begin_group(4, open);
+    printer.breakable(" ");
+    printer.text("before: ");
+    before.pretty_print(printer);
+    printer.text(",");
+    printer.breakable(" ");
+    printer.text("after: ");
+    after.pretty_print(printer);
+    printer.end_group(" }");
+}
 use crate::test_case::invalid_argument;
 
 /// Convert a [`Date`] to the engine's date struct. Every jiff `Date` fits:
@@ -45,6 +200,12 @@ impl Generator<Date> for DateGenerator {
     }
 }
 
+impl PrintableGenerator<Date> for DateGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Date {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`jiff::civil::Date`] values.
 ///
 /// Defaults span years 1–9999 (`0001-01-01` through `9999-12-31`). Use the
@@ -73,20 +234,12 @@ pub fn dates() -> DateGenerator {
     }
 }
 
-/// Total nanoseconds from midnight for a [`Time`].
-fn time_total_nanos(t: Time) -> i64 {
-    (i64::from(t.hour()) * 3_600 + i64::from(t.minute()) * 60 + i64::from(t.second()))
-        * 1_000_000_000
-        + i64::from(t.subsec_nanosecond())
-}
-
-/// Convert whole microseconds from midnight to the engine's time struct.
-fn hegel_time(total_micros: i64) -> hegel_c::hegel_time_t {
+fn hegel_time(t: Time) -> hegel_c::hegel_time_t {
     hegel_c::hegel_time_t {
-        hour: (total_micros / 3_600_000_000) as u8,
-        minute: (total_micros / 60_000_000 % 60) as u8,
-        second: (total_micros / 1_000_000 % 60) as u8,
-        microsecond: (total_micros % 1_000_000) as u32,
+        hour: t.hour() as u8,
+        minute: t.minute() as u8,
+        second: t.second() as u8,
+        nanosecond: t.subsec_nanosecond() as u32,
     }
 }
 
@@ -115,35 +268,24 @@ impl Generator<Time> for TimeGenerator {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
         }
-        // Generated times are whole microseconds, so round the bounds
-        // inward: min up, max down (totals are non-negative). That can empty
-        // an in-order range whose bounds sit between two consecutive
-        // microseconds.
-        let min_micros = (time_total_nanos(self.min_value) + 999) / 1_000;
-        let max_micros = time_total_nanos(self.max_value) / 1_000;
-        if min_micros > max_micros {
-            invalid_argument!(
-                "times() generates whole-microsecond values, and no whole microsecond \
-                 lies between min_value and max_value"
-            );
-        }
-        let t = tc.generate_time(hegel_time(min_micros), hegel_time(max_micros));
+        let t = tc.generate_time(hegel_time(self.min_value), hegel_time(self.max_value));
         Time::new(
             t.hour as i8,
             t.minute as i8,
             t.second as i8,
-            (t.microsecond * 1000) as i32,
+            t.nanosecond as i32,
         )
         .unwrap()
     }
 }
 
+impl PrintableGenerator<Time> for TimeGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Time {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`jiff::civil::Time`] values.
-///
-/// Generated times have whole-microsecond precision (`subsec_nanosecond()`
-/// is always a multiple of 1000). Bounds may carry sub-microsecond
-/// components; they are honoured by rounding inward to the enclosed
-/// microsecond range.
 ///
 /// See [`TimeGenerator`] for builder methods.
 ///
@@ -222,6 +364,12 @@ impl Generator<DateTime> for DateTimeGenerator {
     }
 }
 
+impl PrintableGenerator<DateTime> for DateTimeGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> DateTime {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`jiff::civil::DateTime`] values.
 ///
 /// See [`DateTimeGenerator`] for builder methods.
@@ -276,6 +424,12 @@ impl Generator<Timestamp> for TimestampGenerator {
             .max_value(self.max_value.as_nanosecond())
             .do_draw(tc);
         Timestamp::from_nanosecond(nanos).unwrap()
+    }
+}
+
+impl PrintableGenerator<Timestamp> for TimestampGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Timestamp {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -342,6 +496,12 @@ impl Generator<Span> for SpanGenerator {
     }
 }
 
+impl PrintableGenerator<Span> for SpanGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Span {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`jiff::Span`] values.
 ///
 /// See [`SpanGenerator`] for builder methods.
@@ -404,6 +564,12 @@ impl Generator<SignedDuration> for SignedDurationGenerator {
     }
 }
 
+impl PrintableGenerator<SignedDuration> for SignedDurationGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> SignedDuration {
+        crate::generators::draw_and_print_value(self, tc, printer)
+    }
+}
+
 /// Generate [`jiff::SignedDuration`] values.
 ///
 /// # Example
@@ -460,6 +626,12 @@ impl Generator<Offset> for OffsetGenerator {
             .max_value(self.max_value.seconds())
             .do_draw(tc);
         Offset::from_seconds(secs).unwrap()
+    }
+}
+
+impl PrintableGenerator<Offset> for OffsetGenerator {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Offset {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -526,6 +698,16 @@ where
         let (ts, tz) =
             crate::generators::tuples2(&self.timestamp_gen, &self.timezone_gen).do_draw(tc);
         Zoned::new(ts, tz)
+    }
+}
+
+impl<TS, TZ> PrintableGenerator<Zoned> for ZonedGenerator<TS, TZ>
+where
+    TS: Generator<Timestamp>,
+    TZ: Generator<TimeZone>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Zoned {
+        crate::generators::draw_and_print_value(self, tc, printer)
     }
 }
 

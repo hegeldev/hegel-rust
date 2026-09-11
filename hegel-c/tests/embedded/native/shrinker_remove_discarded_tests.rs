@@ -1,31 +1,32 @@
 //! Unit tests for `Shrinker::remove_discarded`.
 
 use crate::native::bignum::BigInt;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
 use std::sync::{Arc, Mutex};
 
 use crate::exchange::drive_no_yield;
-use crate::native::core::choices::{BooleanChoice, IntegerChoice};
-use crate::native::core::{ChoiceKind, ChoiceNode, ChoiceValue, Span, Spans};
+use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::IntegerChoice;
+use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker};
 
 fn int_node(value: i128) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Integer(IntegerChoice {
+    ChoiceNode::integer(
+        IntegerChoice {
             min_value: BigInt::from(i128::MIN),
             max_value: BigInt::from(i128::MAX),
             shrink_towards: BigInt::from(0),
-        }),
-        ChoiceValue::Integer(BigInt::from(value)),
+        },
+        BigInt::from(value),
         false,
     )
 }
 
 fn bool_node(value: bool) -> ChoiceNode {
-    ChoiceNode::new(
-        ChoiceKind::Boolean(BooleanChoice),
-        ChoiceValue::Boolean(value),
-        false,
-    )
+    ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
 fn span(start: usize, end: usize, discarded: bool) -> Span {
@@ -84,7 +85,7 @@ fn remove_discarded_deletes_a_single_discarded_region() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
@@ -113,7 +114,7 @@ fn remove_discarded_deletes_non_overlapping_regions_in_reverse() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })
@@ -141,7 +142,7 @@ fn remove_discarded_skips_nested_discarded_spans() {
     let values: Vec<_> = shrinker
         .current_nodes
         .iter()
-        .map(|n| match &n.value {
+        .map(|n| match &n.value() {
             ChoiceValue::Integer(v) => i128::try_from(v).unwrap(),
             _ => unreachable!(),
         })

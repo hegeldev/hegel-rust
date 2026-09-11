@@ -7,7 +7,11 @@
 use super::ordering::{PermutationJudge, shrink_ordering};
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
+use crate::native::HashSet;
 use crate::native::core::{ChoiceNode, sort_key};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// The [`PermutationJudge`] behind [`Shrinker::reorder_spans`]: splices the
 /// sibling spans' node ranges into the proposed order and asks `consider`
@@ -42,6 +46,53 @@ impl PermutationJudge for ReorderJudge<'_, '_> {
 }
 
 impl<'a> Shrinker<'a> {
+    /// Try deleting each span outright: first the span's own extent, then,
+    /// when that fails, the extent widened to the start of the next span,
+    /// which also removes any spanless choices recorded after the span
+    /// closed.
+    ///
+    /// This handles deletions too wide for
+    /// [`delete_chunks`](Self::delete_chunks), which tries windows of at
+    /// most eight choices. A stateful round's rule span plus the
+    /// per-invariant sampling draws after it can cost well over eight
+    /// choices, and only the widened extent removes the sampling draws in
+    /// the same attempt.
+    pub(crate) async fn delete_spans(&mut self) -> ShrinkResult<()> {
+        let mut attempted: HashSet<(usize, usize)> = HashSet::default();
+        let mut epoch = self.improvements;
+        let mut i = 0;
+        while i < self.current_spans.len() {
+            let span = self.current_spans[i].clone();
+            i += 1;
+            if self.improvements != epoch {
+                epoch = self.improvements;
+                attempted.clear();
+            }
+            if span.end > self.current_nodes.len() || span.end.saturating_sub(span.start) < 2 {
+                continue;
+            }
+            let widened_end = self
+                .current_spans
+                .iter()
+                .map(|s| s.start)
+                .filter(|&s| s >= span.end)
+                .min()
+                .unwrap_or(self.current_nodes.len());
+            for end in [span.end, widened_end] {
+                let deletes_everything = span.start == 0 && end == self.current_nodes.len();
+                if deletes_everything || !attempted.insert((span.start, end)) {
+                    continue;
+                }
+                let mut attempt = self.current_nodes[..span.start].to_vec();
+                attempt.extend_from_slice(&self.current_nodes[end..]);
+                if self.consider(&attempt).await? {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Delete every contiguous non-overlapping discarded span in one pass.
     ///
     /// Useful for rejection-sampling data left behind by filtered
@@ -99,7 +150,7 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            let already_trivial = self.current_spans.trivial(i, &self.current_nodes);
+            let already_trivial = self.current_spans.trivial(i, &self.current_nodes)?;
             if already_trivial {
                 i += 1;
                 continue;
@@ -110,9 +161,8 @@ impl<'a> Shrinker<'a> {
                 if node.was_forced {
                     continue;
                 }
-                let simplest = node.kind.simplest();
-                if node.value != simplest {
-                    *node = node.with_value(simplest);
+                if !node.data.is_simplest()? {
+                    *node = node.with_simplest()?;
                 }
             }
 
@@ -157,8 +207,8 @@ impl<'a> Shrinker<'a> {
             .map(|s| (s.start, s.end, s.label.clone()))
             .collect();
 
-        let mut by_label: std::collections::BTreeMap<&str, Vec<usize>> =
-            std::collections::BTreeMap::new();
+        let mut by_label: alloc::collections::BTreeMap<&str, Vec<usize>> =
+            alloc::collections::BTreeMap::new();
         for (idx, (_, _, label)) in spans.iter().enumerate() {
             by_label.entry(label.as_str()).or_default().push(idx);
         }
@@ -211,8 +261,8 @@ impl<'a> Shrinker<'a> {
     /// symmetric alternative.
     pub(crate) async fn reorder_spans(&mut self) -> ShrinkResult<()> {
         let parents: Vec<Option<usize>> = {
-            let mut seen: std::collections::BTreeSet<Option<usize>> =
-                std::collections::BTreeSet::new();
+            let mut seen: alloc::collections::BTreeSet<Option<usize>> =
+                alloc::collections::BTreeSet::new();
             for span in self.current_spans.iter() {
                 seen.insert(span.parent);
             }
@@ -220,8 +270,8 @@ impl<'a> Shrinker<'a> {
         };
 
         for parent in parents {
-            let mut by_label: std::collections::BTreeMap<String, Vec<usize>> =
-                std::collections::BTreeMap::new();
+            let mut by_label: alloc::collections::BTreeMap<String, Vec<usize>> =
+                alloc::collections::BTreeMap::new();
             for (idx, span) in self.current_spans.iter().enumerate() {
                 if span.parent == parent {
                     by_label.entry(span.label.clone()).or_default().push(idx);
@@ -284,6 +334,10 @@ impl<'a> Shrinker<'a> {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_remove_discarded_tests.rs"]
 mod remove_discarded_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_delete_spans_tests.rs"]
+mod delete_spans_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_pass_to_descendant_tests.rs"]

@@ -1,7 +1,15 @@
-use super::{BoxedGenerator, Generator, TestCase, integers, labels};
+use super::generators::draw_and_print_value;
+use super::{
+    BoxedPrintableGenerator, Generator, PrintableGenerator, TestCase, combine_labels, integers,
+    label_from_name,
+};
+use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
 use std::marker::PhantomData;
+
+const ONE_OF_LABEL: u64 = label_from_name("hegel.one_of");
+const OPTIONAL_LABEL: u64 = label_from_name("hegel.optional");
 
 /// Generator that picks from a fixed list of values. Created by [`sampled_from()`].
 pub struct SampledFromGenerator<'a, T: Clone> {
@@ -16,9 +24,13 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
         let index = indices.do_draw(tc);
         self.elements[index].clone()
     }
+}
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        Some(self.elements.to_vec())
+impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<T>
+    for SampledFromGenerator<'a, T>
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_and_print_value(self, tc, printer)
     }
 }
 
@@ -42,52 +54,195 @@ where
     SampledFromGenerator { elements }
 }
 
-/// Generator that chooses from multiple generators. Created by [`one_of()`] or [`one_of!`](crate::one_of).
-pub struct OneOfGenerator<'a, T> {
-    generators: Vec<BoxedGenerator<'a, T>>,
+/// Generator that chooses between alternatives of the same type. Created by
+/// the [`one_of!`](crate::one_of) macro (which keeps its components unboxed)
+/// and the [`one_of()`] function (which stores boxed generators).
+///
+/// Generic over the alternative storage `A`: a [`OneOfCons`]/[`OneOfLast`]
+/// chain from `one_of!`, or a `Vec` of boxed generators from `one_of` —
+/// [`BoxedPrintableGenerator`](super::BoxedPrintableGenerator)s (the default)
+/// or plain [`BoxedGenerator`](super::BoxedGenerator)s, printable under the
+/// usual boxing rules (see [`Generator::boxed`](super::Generator::boxed)).
+pub struct OneOfGenerator<'a, T, A = Vec<BoxedPrintableGenerator<'a, T>>> {
+    alternatives: A,
+    _phantom: PhantomData<&'a fn() -> T>,
 }
 
-impl<T> Generator<T> for OneOfGenerator<'_, T> {
-    fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(labels::ONE_OF);
-        let index = integers::<usize>()
-            .min_value(0)
-            .max_value(self.generators.len() - 1)
-            .do_draw(tc);
-        let result = self.generators[index].do_draw(tc);
-        tc.stop_span(false);
-        result
+/// The alternatives a [`OneOfGenerator`] dispatches between: some fixed
+/// number of generators of the same type, drawable by index.
+pub trait Alternatives<T> {
+    /// The highest valid alternative index. Alternatives are never empty, so
+    /// this is the number of alternatives minus one.
+    fn max_index(&self) -> usize;
+    /// Draw from the alternative at `index`, which is at most
+    /// [`max_index()`](Self::max_index).
+    fn draw_at(&self, tc: &TestCase, index: usize) -> T;
+    /// The alternatives' labels (see [`Generator::label`]) combined into
+    /// one, so that the containing [`OneOfGenerator`]'s label reflects what
+    /// it chooses between. Defaults to a label derived from the type name.
+    fn label(&self) -> u64 {
+        label_from_name(std::any::type_name::<Self>())
+    }
+}
+
+/// An [`Alternatives`] whose components are all [`PrintableGenerator`]s,
+/// making the containing [`OneOfGenerator`] one too.
+pub trait PrintableAlternatives<T>: Alternatives<T> {
+    /// Draw from the alternative at `index`, printing the drawn value.
+    fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, index: usize) -> T;
+}
+
+/// The choice structure every `one_of` draw shares — a span around a
+/// uniform index draw followed by the chosen alternative — with the
+/// alternative dispatch (and whether it draws silently or printing)
+/// injected. Using this from both draw paths is what keeps their choice
+/// streams identical.
+fn draw_one_of<T>(
+    tc: &TestCase,
+    label: u64,
+    max_index: usize,
+    draw_at: impl FnOnce(usize) -> T,
+) -> T {
+    tc.start_span(label);
+    let index = integers::<usize>()
+        .min_value(0)
+        .max_value(max_index)
+        .do_draw(tc);
+    let result = draw_at(index);
+    tc.stop_span(false);
+    result
+}
+
+impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
+    fn label(&self) -> u64 {
+        combine_labels(&[ONE_OF_LABEL, self.alternatives.label()])
     }
 
-    fn enumerate_values(&self) -> Option<Vec<T>> {
-        let mut all = Vec::new();
-        for g in &self.generators {
-            all.extend(g.enumerate_values()?);
+    fn do_draw(&self, tc: &TestCase) -> T {
+        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+            self.alternatives.draw_at(tc, index)
+        })
+    }
+}
+
+impl<'a, T, A: PrintableAlternatives<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, A> {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+            self.alternatives.draw_at_and_print(tc, printer, index)
+        })
+    }
+}
+
+impl<T, B: Generator<T>> Alternatives<T> for Vec<B> {
+    fn max_index(&self) -> usize {
+        self.len() - 1
+    }
+    fn draw_at(&self, tc: &TestCase, index: usize) -> T {
+        self[index].do_draw(tc)
+    }
+    fn label(&self) -> u64 {
+        combine_labels(&self.iter().map(Generator::label).collect::<Vec<_>>())
+    }
+}
+
+impl<T, B: PrintableGenerator<T>> PrintableAlternatives<T> for Vec<B> {
+    fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, index: usize) -> T {
+        tc.draw_and_print(&self[index], printer)
+    }
+}
+
+/// A non-final `one_of!` alternative: one generator plus the rest of the
+/// chain.
+pub struct OneOfCons<G, R>(pub G, pub R);
+
+/// The final `one_of!` alternative.
+pub struct OneOfLast<G>(pub G);
+
+impl<T, G: Generator<T>> Alternatives<T> for OneOfLast<G> {
+    fn max_index(&self) -> usize {
+        0
+    }
+    fn draw_at(&self, tc: &TestCase, _index: usize) -> T {
+        self.0.do_draw(tc)
+    }
+    fn label(&self) -> u64 {
+        combine_labels(&[self.0.label()])
+    }
+}
+
+impl<T, G: PrintableGenerator<T>> PrintableAlternatives<T> for OneOfLast<G> {
+    fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, _index: usize) -> T {
+        tc.draw_and_print(&self.0, printer)
+    }
+}
+
+impl<T, G: Generator<T>, R: Alternatives<T>> Alternatives<T> for OneOfCons<G, R> {
+    fn max_index(&self) -> usize {
+        1 + self.1.max_index()
+    }
+    fn draw_at(&self, tc: &TestCase, index: usize) -> T {
+        if index == 0 {
+            self.0.do_draw(tc)
+        } else {
+            self.1.draw_at(tc, index - 1)
         }
-        Some(all)
+    }
+    fn label(&self) -> u64 {
+        combine_labels(&[self.0.label(), self.1.label()])
+    }
+}
+
+impl<T, G: PrintableGenerator<T>, R: PrintableAlternatives<T>> PrintableAlternatives<T>
+    for OneOfCons<G, R>
+{
+    fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, index: usize) -> T {
+        if index == 0 {
+            tc.draw_and_print(&self.0, printer)
+        } else {
+            self.1.draw_at_and_print(tc, printer, index - 1)
+        }
     }
 }
 
 /// Choose from multiple generators of the same type.
 ///
-/// Accepts any iterable of boxed generators (e.g. `Vec<BoxedGenerator<T>>`
-/// or an iterator chain). For a more convenient syntax, use the `one_of!`
-/// macro instead.
-pub fn one_of<'a, T, I>(generators: I) -> OneOfGenerator<'a, T>
+/// Accepts any iterable of boxed generators: `Vec<BoxedGenerator<T>>`
+/// (printable whenever `T` is [`PrettyPrintable`]) or
+/// `Vec<BoxedPrintableGenerator<T>>` (each generator keeps its own
+/// printing). For a more convenient syntax, use the `one_of!` macro instead.
+pub fn one_of<'a, T, B, I>(generators: I) -> OneOfGenerator<'a, T, Vec<B>>
 where
-    I: IntoIterator<Item = BoxedGenerator<'a, T>>,
+    B: Generator<T>,
+    I: IntoIterator<Item = B>,
 {
-    let generators: Vec<BoxedGenerator<'a, T>> = generators.into_iter().collect();
+    let generators: Vec<B> = generators.into_iter().collect();
     if generators.is_empty() {
         invalid_argument!("one_of requires at least one generator");
     }
-    OneOfGenerator { generators }
+    OneOfGenerator {
+        alternatives: generators,
+        _phantom: PhantomData,
+    }
 }
 
-/// Choose from multiple generators of the same type.
+#[doc(hidden)]
+pub fn one_of_from_alternatives<'a, T, A: Alternatives<T>>(
+    alternatives: A,
+) -> OneOfGenerator<'a, T, A> {
+    OneOfGenerator {
+        alternatives,
+        _phantom: PhantomData,
+    }
+}
+
+/// Choose from any number of generators of the same type.
 ///
-/// This macro automatically boxes each generator, providing a more ergonomic
-/// syntax than calling [`one_of`] directly.
+/// The component generators keep their concrete types (no boxing), so the
+/// result is a [`PrintableGenerator`] exactly when every component is one —
+/// usable with [`draw`](crate::TestCase::draw) in that case, and with
+/// [`draw_silent`](crate::TestCase::draw_silent) otherwise. When the number
+/// of alternatives isn't known at compile time, box the generators and call
+/// [`one_of`](crate::generators::one_of) instead.
 ///
 /// # Example
 ///
@@ -104,10 +259,19 @@ where
 /// ```
 #[macro_export]
 macro_rules! one_of {
-    ($($generator:expr),+ $(,)?) => {
-        $crate::generators::one_of(vec![
-            $($crate::generators::Generator::boxed($generator)),+
-        ])
+    ($($g:expr),+ $(,)?) => {
+        $crate::generators::one_of_from_alternatives($crate::__one_of_alternatives!($($g),+))
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __one_of_alternatives {
+    ($g:expr) => {
+        $crate::generators::OneOfLast($g)
+    };
+    ($g:expr, $($rest:expr),+) => {
+        $crate::generators::OneOfCons($g, $crate::__one_of_alternatives!($($rest),+))
     };
 }
 
@@ -117,19 +281,57 @@ pub struct OptionalGenerator<G, T> {
     _phantom: PhantomData<fn(T)>,
 }
 
-impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
-where
-    G: Generator<T>,
-{
-    fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        tc.start_span(labels::OPTIONAL);
+impl<T, G> OptionalGenerator<G, T> {
+    /// The one optional body both draw paths run; only how the inner value
+    /// is drawn (silently or printing) is injected.
+    fn draw_optional(
+        &self,
+        tc: &TestCase,
+        label: u64,
+        printer: &mut PrettyPrinter,
+        draw: impl FnOnce(&G, &TestCase, &mut PrettyPrinter) -> T,
+    ) -> Option<T> {
+        tc.start_span(label);
         let result = if tc.generate_boolean(0.5) {
-            Some(self.inner.do_draw(tc))
+            printer.begin_group(5, "Some(");
+            let value = draw(&self.inner, tc, printer);
+            printer.end_group(")");
+            Some(value)
         } else {
+            printer.text("None");
             None
         };
         tc.stop_span(false);
         result
+    }
+}
+
+impl<T, G> Generator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: Generator<T>,
+{
+    fn label(&self) -> u64 {
+        combine_labels(&[OPTIONAL_LABEL, self.inner.label()])
+    }
+
+    fn do_draw(&self, tc: &TestCase) -> Option<T> {
+        self.draw_optional(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |inner, tc, _| inner.do_draw(tc),
+        )
+    }
+}
+
+impl<T, G> PrintableGenerator<Option<T>> for OptionalGenerator<G, T>
+where
+    G: PrintableGenerator<T>,
+{
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
+        self.draw_optional(tc, self.label(), printer, |inner, tc, printer| {
+            tc.draw_and_print(inner, printer)
+        })
     }
 }
 

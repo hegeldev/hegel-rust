@@ -1,6 +1,9 @@
 use super::*;
 use crate::native::bignum::BigInt;
-use crate::native::core::ChoiceValue;
+use crate::native::core::choices::{BooleanChoice, RealizedStream};
+use crate::native::core::{ChoiceNode, ChoiceValue, CloneRecord, MAX_CLONE_DEPTH};
+use alloc::string::ToString;
+use alloc::vec;
 use tempfile::TempDir;
 
 fn fresh_db() -> (DirectoryTestCaseDatabase, TempDir) {
@@ -97,25 +100,13 @@ fn move_value_falls_back_to_delete_save_when_rename_fails() {
 }
 
 #[test]
-fn round_trip_integer_choices() {
-    let choices = vec![
-        ChoiceValue::Integer(BigInt::from(0)),
-        ChoiceValue::Integer(BigInt::from(-1)),
-        ChoiceValue::Integer(BigInt::from(i128::MAX)),
-        ChoiceValue::Integer(BigInt::from(i128::MIN)),
-    ];
-    let bytes = serialize_choices(&choices);
-    assert_eq!(deserialize_choices(&bytes), Some(choices));
-}
-
-#[test]
 fn round_trip_mixed_choices() {
     let choices = vec![
         ChoiceValue::Boolean(false),
         ChoiceValue::Integer(BigInt::from(42)),
         ChoiceValue::Boolean(true),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -238,7 +229,7 @@ fn serialize_roundtrips_various_integer_values() {
         ChoiceValue::Integer(BigInt::from(i128::MIN) * BigInt::from(7)),
         ChoiceValue::Integer(BigInt::from(0)),
     ];
-    let bytes = serialize_choices(&values);
+    let bytes = serialize_choices(&values).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(values));
 }
 
@@ -269,7 +260,7 @@ fn round_trip_float_choices_preserves_bit_pattern() {
         ChoiceValue::Float(f64::MAX),
         ChoiceValue::Float(f64::MIN_POSITIVE),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     let round_tripped = deserialize_choices(&bytes).unwrap();
     assert_eq!(round_tripped.len(), choices.len());
     for (got, want) in round_tripped.iter().zip(choices.iter()) {
@@ -298,7 +289,7 @@ fn round_trip_bytes_choices() {
         ChoiceValue::Bytes(vec![0xff, 0x00, 0x80, 0x7f]),
         ChoiceValue::Bytes(vec![1; 1024]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -327,7 +318,7 @@ fn round_trip_string_choices() {
         ChoiceValue::String(vec![b'a' as u32, b'b' as u32, b'c' as u32]),
         ChoiceValue::String(vec![0x2603, 0x1F600, 0]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
@@ -378,6 +369,65 @@ fn move_value_falls_back_to_delete_save_when_dst_dir_create_fails() {
     std::fs::set_permissions(dir.path(), perms).unwrap();
 }
 
+#[test]
+fn save_leaves_no_temporary_files_behind() {
+    let (db, _dir) = fresh_db();
+    db.save(b"key", b"value");
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert_eq!(names.len(), 1);
+    assert!(
+        !names[0].contains(".tmp."),
+        "the temporary file must be renamed away, not left in place"
+    );
+}
+
+#[test]
+fn temp_paths_are_distinct_and_pid_tagged() {
+    let a = temp_path("dir/value");
+    let b = temp_path("dir/value");
+    assert_ne!(a, b);
+    let prefix = format!("dir/value.tmp.{}.", crate::sys::pid());
+    assert!(a.starts_with(&prefix));
+    assert!(b.starts_with(&prefix));
+}
+
+#[test]
+fn parallel_saves_store_all_values_and_leave_no_temporaries() {
+    let (db, _dir) = fresh_db();
+    std::thread::scope(|scope| {
+        for i in 0..4u8 {
+            let db = &db;
+            scope.spawn(move || db.save(b"key", &[i]));
+        }
+    });
+    assert_eq!(db.fetch(b"key").len(), 4);
+    let names = crate::sys::fs::read_dir(&db.key_path(b"key")).unwrap();
+    assert!(names.iter().all(|name| !name.contains(".tmp.")));
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_rename_fails() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().to_str().unwrap();
+    let target = format!("{root}/occupied");
+    crate::sys::fs::create_dir_all(&target).unwrap();
+    atomic_write(&target, b"value");
+    let names = crate::sys::fs::read_dir(root).unwrap();
+    assert_eq!(
+        names,
+        vec!["occupied".to_string()],
+        "a failed rename must remove its temporary file"
+    );
+}
+
+#[test]
+fn atomic_write_cleans_up_when_the_write_fails() {
+    let dir = TempDir::new().unwrap();
+    let target = format!("{}/no-such-dir/value", dir.path().to_str().unwrap());
+    atomic_write(&target, b"value");
+    assert!(!crate::sys::fs::exists(&target));
+}
+
 fn clone_value(children: Vec<ChoiceValue>) -> ChoiceValue {
     ChoiceValue::Clone(std::sync::Arc::new(
         crate::native::core::CloneRecord::from_values(children),
@@ -395,20 +445,15 @@ fn serialize_roundtrips_clone_values() {
         ]),
         ChoiceValue::Bytes(vec![7]),
     ];
-    let bytes = serialize_choices(&choices);
+    let bytes = serialize_choices(&choices).unwrap();
     assert_eq!(deserialize_choices(&bytes), Some(choices));
 }
 
 #[test]
 fn serialize_clone_drops_realized_info_but_preserves_equality() {
-    use crate::native::core::choices::BooleanChoice;
-    use crate::native::core::{ChoiceKind, ChoiceNode, CloneRecord, Span, SpanEvent};
+    use crate::native::core::{ChoiceNode, CloneRecord, Span};
     let realized = ChoiceValue::Clone(std::sync::Arc::new(CloneRecord::from_run(
-        vec![ChoiceNode::new(
-            ChoiceKind::Boolean(BooleanChoice),
-            ChoiceValue::Boolean(true),
-            false,
-        )],
+        vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)],
         vec![Span {
             start: 0,
             end: 1,
@@ -417,9 +462,8 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
             parent: None,
             discarded: false,
         }],
-        vec![(0, SpanEvent::Open { label: 9 })],
     )));
-    let bytes = serialize_choices(std::slice::from_ref(&realized));
+    let bytes = serialize_choices(std::slice::from_ref(&realized)).unwrap();
     let round_tripped = deserialize_choices(&bytes).unwrap();
     assert_eq!(round_tripped.len(), 1);
     assert_eq!(round_tripped[0], realized);
@@ -427,7 +471,7 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
         panic!("expected a clone value");
     };
     assert!(record.realized_nodes().is_none());
-    assert!(record.spans().is_empty());
+    assert!(record.realized().is_none());
 }
 
 #[test]
@@ -467,4 +511,53 @@ fn deserialize_rejects_clone_nesting_beyond_max_depth() {
     ok_bytes.extend_from_slice(&0u32.to_le_bytes());
     let decoded = deserialize_choices(&ok_bytes).unwrap();
     assert_eq!(decoded.len(), 1);
+}
+
+fn nested_clones(depth: usize) -> Vec<ChoiceValue> {
+    let mut choices = vec![ChoiceValue::Boolean(true)];
+    for _ in 0..depth {
+        choices = vec![ChoiceValue::Clone(std::sync::Arc::new(
+            CloneRecord::from_values(choices),
+        ))];
+    }
+    choices
+}
+
+#[test]
+fn serialize_round_trips_clone_nesting_at_max_depth() {
+    let choices = nested_clones(MAX_CLONE_DEPTH);
+    let bytes = serialize_choices(&choices).unwrap();
+    assert_eq!(deserialize_choices(&bytes), Some(choices));
+}
+
+#[test]
+fn serialize_rejects_clone_nesting_beyond_max_depth() {
+    assert!(serialize_choices(&nested_clones(MAX_CLONE_DEPTH + 1)).is_none());
+}
+
+fn nested_clone_nodes(depth: usize) -> Vec<ChoiceNode> {
+    let mut nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
+    for _ in 0..depth {
+        nodes = vec![ChoiceNode::clone_stream(
+            std::sync::Arc::new(RealizedStream::new(nodes, Vec::new())),
+            false,
+        )];
+    }
+    nodes
+}
+
+#[test]
+fn serialize_nodes_matches_serialize_choices_at_max_depth() {
+    let nodes = nested_clone_nodes(MAX_CLONE_DEPTH);
+    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+    assert_eq!(serialize_nodes(&nodes), serialize_choices(&choices));
+    assert_eq!(
+        deserialize_choices(&serialize_nodes(&nodes).unwrap()),
+        Some(choices)
+    );
+}
+
+#[test]
+fn serialize_nodes_rejects_clone_nesting_beyond_max_depth() {
+    assert!(serialize_nodes(&nested_clone_nodes(MAX_CLONE_DEPTH + 1)).is_none());
 }

@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use rand::{Rng, RngExt};
 
 use super::*;
@@ -62,6 +64,33 @@ fn from_os_draws_without_panicking() {
     let mut rng = EngineRng::from_os();
     let _: u64 = rng.next_u64();
     let _: u32 = rng.random();
+}
+
+#[test]
+fn from_os_or_zero_uses_the_seed_when_entropy_succeeded() {
+    let mut rng = EngineRng::from_os_or_zero(42, true);
+    let mut expected = EngineRng::seeded(42);
+    assert_eq!(rng.next_u64(), expected.next_u64());
+}
+
+#[test]
+fn from_os_or_zero_warns_and_seeds_zero_when_entropy_failed() {
+    let mut rng = EngineRng::from_os_or_zero(42, false);
+    let mut expected = EngineRng::seeded(0);
+    assert_eq!(rng.next_u64(), expected.next_u64());
+}
+
+#[test]
+fn urandom_or_fallback_warns_and_uses_a_prng_when_unavailable() {
+    let mut rng = EngineRng::urandom_or_fallback(false);
+    assert!(matches!(rng, EngineRng::Prng(_)));
+    let _: u64 = rng.next_u64();
+}
+
+#[test]
+fn urandom_or_fallback_uses_the_random_device_when_available() {
+    let rng = EngineRng::urandom_or_fallback(true);
+    assert!(matches!(rng, EngineRng::Urandom(_)));
 }
 
 #[cfg(unix)]

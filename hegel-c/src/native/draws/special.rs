@@ -1,9 +1,11 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::LazyLock;
+use alloc::format;
+use alloc::vec::Vec;
+use core::net::{Ipv4Addr, Ipv6Addr};
 
-use crate::control::hegel_internal_assert;
+use crate::control::{InternalError, hegel_internal_assert};
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, NativeTestCase};
+use crate::sys::sync::Lazy;
 
 use super::{LABEL_DATE, LABEL_DATETIME, LABEL_IP_ADDRESS, LABEL_TIME, LABEL_UUID, spanned};
 
@@ -18,13 +20,13 @@ pub struct Date {
 }
 
 /// A drawn time of day. `hour` ∈ [0, 23], `minute`/`second` ∈ [0, 59],
-/// `microsecond` ∈ [0, 999_999].
+/// `nanosecond` ∈ [0, 999_999_999].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Time {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
-    pub microsecond: u32,
+    pub nanosecond: u32,
 }
 
 /// A drawn naive datetime (a [`Date`] plus a [`Time`], no timezone).
@@ -107,31 +109,31 @@ fn validate_date(what: &str, d: &Date) -> Result<(), EngineError> {
 }
 
 fn validate_time(what: &str, t: &Time) -> Result<(), EngineError> {
-    let valid = t.hour <= 23 && t.minute <= 59 && t.second <= 59 && t.microsecond <= 999_999;
+    let valid = t.hour <= 23 && t.minute <= 59 && t.second <= 59 && t.nanosecond <= 999_999_999;
     if !valid {
         return Err(EngineError::InvalidArgument(format!(
-            "{what} is not a valid time: {:02}:{:02}:{:02}.{:06}",
-            t.hour, t.minute, t.second, t.microsecond
+            "{what} is not a valid time: {:02}:{:02}:{:02}.{:09}",
+            t.hour, t.minute, t.second, t.nanosecond
         )));
     }
     Ok(())
 }
 
-pub(crate) fn time_to_us(t: &Time) -> i64 {
-    ((i64::from(t.hour) * 60 + i64::from(t.minute)) * 60 + i64::from(t.second)) * 1_000_000
-        + i64::from(t.microsecond)
+pub(crate) fn time_to_ns(t: &Time) -> i64 {
+    ((i64::from(t.hour) * 60 + i64::from(t.minute)) * 60 + i64::from(t.second)) * 1_000_000_000
+        + i64::from(t.nanosecond)
 }
 
-fn time_from_us(us: i64) -> Time {
+fn time_from_ns(ns: i64) -> Time {
     Time {
-        hour: (us / 3_600_000_000) as u8,
-        minute: (us / 60_000_000 % 60) as u8,
-        second: (us / 1_000_000 % 60) as u8,
-        microsecond: (us % 1_000_000) as u32,
+        hour: (ns / 3_600_000_000_000) as u8,
+        minute: (ns / 60_000_000_000 % 60) as u8,
+        second: (ns / 1_000_000_000 % 60) as u8,
+        nanosecond: (ns % 1_000_000_000) as u32,
     }
 }
 
-const LAST_US_OF_DAY: i64 = 86_400_000_000 - 1;
+const LAST_NS_OF_DAY: i64 = 86_400_000_000_000 - 1;
 
 /// The unspanned bounded date draw shared by [`generate_date`] and
 /// [`generate_datetime`].
@@ -158,12 +160,11 @@ fn draw_date_in(
 /// The unspanned bounded time draw shared by [`generate_time`] and
 /// [`generate_datetime`].
 ///
-/// Mirrors Hypothesis's `TimeStrategy`: one integer draw of a microsecond
-/// offset from `min_us`, shrinking toward `min_us` (the representable time
-/// closest to midnight).
-fn draw_time_in(ntc: &mut NativeTestCase, min_us: i64, max_us: i64) -> Result<Time, EngineError> {
-    let offset = draw_i64(ntc, 0, max_us - min_us)?;
-    Ok(time_from_us(min_us + offset))
+/// One integer draw of a nanosecond offset from `min_ns`, shrinking toward `min_ns`
+/// (the representable time closest to midnight).
+fn draw_time_in(ntc: &mut NativeTestCase, min_ns: i64, max_ns: i64) -> Result<Time, EngineError> {
+    let offset = draw_i64(ntc, 0, max_ns - min_ns)?;
+    Ok(time_from_ns(min_ns + offset))
 }
 
 /// Draw a [`Date`] in `[min, max]`, wrapped in a span so the shrinker treats
@@ -186,13 +187,13 @@ pub fn generate_date(ntc: &mut NativeTestCase, min: Date, max: Date) -> Result<D
 pub fn generate_time(ntc: &mut NativeTestCase, min: Time, max: Time) -> Result<Time, EngineError> {
     validate_time("min_value", &min)?;
     validate_time("max_value", &max)?;
-    let (min_us, max_us) = (time_to_us(&min), time_to_us(&max));
-    if min_us > max_us {
+    let (min_ns, max_ns) = (time_to_ns(&min), time_to_ns(&max));
+    if min_ns > max_ns {
         return Err(EngineError::InvalidArgument(format!(
             "generate_time requires min_value <= max_value, got [{min:?}, {max:?}]"
         )));
     }
-    spanned(ntc, LABEL_TIME, |ntc| draw_time_in(ntc, min_us, max_us))
+    spanned(ntc, LABEL_TIME, |ntc| draw_time_in(ntc, min_ns, max_ns))
 }
 
 /// Draw a [`DateTime`] in `[min, max]`, wrapped in a span: a bounded date
@@ -208,8 +209,8 @@ pub fn generate_datetime(
     validate_time("min_value.time", &min.time)?;
     validate_time("max_value.time", &max.time)?;
     let (min_days, max_days) = (days_from_civil(&min.date), days_from_civil(&max.date));
-    let (min_us, max_us) = (time_to_us(&min.time), time_to_us(&max.time));
-    if (min_days, min_us) > (max_days, max_us) {
+    let (min_ns, max_ns) = (time_to_ns(&min.time), time_to_ns(&max.time));
+    if (min_days, min_ns) > (max_days, max_ns) {
         return Err(EngineError::InvalidArgument(format!(
             "generate_datetime requires min_value <= max_value, got [{min:?}, {max:?}]"
         )));
@@ -217,11 +218,11 @@ pub fn generate_datetime(
     spanned(ntc, LABEL_DATETIME, |ntc| {
         let date = draw_date_in(ntc, min_days, max_days)?;
         let day = days_from_civil(&date);
-        let lo = if day == min_days { min_us } else { 0 };
+        let lo = if day == min_days { min_ns } else { 0 };
         let hi = if day == max_days {
-            max_us
+            max_ns
         } else {
-            LAST_US_OF_DAY
+            LAST_NS_OF_DAY
         };
         let time = draw_time_in(ntc, lo, hi)?;
         Ok(DateTime { date, time })
@@ -344,21 +345,21 @@ struct V6Network {
     size_minus_1: u128,
 }
 
-static SPECIAL_IPV4_NETWORKS: LazyLock<Vec<V4Network>> = LazyLock::new(|| {
+static SPECIAL_IPV4_NETWORKS: Lazy<Result<Vec<V4Network>, InternalError>> = Lazy::new(|| {
     SPECIAL_IPV4_CIDRS
         .iter()
         .map(|s| parse_v4_cidr(s))
         .collect()
 });
 
-static SPECIAL_IPV6_NETWORKS: LazyLock<Vec<V6Network>> = LazyLock::new(|| {
+static SPECIAL_IPV6_NETWORKS: Lazy<Result<Vec<V6Network>, InternalError>> = Lazy::new(|| {
     SPECIAL_IPV6_CIDRS
         .iter()
         .map(|s| parse_v6_cidr(s))
         .collect()
 });
 
-fn parse_v4_cidr(s: &str) -> V4Network {
+fn parse_v4_cidr(s: &str) -> Result<V4Network, InternalError> {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv4Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
@@ -369,10 +370,10 @@ fn parse_v4_cidr(s: &str) -> V4Network {
     let mask = u32::MAX << (32 - prefix);
     let base = u32::from(addr) & mask;
     let size_minus_1 = !mask;
-    V4Network { base, size_minus_1 }
+    Ok(V4Network { base, size_minus_1 })
 }
 
-fn parse_v6_cidr(s: &str) -> V6Network {
+fn parse_v6_cidr(s: &str) -> Result<V6Network, InternalError> {
     let (addr, prefix) = s.split_once('/').unwrap();
     let addr: Ipv6Addr = addr.parse().unwrap();
     let prefix: u32 = prefix.parse().unwrap();
@@ -387,7 +388,7 @@ fn parse_v6_cidr(s: &str) -> V6Network {
         size_minus_1 <= i128::MAX as u128,
         "IPv6 special range too wide to fit offset in i128: prefix /{prefix}"
     );
-    V6Network { base, size_minus_1 }
+    Ok(V6Network { base, size_minus_1 })
 }
 
 /// Draw an IPv4 address, wrapped in a span. Half the draws are uniform over
@@ -411,7 +412,7 @@ fn draw_ipv4(ntc: &mut NativeTestCase) -> Result<Ipv4Addr, EngineError> {
         let d = draw_i64(ntc, 0, 255)? as u32;
         (a << 24) | (b << 16) | (c << 8) | d
     } else {
-        let nets = &*SPECIAL_IPV4_NETWORKS;
+        let nets = SPECIAL_IPV4_NETWORKS.as_ref().map_err(Clone::clone)?;
         let idx = draw_i64(ntc, 0, nets.len() as i64 - 1)? as usize;
         let net = &nets[idx];
         let offset = draw_i64(ntc, 0, i64::from(net.size_minus_1))? as u32;
@@ -432,7 +433,7 @@ fn draw_ipv6(ntc: &mut NativeTestCase) -> Result<Ipv6Addr, EngineError> {
             .unwrap();
         (u128::from(hi) << 64) | u128::from(lo)
     } else {
-        let nets = &*SPECIAL_IPV6_NETWORKS;
+        let nets = SPECIAL_IPV6_NETWORKS.as_ref().map_err(Clone::clone)?;
         let idx = draw_i64(ntc, 0, nets.len() as i64 - 1)? as usize;
         let net = &nets[idx];
         let offset = ntc

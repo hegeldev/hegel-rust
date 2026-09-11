@@ -1,25 +1,22 @@
 use super::*;
-
-static CI_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use alloc::format;
+use alloc::string::ToString;
 
 #[test]
 fn default_is_new() {
     let d = Settings::default();
     let n = Settings::new();
     assert_eq!(d.test_cases, n.test_cases);
-    assert_eq!(d.mode, n.mode);
 }
 
 #[test]
-fn resolved_backend_picks_urandom_under_antithesis() {
-    assert_eq!(
-        Settings::new()
-            .backend(Backend::Default)
-            .resolved_backend(true),
-        Backend::Default
-    );
-    assert_eq!(Settings::new().resolved_backend(true), Backend::Urandom);
-    assert_eq!(Settings::new().resolved_backend(false), Backend::Default);
+fn backend_defaults_to_the_prng_and_is_settable() {
+    for in_antithesis in [false, true] {
+        assert_eq!(Settings::base(in_antithesis).backend, Backend::Default);
+    }
+    let s = Settings::new().backend(Backend::Urandom);
+    assert_eq!(s.backend, Backend::Urandom);
+    assert_eq!(s.backend(Backend::Default).backend, Backend::Default);
 }
 
 #[test]
@@ -33,20 +30,63 @@ fn suppress_health_check_replaces() {
 }
 
 #[test]
-fn new_disables_database_in_ci() {
-    let _guard = CI_ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let key = "TEAMCITY_VERSION";
-    let had_key = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, "1");
+fn base_settings_are_environment_independent_except_for_antithesis() {
+    let settings = Settings::base(false);
+    assert!(matches!(settings.database, Database::Unset));
+    assert!(!settings.derandomize);
+    assert!(!settings.print_blob);
+    assert!(!settings.report_multiple_failures);
+}
+
+const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
+    HealthCheck::FilterTooMuch,
+    HealthCheck::TooSlow,
+    HealthCheck::TestCasesTooLarge,
+    HealthCheck::LargeInitialTestCase,
+];
+
+#[test]
+fn health_checks_run_unless_suppressed_explicitly() {
+    for in_antithesis in [false, true] {
+        let settings = Settings::base(in_antithesis);
+        for check in ALL_HEALTH_CHECKS {
+            assert!(!settings.health_check_suppressed(check), "{check:?}");
+        }
     }
-    let settings = Settings::new();
-    match had_key {
-        Some(v) => unsafe { std::env::set_var(key, v) },
-        None => unsafe { std::env::remove_var(key) },
-    }
-    assert!(matches!(settings.database, Database::Disabled));
-    assert!(settings.derandomize);
+    let settings = Settings::base(false);
+    let settings = settings.suppress_health_check([HealthCheck::TooSlow]);
+    assert!(settings.health_check_suppressed(HealthCheck::TooSlow));
+    assert!(!settings.health_check_suppressed(HealthCheck::FilterTooMuch));
+}
+
+#[test]
+fn print_blob_defaults_off_and_is_settable() {
+    assert!(!Settings::base(false).print_blob);
+    assert!(Settings::base(false).print_blob(true).print_blob);
+}
+
+#[test]
+fn is_in_ci_from_is_false_when_no_variable_is_set() {
+    assert!(!is_in_ci_from(|_| None));
+}
+
+#[test]
+fn is_in_ci_from_detects_presence_variables_even_when_empty() {
+    assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
+    assert!(is_in_ci_from(|key| (key == "GITLAB_CI").then(String::new)));
+}
+
+#[test]
+fn is_in_ci_from_requires_the_expected_value_for_value_variables() {
+    assert!(is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "true".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "TF_BUILD").then(|| "false".to_string())
+    ));
+    assert!(!is_in_ci_from(
+        |key| (key == "GITHUB_ACTIONS").then(String::new)
+    ));
 }
 
 #[test]

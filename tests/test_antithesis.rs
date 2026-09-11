@@ -2,21 +2,18 @@
 //! test binary (`exec::self_test`) with `ANTITHESIS_OUTPUT_DIR` set: the SDK
 //! reads the variable at startup and writes `sdk.jsonl` into it, so a real
 //! subprocess with a controlled environment is required.
-//!
-//! The feature-missing cases are compiled only without the `antithesis`
-//! feature (they assert what happens when the feature is absent); the plain
-//! `cargo test` CI job runs them. The `sdk.jsonl` content test is compiled
-//! only with the feature.
 
 #![cfg(not(windows))]
 
 mod common;
 
 use common::exec::self_test;
+use hegel::TestCase;
 use hegel::generators as gs;
+use hegel::stateful::machine;
+use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::TempDir;
 
-#[cfg(feature = "antithesis")]
 #[hegel::test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_jsonl_fixture(tc: hegel::TestCase) {
@@ -27,7 +24,6 @@ fn antithesis_jsonl_fixture(tc: hegel::TestCase) {
 /// `antithesis_jsonl_fixture`, which the SDK reports as the assertion
 /// location's `begin_line`. Scanned from this file's own source so the
 /// assertion doesn't break when the file is edited.
-#[cfg(feature = "antithesis")]
 fn jsonl_fixture_begin_line() -> u64 {
     let lines: Vec<&str> = include_str!("test_antithesis.rs").lines().collect();
     let fn_line = lines
@@ -43,7 +39,6 @@ fn jsonl_fixture_begin_line() -> u64 {
     attr_line as u64
 }
 
-#[cfg(feature = "antithesis")]
 #[test]
 fn test_antithesis_jsonl_written_when_env_set() {
     let output_dir = TempDir::new().unwrap();
@@ -105,57 +100,6 @@ fn test_antithesis_jsonl_written_when_env_set() {
     );
 }
 
-#[cfg(not(feature = "antithesis"))]
-#[hegel::test]
-#[ignore = "fixture: run via exec::self_test"]
-fn antithesis_no_feature_fixture(tc: hegel::TestCase) {
-    let _ = tc.draw(gs::booleans());
-}
-
-#[cfg(not(feature = "antithesis"))]
-#[test]
-fn test_antithesis_panics_without_feature() {
-    let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().to_str().unwrap().to_string();
-
-    self_test("antithesis_no_feature_fixture")
-        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
-        .expect_failure("antithesis")
-        .run();
-}
-
-#[cfg(not(feature = "antithesis"))]
-#[test]
-#[ignore = "fixture: run via exec::self_test"]
-fn antithesis_body_marker_fixture() {
-    hegel::Hegel::new(|tc| {
-        println!("BODY-RAN");
-        let _: bool = tc.draw(gs::booleans());
-    })
-    .settings(hegel::Settings::new().database(None))
-    .run();
-}
-
-/// Running under Antithesis without the `antithesis` feature is a
-/// configuration error, and must fail *before* any test case runs — not
-/// after a full (potentially long) property run has completed.
-#[cfg(not(feature = "antithesis"))]
-#[test]
-fn test_missing_antithesis_feature_fails_before_running_any_test_case() {
-    let output_dir = TempDir::new().unwrap();
-    let output_path = output_dir.path().to_str().unwrap().to_string();
-
-    let output = self_test("antithesis_body_marker_fixture")
-        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
-        .expect_failure("requires the `antithesis` feature")
-        .run();
-    assert!(
-        !output.stdout.contains("BODY-RAN"),
-        "the configuration error must fire before any test case runs, got:\n{}",
-        output.stdout
-    );
-}
-
 #[test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_plain_run_fixture() {
@@ -167,12 +111,99 @@ fn antithesis_plain_run_fixture() {
 }
 
 /// `ANTITHESIS_OUTPUT_DIR` pointing at a nonexistent path is a launch
-/// configuration error, reported as a plain panic (the directory check runs
-/// before — and regardless of — the feature check).
+/// configuration error, reported as a plain panic.
 #[test]
 fn test_nonexistent_antithesis_output_dir_panics() {
     self_test("antithesis_plain_run_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", "/nonexistent/antithesis-output")
         .expect_failure("to exist when running inside of Antithesis")
         .run();
+}
+
+/// Filters out every input. Outside Antithesis this trips the
+/// `FilterTooMuch` health check; inside Antithesis the `workload` profile
+/// suppresses every health check, so the run ends quietly with no valid
+/// inputs.
+#[hegel::test]
+#[ignore = "fixture: run via exec::self_test"]
+fn antithesis_filter_everything_fixture(tc: hegel::TestCase) {
+    let _: u8 = tc.draw(gs::integers());
+    tc.assume(false);
+}
+
+#[test]
+fn test_health_checks_are_disabled_in_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    self_test("antithesis_filter_everything_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+}
+
+#[test]
+fn test_health_checks_run_in_antithesis_under_a_profile_that_does_not_extend_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    self_test("antithesis_filter_everything_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .env("HEGEL_DEFAULT_PROFILE", "base")
+        .expect_failure("FailedHealthCheck: FilterTooMuch")
+        .run();
+}
+
+#[test]
+fn test_health_checks_still_run_outside_antithesis() {
+    self_test("antithesis_filter_everything_fixture")
+        .env_remove("ANTITHESIS_OUTPUT_DIR")
+        .expect_failure("FailedHealthCheck: FilterTooMuch")
+        .run();
+}
+
+struct Counter {
+    value: AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl Counter {
+    #[rule]
+    fn increment(&self, _: TestCase) {
+        self.value.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// A genuinely concurrent machine (two workers), which outside Antithesis
+/// prints the notice that the run is nondeterministic.
+#[hegel::test]
+#[ignore = "fixture: run via exec::self_test"]
+fn antithesis_concurrent_machine_fixture(tc: TestCase) {
+    let m = Counter {
+        value: AtomicI64::new(0),
+    };
+    machine(m)
+        .min_concurrency(2)
+        .max_concurrency(2)
+        .run_concurrent(tc);
+}
+
+#[test]
+fn test_nondeterminism_notice_is_not_printed_in_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    let out = self_test("antithesis_concurrent_machine_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+    let text = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        !text.contains("Concurrent state machine detected"),
+        "Antithesis is deterministic and owns reproduction:\n{text}"
+    );
+}
+
+#[test]
+fn test_nondeterminism_notice_is_printed_outside_antithesis() {
+    let out = self_test("antithesis_concurrent_machine_fixture")
+        .env_remove("ANTITHESIS_OUTPUT_DIR")
+        .run();
+    let text = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        text.contains("Concurrent state machine detected"),
+        "the notice must still appear outside Antithesis:\n{text}"
+    );
 }

@@ -75,11 +75,6 @@ fn test_can_find_an_int() {
 }
 
 #[test]
-fn test_can_find_an_int_above_13() {
-    assert_eq!(minimal(gs::integers::<i64>(), |x: &i64| *x >= 13), 13);
-}
-
-#[test]
 fn test_minimizes_towards_zero() {
     assert_eq!(
         minimal(

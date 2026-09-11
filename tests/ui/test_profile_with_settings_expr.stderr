@@ -1,0 +1,5 @@
+error: a profile cannot be combined with a settings expression; apply builder methods on Settings::from_profile(...) instead
+ --> tests/ui/test_profile_with_settings_expr.rs:4:39
+  |
+4 | #[hegel::test(hegel::Settings::new(), profile = "ci")]
+  |                                       ^^^^^^^

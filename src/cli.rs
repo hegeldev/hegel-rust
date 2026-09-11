@@ -1,11 +1,15 @@
 //! Command line argument parsing for standalone Hegel binaries produced by
 //! `#[hegel::main]`.
 //!
-//! The parser starts from a caller-provided [`Settings`] value (so that
-//! `#[hegel::main(test_cases = 500)]` produces a binary whose `--test-cases`
-//! flag defaults to 500) and applies CLI overrides on top of it.
+//! The parser starts from a caller-provided [`Settings`] constructor (so
+//! that `#[hegel::main(seed = 42)]` produces a binary whose `--seed` flag
+//! defaults to 42) and applies CLI overrides on top of its value. The
+//! constructor runs after `--profile` has set the process's default
+//! profile, so compiled-in settings that derive from [`Settings::new`]
+//! build on the profile the flag names, exactly as they would under
+//! `HEGEL_DEFAULT_PROFILE`.
 
-use crate::runner::{Backend, HealthCheck, Mode, Settings, Verbosity};
+use crate::runner::{Backend, Database, HealthCheck, Settings, Verbosity};
 
 /// Result of applying CLI overrides. The macro wrapper in `#[hegel::main]`
 /// dispatches on this to print messages and exit the process; keeping the
@@ -22,7 +26,7 @@ pub enum CliOutcome {
     ParseError(String),
 }
 
-/// Apply CLI overrides to `settings`.
+/// Apply CLI overrides to the settings `default_settings` constructs.
 ///
 /// `args` should include the program name at index 0 (i.e., pass
 /// `std::env::args()` directly).
@@ -30,11 +34,11 @@ pub enum CliOutcome {
 /// This is called from the entry point produced by `#[hegel::main]`; it is
 /// exported here so that other main wrappers can construct Settings from
 /// the same CLI surface.
-pub fn apply_cli_args<I>(settings: Settings, args: I) -> CliOutcome
+pub fn apply_cli_args<I>(default_settings: impl FnOnce() -> Settings, args: I) -> CliOutcome
 where
     I: IntoIterator<Item = String>,
 {
-    match try_apply_cli_args(settings, args) {
+    match try_apply_cli_args(default_settings, args) {
         Ok(s) => CliOutcome::Success(s),
         Err(CliError::Help(msg)) => CliOutcome::Help(msg),
         Err(CliError::Parse(msg)) => CliOutcome::ParseError(format!("{}\n\n{}", msg, usage())),
@@ -47,13 +51,21 @@ enum CliError {
     Parse(String),
 }
 
-fn try_apply_cli_args<I>(mut settings: Settings, args: I) -> Result<Settings, CliError>
+fn try_apply_cli_args<I>(
+    default_settings: impl FnOnce() -> Settings,
+    args: I,
+) -> Result<Settings, CliError>
 where
     I: IntoIterator<Item = String>,
 {
     let mut iter = args.into_iter();
     let _program = iter.next();
-    let args: Vec<String> = iter.collect();
+    let mut args: Vec<String> = iter.collect();
+
+    if let Some(name) = extract_profile(&mut args)? {
+        set_default_profile(&name)?;
+    }
+    let mut settings = default_settings();
 
     let mut i = 0;
     while i < args.len() {
@@ -61,15 +73,6 @@ where
         match arg {
             "--help" | "-h" => {
                 return Err(CliError::Help(usage()));
-            }
-            "--test-cases" => {
-                let value = next_value(&args, &mut i, "--test-cases")?;
-                let n: u64 = value.parse().map_err(|_| {
-                    CliError::Parse(format!(
-                        "--test-cases expects a non-negative integer, got {value:?}"
-                    ))
-                })?;
-                settings = settings.test_cases(n);
             }
             "--seed" => {
                 let value = next_value(&args, &mut i, "--seed")?;
@@ -96,19 +99,16 @@ where
             }
             "--database" => {
                 let value = next_value(&args, &mut i, "--database")?;
-                if value == "disabled" {
-                    settings = settings.database(None);
-                } else {
-                    settings = settings.database(Some(value));
+                match value.as_str() {
+                    "disabled" => settings = settings.database(None),
+                    "default" => settings.database = Database::Unset,
+                    _ => settings = settings.database(Some(value)),
                 }
             }
             "--suppress-health-check" => {
                 let value = next_value(&args, &mut i, "--suppress-health-check")?;
                 let checks = parse_health_check(&value)?;
                 settings = settings.suppress_health_check(checks);
-            }
-            "--single-test-case" => {
-                settings = settings.mode(Mode::SingleTestCase);
             }
             "--backend" => {
                 let value = next_value(&args, &mut i, "--backend")?;
@@ -129,6 +129,37 @@ fn next_value(args: &[String], i: &mut usize, name: &str) -> Result<String, CliE
     args.get(*i)
         .cloned()
         .ok_or_else(|| CliError::Parse(format!("{name} requires a value")))
+}
+
+/// Extract `--profile <NAME>` from `args` before the flag loop runs, so
+/// the flag takes effect before the compiled-in settings are constructed
+/// whatever its position.
+fn extract_profile(args: &mut Vec<String>) -> Result<Option<String>, CliError> {
+    let Some(pos) = args.iter().position(|a| a == "--profile") else {
+        return Ok(None);
+    };
+    args.remove(pos);
+    if pos >= args.len() {
+        return Err(CliError::Parse("--profile requires a value".to_string()));
+    }
+    let name = args.remove(pos);
+    if args.iter().any(|a| a == "--profile") {
+        return Err(CliError::Parse(
+            "--profile may be given at most once".to_string(),
+        ));
+    }
+    Ok(Some(name))
+}
+
+/// Set `name` as the process's default profile and check it resolves,
+/// undoing the setting when it does not so a bad flag value cannot linger.
+fn set_default_profile(name: &str) -> Result<(), CliError> {
+    crate::ffi::set_default_profile(Some(name)).map_err(CliError::Parse)?;
+    if let Err(message) = crate::ffi::settings_from_profile(None) {
+        crate::ffi::set_default_profile(None).unwrap();
+        return Err(CliError::Parse(message));
+    }
+    Ok(())
 }
 
 fn parse_verbosity(s: &str) -> Result<Verbosity, CliError> {
@@ -191,23 +222,24 @@ fn usage() -> String {
     let mut s = String::new();
     s.push_str("Usage: <program> [options]\n");
     s.push('\n');
-    s.push_str("Hegel property-based testing binary.\n");
+    s.push_str("Hegel property-based testing binary. Runs exactly one test case.\n");
     s.push('\n');
     s.push_str("Options:\n");
-    s.push_str("  --test-cases <N>                     Number of test cases to run\n");
+    s.push_str(
+        "  --profile <NAME>                     Set the default settings profile, like\n\
+         \x20                                      the HEGEL_DEFAULT_PROFILE environment\n\
+         \x20                                      variable; other flags apply on top\n",
+    );
     s.push_str(
         "  --seed <N|none>                      Seed for randomisation ('none' for unset)\n",
     );
     s.push_str("  --verbosity <LEVEL>                  quiet | normal | verbose | debug\n");
     s.push_str("  --derandomize <true|false>           Use a deterministic derived seed\n");
     s.push_str(
-        "  --database <PATH|disabled>           Database path for failing-example storage\n",
+        "  --database <PATH|disabled|default>   Database path for failing-example storage\n",
     );
     s.push_str(
         "  --suppress-health-check <NAMES>      Comma-separated health check names, or 'all'\n",
-    );
-    s.push_str(
-        "  --single-test-case                   Run one test case, no shrinking or replay\n",
     );
     s.push_str(
         "  --backend <default|urandom>          Randomness source (urandom reads /dev/urandom)\n",

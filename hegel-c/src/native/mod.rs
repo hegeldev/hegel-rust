@@ -1,13 +1,19 @@
+pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, rustc_hash::FxBuildHasher>;
+pub(crate) type HashSet<T> = hashbrown::HashSet<T, rustc_hash::FxBuildHasher>;
+
 pub mod base64;
 pub mod bignum;
 pub mod blob;
 pub mod core;
 pub mod data_source;
-pub mod data_tree;
 pub mod database;
 pub mod draws;
+pub(crate) mod events;
+pub(crate) mod exec_cache;
 pub mod floats;
 pub mod intervalsets;
+pub mod labels;
+pub mod printer;
 pub mod re;
 pub mod rng;
 pub mod shrinker;

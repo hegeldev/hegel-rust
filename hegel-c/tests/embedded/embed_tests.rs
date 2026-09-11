@@ -2,6 +2,9 @@ use super::*;
 use crate::backend::TestCaseResult;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::settings::{Database, Settings};
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn quiet_settings(test_cases: u64) -> Settings {
@@ -21,6 +24,19 @@ fn run_native_invokes_callback_and_returns_passing_result() {
     assert!(result.failures.is_empty());
     assert!(result.failures.is_empty());
     assert!(calls.load(Ordering::SeqCst) >= 1);
+}
+
+/// A driver that never calls `mark_complete` violates the run contract;
+/// the run reports a usage error instead of panicking.
+#[test]
+fn run_native_reports_a_usage_error_when_mark_complete_is_skipped() {
+    let err = run_native(&quiet_settings(5), None, |ds| {
+        ds.generate_boolean(0.5, None).unwrap();
+    })
+    .unwrap_err();
+    assert!(matches!(err, crate::backend::RunError::UsageError(_)));
+    let msg = err.to_string();
+    assert!(msg.contains("never marked complete"), "{msg}");
 }
 
 /// Reproduces hegel-go report #2: persists a failing example on the first
@@ -131,7 +147,7 @@ fn run_native_shrinks_predicate_boundary_seed_sweep() {
             hits += 1;
         }
     }
-    eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
+    std::eprintln!("shrinker reached boundary {hits}/50; values: {shrunk_values:?}");
     assert!(
         hits >= 25,
         "shrinker reached the boundary only {}/50 times; shrunk values: {:?}",
@@ -315,6 +331,71 @@ fn data_source_for_blob_replays_the_counterexample() {
     ds.mark_complete(&TestCaseResult::Valid);
 }
 
+/// Steps a stateful test case runs in the step-count replay test
+const REPLAY_STEP_COUNT: i64 = 100;
+
+/// Successful steps a test case must exceed to be interesting in the
+/// step-count replay test. Above 50, so the counterexample cannot replay
+/// under the default step count.
+const REPLAY_STEP_THRESHOLD: i64 = 60;
+
+fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) -> i64 {
+    use crate::backend::Failure;
+    let mut machine = ds
+        .new_state_machine(
+            alloc::vec!["increment".to_string()],
+            alloc::vec![0],
+            Vec::new(),
+            Vec::new(),
+            1,
+            1,
+            REPLAY_STEP_COUNT,
+        )
+        .unwrap();
+    let mut steps = 0;
+    'rounds: while let Ok(Some(_)) = ds.state_machine_next_group(&mut machine) {
+        while let Ok(Some(_)) = ds.state_machine_next_rule(&mut machine, 0) {
+            steps += 1;
+            if steps > REPLAY_STEP_THRESHOLD {
+                break 'rounds;
+            }
+        }
+    }
+    if steps > REPLAY_STEP_THRESHOLD {
+        ds.mark_complete(&TestCaseResult::Interesting(Failure {
+            origin: "counter exceeded threshold".to_string(),
+            reproduce_blob: None,
+        }));
+    } else {
+        ds.mark_complete(&TestCaseResult::Valid);
+    }
+    steps
+}
+
+/// Regression test for #396: a counterexample that needs more than the
+/// usual 50 steps must replay in full under the step count the machine is
+/// created with.
+#[test]
+fn data_source_for_blob_replays_under_the_machines_step_count() {
+    let settings = quiet_settings(100).seed(Some(0x5ca1ab1e)).derandomize(true);
+    let result = run_native(&settings, None, |ds| {
+        drive_counter_machine(&*ds);
+    })
+    .unwrap();
+    let blob = result.failures[0]
+        .reproduce_blob
+        .clone()
+        .expect("native failure should carry a reproduce blob");
+
+    let ds = data_source_for_blob(&settings, &blob).unwrap();
+    let steps = drive_counter_machine(&*ds);
+    assert!(
+        steps > REPLAY_STEP_THRESHOLD,
+        "replay stopped after {steps} steps, short of the {} the counterexample needs",
+        REPLAY_STEP_THRESHOLD + 1
+    );
+}
+
 #[test]
 fn data_source_for_blob_logs_at_debug_verbosity() {
     let blob = discover_reproduce_blob();
@@ -325,38 +406,4 @@ fn data_source_for_blob_logs_at_debug_verbosity() {
 #[test]
 fn data_source_for_blob_rejects_an_undecodable_blob() {
     assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
-}
-
-#[test]
-fn run_native_single_test_case_reports_the_failure() {
-    use crate::backend::Failure;
-
-    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let calls = AtomicUsize::new(0);
-    let result = run_native(&settings, None, |ds| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        ds.mark_complete(&TestCaseResult::Interesting(Failure {
-            origin: "single-case bug".to_string(),
-            reproduce_blob: None,
-        }));
-    })
-    .unwrap();
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(result.failures[0].origin, "single-case bug");
-    assert!(result.failures[0].reproduce_blob.is_none());
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "the single test case runs exactly once"
-    );
-}
-
-#[test]
-fn run_native_single_test_case_passes_cleanly() {
-    let settings = quiet_settings(1).mode(crate::settings::Mode::SingleTestCase);
-    let result = run_native(&settings, None, |ds| {
-        ds.mark_complete(&TestCaseResult::Valid);
-    })
-    .unwrap();
-    assert!(result.failures.is_empty());
 }

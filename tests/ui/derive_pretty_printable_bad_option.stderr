@@ -1,0 +1,5 @@
+error: unsupported #[pretty(..)] option: the only supported form is #[pretty(debug)]
+ --> tests/ui/derive_pretty_printable_bad_option.rs:5:14
+  |
+5 |     #[pretty(display)]
+  |              ^^^^^^^

@@ -28,6 +28,19 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
     result
 }
 
+/// Convert a snake_case string to PascalCase: each `_`-separated segment is
+/// capitalized and the underscores dropped (`http_server` → `HttpServer`).
+pub(crate) fn snake_to_pascal(s: &str) -> String {
+    s.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            let first = chars.next().unwrap();
+            first.to_ascii_uppercase().to_string() + chars.as_str()
+        })
+        .collect()
+}
+
 /// Returns true if `s` is a Rust keyword.
 pub(crate) fn is_rust_keyword(s: &str) -> bool {
     matches!(
@@ -170,20 +183,104 @@ pub(crate) fn split_generics(generics: &syn::Generics) -> Result<GenericsParts<'
     })
 }
 
-/// Generator DefaultGenerator + Send + Sync bounds for a set of types.
-pub(crate) fn default_gen_bounds(
-    types: &[&syn::Type],
-    lifetime: proc_macro2::TokenStream,
-) -> Vec<proc_macro2::TokenStream> {
+/// `DefaultGenerator` bounds for a set of field types, required wherever the
+/// generated code instantiates the fields' default generators.
+pub(crate) fn default_gen_bounds(types: &[&syn::Type]) -> Vec<proc_macro2::TokenStream> {
     types
         .iter()
         .map(|ty| {
             quote! {
-                #ty: ::hegel::generators::DefaultGenerator,
-                <#ty as ::hegel::generators::DefaultGenerator>::Generator: Send + Sync + #lifetime
+                #ty: ::hegel::generators::DefaultGenerator
             }
         })
         .collect()
+}
+
+/// The generator type parameter standing in for one field's generator:
+/// `__GName` for a field `name`, `__G0` for a tuple field `_0`. The `__G`
+/// prefix keeps the parameter out of the way of the derived type's own
+/// generics.
+pub(crate) fn generator_param_ident(field_name: &str) -> syn::Ident {
+    quote::format_ident!(
+        "__G{}",
+        snake_to_pascal(field_name.trim_start_matches("r#"))
+    )
+}
+
+/// Emit the printing statements for one struct or enum-variant shape,
+/// matching the layout `#[derive(PrettyPrintable)]` produces: braced shapes
+/// as `Label { field: value, … }` with block indentation of 4 when broken,
+/// tuple shapes as `Label(value, …)` with continuation indentation of 1.
+///
+/// `label` is the leading name (`Point`, `Shape::Circle`); `actions` are
+/// statement blocks that print each field's value — for the `PrettyPrintable`
+/// derive a `pretty_print` call, for the `DefaultGenerator` derive a
+/// draw-and-print of the field's generator — in declaration order.
+pub(crate) fn print_shape(
+    label: &str,
+    fields: &syn::Fields,
+    actions: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    match fields {
+        syn::Fields::Unit => quote! { __printer.text(#label); },
+        syn::Fields::Named(named) if named.named.is_empty() => {
+            let text = format!("{label} {{}}");
+            quote! { __printer.text(#text); }
+        }
+        syn::Fields::Named(named) => {
+            let open = format!("{label} {{");
+            let steps =
+                named
+                    .named
+                    .iter()
+                    .zip(actions)
+                    .enumerate()
+                    .map(|(index, (field, action))| {
+                        let prefix = format!("{}: ", field.ident.as_ref().unwrap());
+                        let separator = if index > 0 {
+                            quote! {
+                                __printer.text(",");
+                                __printer.breakable(" ");
+                            }
+                        } else {
+                            quote! {}
+                        };
+                        quote! {
+                            #separator
+                            __printer.text(#prefix);
+                            #action
+                        }
+                    });
+            quote! {
+                __printer.begin_group(4, #open);
+                __printer.breakable(" ");
+                #(#steps)*
+                __printer.end_group(" }");
+            }
+        }
+        syn::Fields::Unnamed(_) => {
+            let open = format!("{label}(");
+            let steps = actions.iter().enumerate().map(|(index, action)| {
+                let separator = if index > 0 {
+                    quote! {
+                        __printer.text(",");
+                        __printer.breakable(" ");
+                    }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    #separator
+                    #action
+                }
+            });
+            quote! {
+                __printer.begin_group(1, #open);
+                #(#steps)*
+                __printer.end_group(")");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

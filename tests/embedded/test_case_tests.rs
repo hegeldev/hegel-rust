@@ -1,7 +1,8 @@
 use super::*;
+use crate::ffi::sys as hegel_c;
 use crate::ffi::{RunHandle, SettingsHandle};
 use crate::generators as gs;
-use crate::runner::{Mode, Settings};
+use crate::runner::Settings;
 
 /// Start a real engine run and hand back its first live test case wrapped in an
 /// emitting `TestCase` (`emit = true`, the path a failing test's final replay
@@ -19,7 +20,7 @@ fn emitting_test_case() -> (RunHandle, TestCase) {
     let c_tc = run
         .next_test_case()
         .expect("the engine schedules at least one case");
-    let tc = TestCase::new(Arc::new(c_tc), true, Mode::TestRun, current_output_sink());
+    let tc = TestCase::new(Arc::new(c_tc), true, current_output_sink());
     (run, tc)
 }
 
@@ -46,9 +47,9 @@ fn a_clone_can_draw_from_another_thread() {
 #[test]
 fn repeatable_display_name_skips_a_taken_name() {
     let (_run, tc) = emitting_test_case();
-    tc.record_named_draw(&false, "x_1", false);
-    tc.record_named_draw(&false, "x", true);
-    tc.record_named_draw(&false, "x", true);
+    tc.allocate_display_name("x_1", false);
+    tc.allocate_display_name("x", true);
+    tc.allocate_display_name("x", true);
 
     let mut names: Vec<String> = tc
         .with_draw_state(|draw_state| draw_state.allocated_display_names.iter().cloned().collect());
@@ -137,7 +138,7 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
-    tc.start_span(gs::labels::LIST);
+    tc.start_span(gs::label_from_name("test.list"));
     drive_to_overrun(&tc);
 
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
@@ -146,8 +147,10 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
         "stop_span after overrun should unwind as StopTest"
     );
 
-    let payload =
-        std::panic::catch_unwind(AssertUnwindSafe(|| tc.start_span(gs::labels::LIST))).unwrap_err();
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tc.start_span(gs::label_from_name("test.list"))
+    }))
+    .unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"

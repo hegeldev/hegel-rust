@@ -1,5 +1,5 @@
 use super::*;
-use crate::runner::{Backend, Database, Mode, Settings, Verbosity};
+use crate::runner::{Backend, Database, Settings, Verbosity};
 
 fn s(strs: &[&str]) -> Vec<String> {
     std::iter::once("prog")
@@ -9,7 +9,7 @@ fn s(strs: &[&str]) -> Vec<String> {
 }
 
 fn apply(args: &[&str]) -> Settings {
-    try_apply_cli_args(Settings::new(), s(args)).unwrap_or_else(|e| match e {
+    try_apply_cli_args(Settings::new, s(args)).unwrap_or_else(|e| match e {
         CliError::Help(_) => panic!("unexpected help"),
         CliError::Parse(msg) => panic!("parse error: {msg}"),
     })
@@ -22,12 +22,6 @@ fn test_no_args_returns_default() {
     assert_eq!(parsed.test_cases, defaults.test_cases);
     assert_eq!(parsed.verbosity, defaults.verbosity);
     assert_eq!(parsed.seed, defaults.seed);
-}
-
-#[test]
-fn test_test_cases_override() {
-    let parsed = apply(&["--test-cases", "500"]);
-    assert_eq!(parsed.test_cases, 500);
 }
 
 #[test]
@@ -106,15 +100,22 @@ fn test_suppress_health_check_all() {
 
 #[test]
 fn test_multiple_flags() {
-    let parsed = apply(&["--test-cases", "7", "--seed", "9", "--verbosity", "quiet"]);
-    assert_eq!(parsed.test_cases, 7);
+    let parsed = apply(&[
+        "--derandomize",
+        "true",
+        "--seed",
+        "9",
+        "--verbosity",
+        "quiet",
+    ]);
+    assert!(parsed.derandomize);
     assert_eq!(parsed.seed, Some(9));
     assert_eq!(parsed.verbosity, Verbosity::Quiet);
 }
 
 #[test]
 fn test_unknown_arg_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--nope"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--nope"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("Unknown argument")),
         _ => panic!("wrong error kind"),
@@ -123,7 +124,7 @@ fn test_unknown_arg_error() {
 
 #[test]
 fn test_missing_value_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--test-cases"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--seed"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("requires a value")),
         _ => panic!("wrong error kind"),
@@ -131,17 +132,8 @@ fn test_missing_value_error() {
 }
 
 #[test]
-fn test_invalid_value_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--test-cases", "abc"])).unwrap_err();
-    match err {
-        CliError::Parse(msg) => assert!(msg.contains("non-negative integer")),
-        _ => panic!("wrong error kind"),
-    }
-}
-
-#[test]
 fn test_help_returns_help_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--help"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--help"])).unwrap_err();
     match err {
         CliError::Help(msg) => assert!(msg.contains("Usage:")),
         _ => panic!("wrong error kind"),
@@ -150,26 +142,26 @@ fn test_help_returns_help_error() {
 
 #[test]
 fn test_short_help_returns_help_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["-h"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["-h"])).unwrap_err();
     matches!(err, CliError::Help(_));
 }
 
 #[test]
 fn test_default_preserved_when_not_overridden() {
-    let parsed = try_apply_cli_args(Settings::new().test_cases(42), s(&[])).unwrap();
+    let parsed = try_apply_cli_args(|| Settings::new().test_cases(42), s(&[])).unwrap();
     assert_eq!(parsed.test_cases, 42);
 }
 
 #[test]
 fn test_explicit_override_wins_over_default() {
     let parsed =
-        try_apply_cli_args(Settings::new().test_cases(42), s(&["--test-cases", "10"])).unwrap();
-    assert_eq!(parsed.test_cases, 10);
+        try_apply_cli_args(|| Settings::new().seed(Some(42)), s(&["--seed", "10"])).unwrap();
+    assert_eq!(parsed.seed, Some(10));
 }
 
 #[test]
 fn test_invalid_verbosity_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--verbosity", "loud"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--verbosity", "loud"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("quiet|normal|verbose|debug")),
         _ => panic!("wrong error kind"),
@@ -178,7 +170,7 @@ fn test_invalid_verbosity_error() {
 
 #[test]
 fn test_invalid_bool_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--derandomize", "maybe"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--derandomize", "maybe"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("true|false")),
         _ => panic!("wrong error kind"),
@@ -187,8 +179,8 @@ fn test_invalid_bool_error() {
 
 #[test]
 fn test_invalid_health_check_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--suppress-health-check", "bad_name"]))
-        .unwrap_err();
+    let err =
+        try_apply_cli_args(Settings::new, s(&["--suppress-health-check", "bad_name"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("does not recognise")),
         _ => panic!("wrong error kind"),
@@ -209,7 +201,7 @@ fn test_bool_aliases() {
 
 #[test]
 fn test_invalid_seed_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--seed", "abc"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--seed", "abc"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("integer or 'none'")),
         _ => panic!("wrong error kind"),
@@ -218,53 +210,52 @@ fn test_invalid_seed_error() {
 
 #[test]
 fn test_apply_cli_args_success() {
-    match apply_cli_args(Settings::new(), s(&["--test-cases", "13"])) {
-        CliOutcome::Success(settings) => assert_eq!(settings.test_cases, 13),
+    match apply_cli_args(Settings::new, s(&["--seed", "13"])) {
+        CliOutcome::Success(settings) => assert_eq!(settings.seed, Some(13)),
         other => panic!("expected Success, got {other:?}"),
     }
 }
 
 #[test]
 fn test_apply_cli_args_help() {
-    match apply_cli_args(Settings::new(), s(&["--help"])) {
+    match apply_cli_args(Settings::new, s(&["--help"])) {
         CliOutcome::Help(msg) => assert!(msg.contains("Usage:")),
         other => panic!("expected Help, got {other:?}"),
     }
 }
 
 #[test]
-fn test_single_test_case_flag() {
-    let parsed = apply(&["--single-test-case"]);
-    assert_eq!(parsed.mode, Mode::SingleTestCase);
-}
-
-#[test]
-fn test_single_test_case_default_is_test_run() {
-    let parsed = apply(&[]);
-    assert_eq!(parsed.mode, Mode::TestRun);
+fn test_removed_flags_are_unknown_arguments() {
+    for args in [&["--single-test-case"][..], &["--test-cases", "3"][..]] {
+        let err = try_apply_cli_args(Settings::new, s(args)).unwrap_err();
+        match err {
+            CliError::Parse(msg) => assert!(msg.contains("Unknown argument"), "{msg}"),
+            other => panic!("expected parse error for {args:?}, got {other:?}"),
+        }
+    }
 }
 
 #[test]
 fn test_backend_urandom_flag() {
     let parsed = apply(&["--backend", "urandom"]);
-    assert_eq!(parsed.backend, Some(Backend::Urandom));
+    assert_eq!(parsed.backend, Backend::Urandom);
 }
 
 #[test]
 fn test_backend_default_flag() {
     let parsed = apply(&["--backend", "default"]);
-    assert_eq!(parsed.backend, Some(Backend::Default));
+    assert_eq!(parsed.backend, Backend::Default);
 }
 
 #[test]
-fn test_backend_default_is_unset() {
+fn test_backend_defaults_to_the_prng() {
     let parsed = apply(&[]);
-    assert_eq!(parsed.backend, None);
+    assert_eq!(parsed.backend, Backend::Default);
 }
 
 #[test]
 fn test_invalid_backend_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--backend", "wat"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--backend", "wat"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("default|urandom")),
         other => panic!("expected parse error, got {other:?}"),
@@ -273,7 +264,7 @@ fn test_invalid_backend_error() {
 
 #[test]
 fn test_backend_missing_value_error() {
-    let err = try_apply_cli_args(Settings::new(), s(&["--backend"])).unwrap_err();
+    let err = try_apply_cli_args(Settings::new, s(&["--backend"])).unwrap_err();
     match err {
         CliError::Parse(msg) => assert!(msg.contains("requires a value")),
         other => panic!("expected parse error, got {other:?}"),
@@ -282,11 +273,55 @@ fn test_backend_missing_value_error() {
 
 #[test]
 fn test_apply_cli_args_parse_error() {
-    match apply_cli_args(Settings::new(), s(&["--not-a-flag"])) {
+    match apply_cli_args(Settings::new, s(&["--not-a-flag"])) {
         CliOutcome::ParseError(msg) => {
             assert!(msg.contains("Unknown argument"));
             assert!(msg.contains("Usage:"));
         }
         other => panic!("expected ParseError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_database_default() {
+    let parsed = try_apply_cli_args(
+        || Settings::new().database(None),
+        s(&["--database", "default"]),
+    )
+    .unwrap();
+    assert_eq!(parsed.database, Database::Unset);
+}
+
+/// `--profile` values that parse set the default profile for the whole
+/// process, so only the errors caught before that happens are testable
+/// in-process; the flag's behavior is covered through fixture binaries in
+/// `tests/test_profiles.rs`.
+#[test]
+fn test_profile_flag_missing_value_error() {
+    let err = try_apply_cli_args(Settings::new, s(&["--profile"])).unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert_eq!(msg, "--profile requires a value"),
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_profile_flag_repeated_error() {
+    let err = try_apply_cli_args(
+        Settings::new,
+        s(&["--profile", "ci", "--profile", "development"]),
+    )
+    .unwrap_err();
+    match err {
+        CliError::Parse(msg) => assert_eq!(msg, "--profile may be given at most once"),
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_usage_documents_the_profile_flag() {
+    match apply_cli_args(Settings::new, s(&["--help"])) {
+        CliOutcome::Help(msg) => assert!(msg.contains("--profile <NAME>")),
+        other => panic!("expected Help, got {other:?}"),
     }
 }
