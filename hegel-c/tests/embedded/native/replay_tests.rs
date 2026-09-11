@@ -236,3 +236,18 @@ fn an_empty_counterexample_generates_freshly_and_has_nothing_to_leave() {
     assert_eq!(tc.nodes.len(), 1);
     assert_eq!(tc.divergence(), None);
 }
+
+#[test]
+fn a_pool_member_serves_the_branch_the_incumbent_cannot() {
+    let mut tc = replay(vec![
+        vec![boolean(true), boolean(true), int(68)],
+        vec![boolean(true), int(89), int(68)],
+        vec![boolean(true), int(64), int(68)],
+    ]);
+    assert!(draw_bool(&mut tc));
+    assert_eq!(tc.live_timelines(), vec![true, true, true]);
+    assert_eq!(draw_int(&mut tc), 89);
+    assert_eq!(tc.live_timelines(), vec![false, true, false]);
+    assert_eq!(draw_int(&mut tc), 68);
+    assert_eq!(tc.divergence(), None);
+}

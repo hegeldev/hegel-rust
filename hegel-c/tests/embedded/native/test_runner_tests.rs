@@ -5218,11 +5218,8 @@ fn a_replay_that_leaves_its_counterexample_is_named_at_debug_verbosity() {
         },
     );
     assert!(
-        lines
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|l| l == "replay left its counterexample at position 0 of stream []"),
+        lines.lock().unwrap().iter().any(|l| l
+            == "replay left its counterexample at position 0 of stream [] (set of 1 timelines)"),
         "{:?}",
         lines.lock().unwrap()
     );
@@ -5656,8 +5653,10 @@ fn the_gauntlet_abandons_a_candidate_whose_rerun_leaves_it_when_the_incumbent_ne
         assert!(!matched, "abandoned, not accepted");
         let ledger = probe.ledger.values().next().unwrap();
         assert_eq!(
-            ledger.verdict, None,
-            "no evidence either way: no verdict latched"
+            ledger.verdict,
+            Some(false),
+            "abandoned for the rest of this shrink: re-proposals must not \
+             accumulate on-timeline evidence past the budget"
         );
         assert_eq!(ledger.bounces, 1);
         assert_eq!(
@@ -5762,7 +5761,9 @@ fn the_multiverse_passes_keep_both_branches_and_promote_the_smaller_one() {
     assert!(
         lines
             .iter()
-            .any(|l| l == "nd multiverse census: origin=Panic: branch kept 2 of 2 timelines"),
+            .any(|l| {
+                l == "nd multiverse census: origin=Panic: branch kept 2 of 2 timelines (served [true, true])"
+            }),
         "both branches serve failing runs, so the census keeps both: {lines:?}"
     );
     assert!(
@@ -8163,6 +8164,7 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
                     min_fails: nd::GAUNTLET_MIN_FAILS,
                     verdict: Some(true),
                     bounces: 0,
+                    set_evidence: evidence,
                 },
             );
             let nodes = vec![int_node(9)];
@@ -8471,5 +8473,134 @@ fn a_reuse_replay_that_realizes_any_stored_timeline_is_aligned_and_skips_the_shr
         executions.load(Ordering::SeqCst) < 60,
         "no confirmation batch and no shrink: {} executions",
         executions.load(Ordering::SeqCst)
+    );
+}
+
+#[test]
+fn the_shrink_anchor_starts_from_the_whole_counterexample_when_a_pool_exists() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    with_engine(nd_settings(), None, branching_body(), async |ctx| {
+        let origin = ctx.origins.entry("Panic: branch");
+        origin.adopt(branch_s_nodes());
+        let witness = RunResult {
+            status: Status::Interesting,
+            nodes: branch_s_nodes(),
+            spans: Vec::new(),
+            origin: Some("Panic: branch".to_string()),
+            target_observations: crate::native::HashMap::default(),
+            events: Vec::new(),
+            divergence: None,
+            live: vec![true],
+        };
+        origin
+            .confirm(
+                0.3,
+                Some(witness),
+                pooled_timelines(branch_s(), vec![branch_t()]),
+                (10, 20),
+            )
+            .unwrap();
+        let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
+        let mut shrunk = crate::native::HashSet::default();
+        ctx.shrink_origin(
+            "Panic: branch".to_string(),
+            branch_s_nodes(),
+            Verbosity::Debug,
+            &output,
+            None,
+            &mut shrunk,
+        )
+        .await
+        .unwrap();
+        let anchor = ctx.origins.get("Panic: branch").unwrap().anchor().unwrap();
+        assert!(
+            anchor >= 0.8,
+            "both branches reproduce, so the set's lower bound replaces the \
+             single-timeline confirmation anchor: {anchor}"
+        );
+    });
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.starts_with("nd set anchor: origin=Panic: branch timelines=2 fails=20/20")),
+        "{:?}",
+        lines.lock().unwrap()
+    );
+}
+
+#[test]
+fn a_failing_rerun_on_no_stored_timeline_is_captured_into_the_pool() {
+    let mut executions = 0usize;
+    with_engine(
+        nd_settings(),
+        None,
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            executions += 1;
+            if executions % 2 == 0 {
+                match rint(ds, 0, 100) {
+                    Ok(_) => boom("branch"),
+                    Err(()) => TestCaseResult::Overrun,
+                }
+            } else {
+                match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
+                    (Ok(true), Ok(true), Ok(42)) => boom("branch"),
+                    (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
+                    _ => TestCaseResult::Overrun,
+                }
+            }
+        },
+        async |ctx| {
+            let mut probe = EngineShrinkProbe {
+                engine: &mut *ctx,
+                target_origin: "Panic: branch".to_string(),
+                verbosity: Verbosity::Quiet,
+                output: Output::callback(|_| {}),
+                gauntlet: true,
+                ledger: HashMap::default(),
+                raised: crate::native::HashSet::default(),
+                anchor: 0.3,
+                sweep: SweepMode::Fast,
+                pending_accept: None,
+                incumbent_bounces: (10, 20),
+            };
+            let nodes = branch_s_nodes();
+            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            assert!(matched);
+            let pool = ctx.origins.get("Panic: branch").unwrap().pool().to_vec();
+            assert!(
+                pool.iter()
+                    .any(|t| t.len() == 2 && t[0] == ChoiceValue::Boolean(true)),
+                "the always-failing second branch, reached only through the rescue tier, \
+                 is captured as a new timeline: {pool:?}"
+            );
+            let before = pool.len();
+            let mut c = Counterexample::default();
+            c.adopt(vec![bool_node(true)]);
+            assert!(
+                !c.capture(vec![ChoiceValue::Boolean(true)]),
+                "the incumbent itself"
+            );
+            assert!(c.capture(vec![ChoiceValue::Boolean(false)]));
+            assert!(
+                !c.capture(vec![ChoiceValue::Boolean(false)]),
+                "already pooled"
+            );
+            for i in 0..nd::POOL_CAP {
+                c.capture(vec![ChoiceValue::Integer(BigInt::from(i))]);
+            }
+            assert_eq!(
+                c.timelines().len(),
+                nd::POOL_CAP,
+                "bounded with the incumbent"
+            );
+            assert!(before <= nd::POOL_CAP - 1);
+        },
     );
 }

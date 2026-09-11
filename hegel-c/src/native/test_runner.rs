@@ -1584,8 +1584,10 @@ impl<'a> Engine<'a> {
         if let Some(divergence) = &run.divergence {
             if self.settings.verbosity == Verbosity::Debug {
                 self.settings.output.line(&format!(
-                    "replay left its counterexample at position {} of stream {:?}",
-                    divergence.position, divergence.stream
+                    "replay left its counterexample at position {} of stream {:?} (set of {} timelines)",
+                    divergence.position,
+                    divergence.stream,
+                    timelines.len()
                 ));
             }
         }
@@ -1652,6 +1654,24 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// Measure the counterexample `set` as one test case: [`nd::ANCHOR_SEED_RUNS`]
+    /// replays, every one a trial of the set (decision 75). The confirmation
+    /// batch of a discovery-time origin measured its first timeline alone —
+    /// the pool did not exist yet — so the shrink's anchor starts from this
+    /// measurement when a pool has been captured since.
+    async fn nd_measure_set(
+        &mut self,
+        origin: &str,
+        set: &[Vec<ChoiceValue>],
+    ) -> Result<nd::Evidence, RunError> {
+        let mut evidence = nd::Evidence::default();
+        for _ in 0..nd::ANCHOR_SEED_RUNS {
+            let replay = self.nd_replay_set(set, Some(origin)).await?;
+            evidence.record(replay.failed);
+        }
+        Ok(evidence)
+    }
+
     /// One census of `set` (decision 75): [`CENSUS_RUNS`] replays of the
     /// whole counterexample, recording which timeline each failing run
     /// followed — the first one still live at its end. A timeline that
@@ -1667,8 +1687,11 @@ impl<'a> Engine<'a> {
         for _ in 0..CENSUS_RUNS {
             let replay = self.nd_replay_set(set, Some(origin)).await?;
             if replay.failed {
-                if let Some(k) = replay.run.live.iter().position(|live| *live) {
-                    served[k] = true;
+                match replay.run.live.iter().position(|live| *live) {
+                    Some(k) => served[k] = true,
+                    None => {
+                        self.origins.entry(origin).capture(replay.realized);
+                    }
                 }
             }
         }
@@ -1704,20 +1727,28 @@ impl<'a> Engine<'a> {
                 return Ok(());
             }
             let served = self.nd_census(origin, &set).await?;
+            let captured: Vec<Vec<ChoiceValue>> = self
+                .origins
+                .entry(origin)
+                .timelines()
+                .into_iter()
+                .filter(|timeline| !set.contains(timeline))
+                .collect();
             let kept: Vec<Vec<ChoiceValue>> = set
                 .iter()
                 .enumerate()
                 .filter(|(k, _)| *k == 0 || served[*k])
                 .map(|(_, timeline)| timeline.clone())
+                .chain(captured)
                 .collect();
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
-                    "nd multiverse census: origin={origin} kept {} of {} timelines",
+                    "nd multiverse census: origin={origin} kept {} of {} timelines (served {served:?})",
                     kept.len(),
                     set.len()
                 ));
             }
-            if kept.len() < set.len() {
+            if kept != set {
                 self.origins.entry(origin).install_set(&kept, None);
                 self.persist_incumbent(origin)?;
                 continue;
@@ -1998,12 +2029,37 @@ impl<'a> Engine<'a> {
             }
         }
 
-        let initial_spans = Spans::from(verify.spans.clone());
         let gauntleted = self.nd_handling();
+        if gauntleted {
+            let set = self.origins.entry(&origin).timelines();
+            if set.len() > 1 {
+                let measured = self.nd_measure_set(&origin, &set).await?;
+                if verbosity == Verbosity::Debug {
+                    output.line(&format!(
+                        "nd set anchor: origin={origin} timelines={} fails={}/{} lcb={:.3} (was {probe_anchor:.3})",
+                        set.len(),
+                        measured.fails(),
+                        measured.runs(),
+                        measured.lower_bound()
+                    ));
+                }
+                if measured.lower_bound() > probe_anchor {
+                    probe_anchor = measured.lower_bound();
+                    self.origins.entry(&origin).raise_anchor(probe_anchor);
+                }
+            }
+        }
+        let initial_spans = Spans::from(verify.spans.clone());
         let incumbent_bounces = self
             .origins
             .get(&origin)
             .map_or((0, 0), Counterexample::bounce_stats);
+        if verbosity == Verbosity::Debug {
+            output.line(&format!(
+                "nd shrink start: origin={origin} timelines={} bounces={incumbent_bounces:?} anchor={probe_anchor:.3}",
+                self.origins.entry(&origin).timelines().len()
+            ));
+        }
         let (shrunk, timed_out) = {
             let probe = EngineShrinkProbe {
                 engine: &mut *self,
@@ -2033,6 +2089,13 @@ impl<'a> Engine<'a> {
             .get(&origin)
             .and_then(Counterexample::anchor)
             .unwrap_or(probe_anchor);
+        if verbosity == Verbosity::Debug {
+            output.line(&format!(
+                "nd shrink done: origin={origin} timelines={} bounces={:?} anchor={anchor:.3} timed_out={timed_out}",
+                self.origins.entry(&origin).timelines().len(),
+                incumbent_bounces
+            ));
+        }
         if !gauntleted && self.nd_handling() {
             self.origins.entry(&origin).replace(initial);
         } else {
@@ -3419,9 +3482,15 @@ struct CandidateLedger {
     /// their recruiting run went (a nested clone shrink's final splice
     /// re-proposes exactly such timelines).
     verdict: Option<bool>,
-    /// Reruns that left the candidate (decision 75): no evidence either
-    /// way, counted against the bounce budget.
+    /// Reruns that left the candidate (decision 75): no evidence about the
+    /// candidate either way, counted against the bounce budget.
     bounces: u64,
+    /// Every run of the candidate's set — recruiting run and reruns, on
+    /// the candidate or not — as evidence about the counterexample the
+    /// accept would install (decision 75): a candidate must not lower the
+    /// set's reproduction past the gauntlet threshold (decision 2), however
+    /// reliably it fails when the test stays on it.
+    set_evidence: nd::Evidence,
 }
 
 impl EngineShrinkProbe<'_, '_> {
@@ -3501,10 +3570,12 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     min_fails,
                     verdict: None,
                     bounces: 0,
+                    set_evidence: nd::Evidence::default(),
                 });
             }
             let entry = self.ledger.get_mut(&key).unwrap();
             entry.evidence.record(matched);
+            entry.set_evidence.record(matched);
             let min_fails = entry.min_fails;
             if let Some(accepted) = entry.verdict {
                 if !accepted {
@@ -3512,7 +3583,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 }
                 self.pending_accept = Some(PendingAccept {
                     key,
-                    lower_bound: entry.evidence.lower_bound(),
+                    lower_bound: entry.set_evidence.lower_bound(),
                     nodes: run.nodes.clone(),
                     bounces: (entry.bounces, entry.evidence.runs() + entry.bounces),
                 });
@@ -3527,14 +3598,21 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 .origins
                 .entry(&self.target_origin)
                 .timelines_from(realized);
+            let threshold = nd::gauntlet_threshold(self.anchor);
             let mut accepted = false;
             loop {
                 let ledger = self.ledger.get(&key).unwrap();
                 let evidence = ledger.evidence;
+                let set_evidence = ledger.set_evidence;
                 let bounces = ledger.bounces;
                 if !accepted {
+                    let set_fails = set_evidence.lower_bound() >= threshold;
+                    if set_evidence.upper_bound() < threshold {
+                        self.ledger.get_mut(&key).unwrap().verdict = Some(false);
+                        return Ok((false, run.nodes, Spans::from(run.spans)));
+                    }
                     match nd::gauntlet(&evidence, self.anchor, min_fails) {
-                        nd::GauntletVerdict::Accept => accepted = true,
+                        nd::GauntletVerdict::Accept => accepted = set_fails,
                         nd::GauntletVerdict::Reject => {
                             self.ledger.get_mut(&key).unwrap().verdict = Some(false);
                             return Ok((false, run.nodes, Spans::from(run.spans)));
@@ -3548,7 +3626,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     self.ledger.get_mut(&key).unwrap().verdict = Some(true);
                     self.pending_accept = Some(PendingAccept {
                         key,
-                        lower_bound: evidence.lower_bound(),
+                        lower_bound: set_evidence.lower_bound(),
                         nodes: run.nodes.clone(),
                         bounces: (bounces, evidence.runs() + bounces),
                     });
@@ -3558,12 +3636,20 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     .engine
                     .nd_replay_set(&set, Some(self.target_origin.as_str()))
                     .await?;
+                if rerun.failed && !rerun.run.live.iter().any(|live| *live) {
+                    self.engine
+                        .origins
+                        .entry(&self.target_origin)
+                        .capture(rerun.realized);
+                }
                 let ledger = self.ledger.get_mut(&key).unwrap();
+                ledger.set_evidence.record(rerun.failed);
                 if rerun.on_timeline {
                     ledger.evidence.record(rerun.failed);
                 } else {
                     ledger.bounces += 1;
                     if ledger.bounces > budget {
+                        ledger.verdict = Some(false);
                         if self.verbosity == Verbosity::Debug {
                             self.output.line(&format!(
                                 "gauntlet abandoned a candidate: {} reruns left the timeline \

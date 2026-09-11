@@ -29,9 +29,12 @@
 //! deterministic or the origin is vacant; a rejection evicts the incumbent
 //! without forgetting the origin, so a re-sighting resumes against the same
 //! evidence and budgets and the caveat-only report can quote what was
-//! measured. And the stored pool has one writer: [`Counterexample::confirm`]
-//! and [`Counterexample::trust`] set it, truncated to [`nd::POOL_CAP`], and
-//! [`Counterexample::timelines`] composes it with the current incumbent.
+//! measured. And the stored pool has three writers: [`Counterexample::confirm`]
+//! and [`Counterexample::trust`] set it, truncated to [`nd::POOL_CAP`];
+//! [`Counterexample::capture`] appends a failing execution no stored
+//! timeline described; [`Counterexample::install_set`] is the multiverse
+//! passes' result; and [`Counterexample::timelines`] composes the pool
+//! with the current incumbent.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -247,6 +250,23 @@ impl Counterexample {
     /// The incumbent's (bounces, runs) so far.
     pub(crate) fn bounce_stats(&self) -> (u64, u64) {
         (self.bounces, self.bounce_runs)
+    }
+
+    /// Capture a realized failing execution the counterexample did not
+    /// describe — a measurement replay that failed while live on no stored
+    /// timeline (decision 75): a branch the failure takes that the pool
+    /// lacked. Appended last, so it serves only where every earlier
+    /// timeline disagrees; the census drops it again if it never serves.
+    /// Bounded by [`nd::POOL_CAP`] with the incumbent.
+    pub(crate) fn capture(&mut self, timeline: Vec<ChoiceValue>) -> bool {
+        if self.pool.len() + 1 >= nd::POOL_CAP
+            || self.pool.contains(&timeline)
+            || self.incumbent_values().is_some_and(|i| i == timeline)
+        {
+            return false;
+        }
+        self.pool.push(timeline);
+        true
     }
 
     /// Install a structurally shrunk counterexample (decision 74's
