@@ -885,35 +885,64 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     the counterexample as a set (`nd_replay_set`: the incumbent's values then the pool,
     `NativeTestCase::for_counterexample`), including the confirmation batch and the
     gauntlet's reruns, and reports whether the run stayed live on the first timeline
-    (`RunResult.live`). A per-timeline shrink candidate's gauntlet counts as evidence
-    only the reruns that stayed on the candidate; a rerun that left it is a bounce — no
-    evidence either way — charged against a per-candidate budget derived from the
-    incumbent's own bounce rate (`bounce_budget`: none if the incumbent never bounced,
-    otherwise the bounces expected while collecting `GAUNTLET_CAP` on-timeline runs at
-    that rate); exceeding it abandons the candidate without latching a verdict, so
-    pass repetition can retry it. The incumbent's rate comes from its confirmation batch
-    (`Counterexample::record_bounces`) and follows each adopted candidate's ledger.
-    Known bias, accepted for measurement: the candidate's evidence is conditional on
-    staying on it while the anchor is the set's unconditional rate; the bounce budget
-    is what bounds a candidate from bouncing more than the incumbent did. After the
+    (`RunResult.live`). A per-timeline shrink candidate's ledger holds two evidences:
+    the reruns that stayed on the candidate (David's "worked" / "didn't work") and every
+    run of the candidate's set (its reproduction as a counterexample). An accept needs
+    both lower bounds above the gauntlet threshold — the first says the timeline itself
+    fails, the second is decision 2's guard that the candidate does not lower the
+    counterexample's reproduction — and the set's bound is what raises the anchor, so
+    candidate and incumbent sit on one estimand. A rerun that left the candidate is a
+    bounce: evidence about the set, none about the candidate, charged against a
+    per-candidate budget derived from the incumbent's own bounce rate (`bounce_budget`,
+    a cost cap; none if the incumbent never bounced; the rate comes from the confirmation
+    batch via `Counterexample::record_bounces` and follows each adopted candidate); past
+    it the candidate is abandoned and latched as a reject for the rest of the shrink.
+    Experiment 016 forced both rules: built first with on-timeline evidence alone and an
+    un-latched abandonment, the gauntlet adopted `[F, 60, 60]` on the ps/pt body — its
+    reruns failed whenever the test stayed on it, but serving `F` at position 0 pruned
+    every `a = T` pool timeline, and each re-proposal's recruiting run accumulated on
+    the same ledger until it reached 20/20 — cutting the counterexample from both
+    branches to one. Also from 016: when a pool exists at the start of a shrink the
+    anchor starts from a 20-replay measurement of the whole set (`nd_measure_set`),
+    because a discovery-time confirmation batch measured the first timeline alone, and
+    the probe re-measures it before judging the next candidate whenever the pool has
+    grown since; and a measurement replay that fails while live on no stored timeline
+    is captured into the pool (`Counterexample::capture`) as the branch it is. Built,
+    measured and reverted (commit `e3d8ee1f` and its revert): shrinking every served
+    pool timeline with the per-timeline shrinker — rotated to the front, started from
+    its census witness. It worked (a raw captured `[T, 77, 91]` shrank in place) but
+    experiment 016's campaign 6 priced it at 20× the discovery executions on a four-path
+    body (2544 → 49 368) and 2.5× on a two-path one, for no reproduction gain: a
+    proposal for a branch-specific timeline lands on another branch with the complement
+    of that branch's probability and is a plain miss, and the recruiting run must stay a
+    deterministic proposal replay for the shrinker's ledger, so a set-aware recruiting
+    run is the open design problem before this returns. Pool timelines therefore stay
+    as captured. After the
     per-timeline shrink, `nd_multiverse_shrink` runs structural passes over the set
     under `set_order` (fewer timelines first, then `timeline_order` — the database's
-    shortlex over serialized values — lexicographically): delete a component, swap
-    adjacent components toward sorted order, and replace a component with a positional
-    splice of another's prefix (the longest shared-length prefix) onto its tail when
-    the splice is smaller. Each candidate is a whole set judged by `nd_evaluate_set` —
-    the gauntlet driven to a bound with every replay as evidence (the set's own
-    estimand), charged against the alpha budget — and a candidate whose first timeline
-    changed is installed only from a failing run that stayed live on it, so the
-    incumbent is always a realized failing execution. Rounds repeat while a candidate
-    is accepted, capped at `MULTIVERSE_ROUNDS = 4` per shrink and by the shrink
-    deadline; every accept is strictly smaller so the descent terminates anyway.
+    shortlex over serialized values — lexicographically). Deletion is by census: each
+    round replays the set `CENSUS_RUNS = 40` times recording which timeline every
+    failing run followed (the first still live at its end) and drops the pool timelines
+    that served none — the one deletion that costs no reproduction. A gauntleted
+    deletion was built first and rejected by experiment 016: the gauntlet's gamma let it
+    drop a branch the failure genuinely takes (four-path sets cut to three at ~80%, the
+    dropped path reproducing only through the rescue tier), which trades reproduction
+    for count and is not what "fewer timelines is better" means. The remaining passes
+    — swap adjacent components toward sorted order, and replace a component with a
+    positional splice of another's prefix (the longest shared-length prefix) onto its
+    tail when the splice is smaller — are whole sets judged by `nd_evaluate_set`: the
+    gauntlet driven to a bound with every replay as evidence (the set's own estimand),
+    charged against the alpha budget; a candidate whose first timeline changed is
+    installed only from a failing run that stayed live on it, so the incumbent is
+    always a realized failing execution. Rounds repeat while something is accepted;
+    every accept is strictly smaller under the order, so they end on their own, and
+    the shrink deadline bounds them. Also from 016: a reuse replay that realizes any
+    stored timeline is aligned (the alignment check compared against the incumbent
+    alone and re-shrank whenever the live set followed another stored branch).
     Consequences observed in the tests: a stored pool member that never serves a
-    replay is deleted (a promoted trusted origin persists one timeline, not a merge);
-    a pool member smaller than the incumbent is promoted to the front and becomes the
-    incumbent; a one-branch set is kept only if the rescue tier's random fill reaches
-    the gauntlet threshold — decision 2's guarantee is the gauntlet's gamma, not zero
-    loss. Not built: a shared-prefix edit across components (capture at confirmation
+    failing replay is deleted (a promoted trusted origin persists one timeline, not a
+    merge); a pool member smaller than the incumbent is promoted to the front and
+    becomes the incumbent. Not built: a shared-prefix edit across components (capture at confirmation
     regrows the branches under the shrunk incumbent and the delete pass removes the
     orphaned ones, which covers most of that pass's purpose); nodes for pool members;
     boost and ND targeting replays still use the proposal mode. The pool cap stays 10

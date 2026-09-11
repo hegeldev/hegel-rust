@@ -1,0 +1,10 @@
+[package]
+name = "livesets"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hegel = { path = "../..", package = "hegeltest", features = ["static-engine"] }
+hegel_c = { path = "../../hegel-c", package = "hegeltest-c", features = ["__bench"] }
+
+[workspace]
