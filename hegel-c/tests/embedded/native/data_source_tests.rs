@@ -489,6 +489,7 @@ fn collections_are_shared_across_cloned_streams() {
     assert!(!child.collection_more(&mut collection).unwrap());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn state_machines_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();

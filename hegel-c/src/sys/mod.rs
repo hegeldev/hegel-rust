@@ -6,9 +6,10 @@
 //! backend, environment lookups, and stderr output — goes through this
 //! module. No other module may touch the OS directly, and no other module
 //! may assume an OS exists: every capability here is either fallible
-//! ([`Result`]/[`Option`], which callers treat as a silent no-op or a
-//! fallback) or best-effort ([`stderr_line`]), so a future no-OS backend
-//! (wasm) slots in behind the same signatures.
+//! ([`Result`]/[`Option`], which callers can disable, fall back from, or
+//! surface as an error) or best-effort ([`stderr_line`]). Browser
+//! WebAssembly obtains the capabilities it can use through explicit host
+//! imports.
 //!
 //! The per-target backends deliberately avoid process-global runtime state:
 //! `rustix` on Unix (raw syscalls on Linux, so no libc thread-locals) and
@@ -36,9 +37,16 @@ mod imp;
 #[path = "windows.rs"]
 mod imp;
 
-/// An OS operation failed. Carries no detail: every caller treats failure
-/// as "the capability is unavailable right now" and degrades silently, so
-/// there is nothing to report.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[path = "wasm.rs"]
+mod imp;
+
+#[cfg(all(target_family = "wasm", target_feature = "atomics"))]
+compile_error!("libhegel's WebAssembly build does not support threads or shared memory");
+
+/// A platform operation failed. Carries no detail because callers apply
+/// capability-specific behavior: fallback for entropy and unavailability for
+/// time or direct random bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Error;
 
@@ -46,6 +54,7 @@ pub struct Error;
 /// `/`. Failures are reported as [`Error`] without detail; the engine's
 /// only filesystem client (the failure database) treats every failure as
 /// a silent no-op.
+#[cfg(not(target_family = "wasm"))]
 pub mod fs {
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -175,22 +184,26 @@ fn duration_nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// Fill `buf` from the OS entropy source (the `getrandom` syscall on Linux,
-/// `ProcessPrng` on Windows). Callers fall back to a fixed seed on failure.
+/// Fill `buf` from the platform entropy source. On Linux, the Unix backend
+/// uses the `getrandom` syscall; other Unix targets read `/dev/urandom`;
+/// Windows uses `ProcessPrng`; browser WebAssembly delegates to its
+/// `entropy_fill` host
+/// import. Callers fall back to a fixed seed on failure.
 pub fn entropy(buf: &mut [u8]) -> Result<(), Error> {
     imp::entropy(buf)
 }
 
-/// Whether this platform has an OS random device (`/dev/urandom`) for the
-/// urandom backend to read. When `false`, [`urandom`] always fails and the
-/// backend falls back to an OS-seeded PRNG at selection time.
+/// Whether this platform has a direct random source for the urandom backend.
+/// Unix provides `/dev/urandom`; Windows and browser WebAssembly do not. When
+/// `false`, [`urandom`] always fails and the backend falls back to an
+/// OS-seeded PRNG at selection time.
 pub fn urandom_available() -> bool {
     imp::urandom_available()
 }
 
-/// Fill `buf` from the OS random device, opened fresh for this one read so
-/// an external controller of the device (the Antithesis fuzzer) observes a
-/// single read of exactly this size.
+/// Fill `buf` with fresh bytes from the platform's direct random source.
+/// Native Unix opens `/dev/urandom` for each request. Windows and browser
+/// WebAssembly do not provide a direct random source in this phase.
 pub fn urandom(buf: &mut [u8]) -> Result<(), Error> {
     imp::urandom(buf)
 }
@@ -213,10 +226,11 @@ pub fn stderr_line(line: &str) {
 
 /// The current process id, used to make temporary file names unique across
 /// processes sharing a database directory.
+#[cfg(not(target_family = "wasm"))]
 pub fn pid() -> u32 {
     imp::pid()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/sys_tests.rs"]
 mod tests;
