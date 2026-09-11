@@ -136,6 +136,13 @@ struct NdBatch {
     bounces: u64,
 }
 
+/// One multiverse census (decision 75): per timeline, the failing replays
+/// it served and one of them as a witness.
+struct Census {
+    served: Vec<u64>,
+    witnesses: Vec<Option<RunResult>>,
+}
+
 /// The verdict of one structural shrink candidate — a whole counterexample
 /// — under the gauntlet (decision 75).
 struct SetVerdict {
@@ -1654,6 +1661,49 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// One run of the shrinker over `start` for `origin`, through the
+    /// engine's probe — gauntleted under nondeterministic handling — with
+    /// `anchor` and the incumbent's bounce statistics for the probe. Returns
+    /// the shrunk nodes and whether the deadline cut it short.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_shrinker(
+        &mut self,
+        origin: &str,
+        start: Vec<ChoiceNode>,
+        spans: Spans,
+        gauntleted: bool,
+        anchor: f64,
+        incumbent_bounces: (u64, u64),
+        deadline: Option<crate::sys::Instant>,
+        verbosity: Verbosity,
+        output: &Output,
+    ) -> Result<(Vec<ChoiceNode>, bool), RunError> {
+        let anchored_pool = self.origins.get(origin).map_or(0, |c| c.pool().len());
+        let probe = EngineShrinkProbe {
+            engine: &mut *self,
+            target_origin: origin.to_string(),
+            verbosity,
+            output: output.clone(),
+            gauntlet: gauntleted,
+            ledger: HashMap::default(),
+            anchor,
+            sweep: SweepMode::Fast,
+            raised: crate::native::HashSet::default(),
+            pending_accept: None,
+            incumbent_bounces,
+            anchored_pool,
+        };
+        let mut shrinker = Shrinker::with_probe(Box::new(probe), start, spans);
+        shrinker.deadline = deadline;
+        absorb_stop(shrinker.initial_coarse_reduction().await)?;
+        if verbosity == Verbosity::Debug {
+            let output = output.clone();
+            shrinker.set_debug(move |msg| output.line(msg));
+        }
+        shrinker.shrink().await?;
+        Ok((shrinker.current_nodes, shrinker.timed_out))
+    }
+
     /// Measure the counterexample `set` as one test case: [`nd::ANCHOR_SEED_RUNS`]
     /// replays, every one a trial of the set (decision 75). The confirmation
     /// batch of a discovery-time origin measured its first timeline alone —
@@ -1673,29 +1723,36 @@ impl<'a> Engine<'a> {
     }
 
     /// One census of `set` (decision 75): [`CENSUS_RUNS`] replays of the
-    /// whole counterexample, recording which timeline each failing run
-    /// followed — the first one still live at its end. A timeline that
-    /// never served a failing run describes no branch the failure takes at
-    /// a rate the census could see, and deleting it changes nothing about
-    /// how the counterexample reproduces.
+    /// whole counterexample, recording per timeline how many failing runs
+    /// it served — the first one still live at the run's end — and one
+    /// such run as its witness. A timeline that never served a failing run
+    /// describes no branch the failure takes at a rate the census could
+    /// see, and deleting it changes nothing about how the counterexample
+    /// reproduces; a failing run that no timeline served is captured.
     async fn nd_census(
         &mut self,
         origin: &str,
         set: &[Vec<ChoiceValue>],
-    ) -> Result<Vec<bool>, RunError> {
-        let mut served = alloc::vec![false; set.len()];
+    ) -> Result<Census, RunError> {
+        let mut served = alloc::vec![0u64; set.len()];
+        let mut witnesses: Vec<Option<RunResult>> = (0..set.len()).map(|_| None).collect();
         for _ in 0..CENSUS_RUNS {
             let replay = self.nd_replay_set(set, Some(origin)).await?;
             if replay.failed {
                 match replay.run.live.iter().position(|live| *live) {
-                    Some(k) => served[k] = true,
+                    Some(k) => {
+                        served[k] += 1;
+                        if witnesses[k].is_none() {
+                            witnesses[k] = Some(replay.run);
+                        }
+                    }
                     None => {
                         self.origins.entry(origin).capture(replay.realized);
                     }
                 }
             }
         }
-        Ok(served)
+        Ok(Census { served, witnesses })
     }
 
     /// The multiverse passes (decision 75): shrink the counterexample as a
@@ -1708,8 +1765,15 @@ impl<'a> Engine<'a> {
     /// another's prefix onto it when the splice is smaller; those
     /// candidates are whole sets judged by [`Self::nd_evaluate_set`], and a
     /// changed first component is installed from the witness that stayed
-    /// on it. Every accept is strictly smaller under the order, so the
-    /// rounds end on their own; the deadline bounds them too.
+    /// on it. When a round accepts nothing, each timeline the census saw
+    /// serve that has not been shrunk yet — the incumbent the main shrink
+    /// produced counts as shrunk — is shrunk once by the per-timeline
+    /// shrinker, rotated to the front with its census witness as the start:
+    /// the existing shrinker applied to every timeline of the multiverse.
+    /// The next round's census and reorder settle the result. Every accept
+    /// is strictly smaller under the order and every component is shrunk at
+    /// most once, so the rounds end on their own; the deadline bounds them
+    /// too.
     async fn nd_multiverse_shrink(
         &mut self,
         origin: &str,
@@ -1721,12 +1785,20 @@ impl<'a> Engine<'a> {
         let expired = |d: Option<crate::sys::Instant>| {
             d.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
         };
+        let mut shrunk_components: Vec<Vec<ChoiceValue>> = self
+            .origins
+            .entry(origin)
+            .timelines()
+            .into_iter()
+            .take(1)
+            .collect();
         loop {
             let set = self.origins.entry(origin).timelines();
             if set.len() < 2 || expired(deadline) {
                 return Ok(());
             }
-            let served = self.nd_census(origin, &set).await?;
+            let census = self.nd_census(origin, &set).await?;
+            let served: Vec<bool> = census.served.iter().map(|n| *n > 0).collect();
             let captured: Vec<Vec<ChoiceValue>> = self
                 .origins
                 .entry(origin)
@@ -1810,6 +1882,57 @@ impl<'a> Engine<'a> {
                     None
                 };
                 self.origins.entry(origin).install_set(&candidate, nodes);
+                self.persist_incumbent(origin)?;
+                changed = true;
+                break;
+            }
+            if changed {
+                continue;
+            }
+            for (k, witness) in census
+                .witnesses
+                .into_iter()
+                .enumerate()
+                .filter_map(|(k, witness)| witness.map(|w| (k, w)))
+            {
+                if expired(deadline) || shrunk_components.contains(&set[k]) {
+                    continue;
+                }
+                shrunk_components.push(set[k].clone());
+                let mut rotated = Vec::with_capacity(set.len());
+                rotated.push(set[k].clone());
+                rotated.extend(
+                    set.iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != k)
+                        .map(|(_, t)| t.clone()),
+                );
+                self.origins
+                    .entry(origin)
+                    .install_set(&rotated, Some(witness.nodes.clone()));
+                let bounces = (CENSUS_RUNS - census.served[k], CENSUS_RUNS);
+                let (shrunk, _) = self
+                    .run_shrinker(
+                        origin,
+                        witness.nodes,
+                        Spans::from(witness.spans),
+                        true,
+                        anchor,
+                        bounces,
+                        deadline,
+                        verbosity,
+                        output,
+                    )
+                    .await?;
+                if verbosity == Verbosity::Debug {
+                    output.line(&format!(
+                        "nd multiverse shrink component: origin={origin} k={k} {} -> {} choices",
+                        set[k].len(),
+                        shrunk.len()
+                    ));
+                }
+                shrunk_components.push(shrunk.iter().map(|n| n.value()).collect());
+                self.origins.entry(origin).replace(shrunk);
                 self.persist_incumbent(origin)?;
                 changed = true;
                 break;
@@ -2060,32 +2183,19 @@ impl<'a> Engine<'a> {
                 self.origins.entry(&origin).timelines().len()
             ));
         }
-        let anchored_pool = self.origins.get(&origin).map_or(0, |c| c.pool().len());
-        let (shrunk, timed_out) = {
-            let probe = EngineShrinkProbe {
-                engine: &mut *self,
-                target_origin: origin.clone(),
-                verbosity,
-                output: output.clone(),
-                gauntlet: gauntleted,
-                ledger: HashMap::default(),
-                anchor: probe_anchor,
-                sweep: SweepMode::Fast,
-                raised: crate::native::HashSet::default(),
-                pending_accept: None,
+        let (shrunk, timed_out) = self
+            .run_shrinker(
+                &origin,
+                verify.nodes,
+                initial_spans,
+                gauntleted,
+                probe_anchor,
                 incumbent_bounces,
-                anchored_pool,
-            };
-            let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
-            shrinker.deadline = shrink_deadline;
-            absorb_stop(shrinker.initial_coarse_reduction().await)?;
-            if verbosity == Verbosity::Debug {
-                let output = output.clone();
-                shrinker.set_debug(move |msg| output.line(msg));
-            }
-            shrinker.shrink().await?;
-            (shrinker.current_nodes, shrinker.timed_out)
-        };
+                shrink_deadline,
+                verbosity,
+                output,
+            )
+            .await?;
         let anchor = self
             .origins
             .get(&origin)

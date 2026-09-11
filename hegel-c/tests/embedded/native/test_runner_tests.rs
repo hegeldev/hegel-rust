@@ -5588,9 +5588,9 @@ fn bounce_budget_is_zero_without_bounces_and_scales_with_the_rate() {
 fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
     let mut executions = 0usize;
     move |ds| {
-        if rbool(ds).is_err() {
+        let Ok(a) = rbool(ds) else {
             return TestCaseResult::Overrun;
-        }
+        };
         executions += 1;
         if executions % 2 == 0 {
             match (rint(ds, 0, 100), rint(ds, 0, 100)) {
@@ -5600,7 +5600,7 @@ fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
             }
         } else {
             match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
-                (Ok(true), Ok(true), Ok(42)) => boom("branch"),
+                (Ok(true), Ok(true), Ok(42)) if a => boom("branch"),
                 (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
                 _ => TestCaseResult::Overrun,
             }
@@ -8631,5 +8631,81 @@ fn a_failing_rerun_on_no_stored_timeline_is_captured_into_the_pool() {
             );
             assert!(before < nd::POOL_CAP);
         },
+    );
+}
+
+#[test]
+fn the_multiverse_shrinks_every_served_pool_timeline_with_the_per_timeline_shrinker() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let debug_lines = Arc::clone(&lines);
+    let mut executions = 0usize;
+    with_engine(
+        nd_settings(),
+        None,
+        move |ds| {
+            let Ok(a) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            executions += 1;
+            if executions % 2 == 0 {
+                match (rint(ds, 0, 100), rint(ds, 0, 100)) {
+                    (Ok(y), Ok(z)) if y >= 7 && z >= 9 => boom("branch"),
+                    (Ok(_), Ok(_)) => TestCaseResult::Valid,
+                    _ => TestCaseResult::Overrun,
+                }
+            } else {
+                match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
+                    (Ok(true), Ok(true), Ok(x)) if a && x >= 42 => boom("branch"),
+                    (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
+                    _ => TestCaseResult::Overrun,
+                }
+            }
+        },
+        async |ctx| {
+            let raw_t = vec![
+                ChoiceValue::Boolean(true),
+                ChoiceValue::Integer(BigInt::from(77)),
+                ChoiceValue::Integer(BigInt::from(91)),
+            ];
+            let origin = ctx.origins.entry("Panic: branch");
+            origin.adopt(branch_s_nodes());
+            origin
+                .confirm(
+                    0.8,
+                    None,
+                    pooled_timelines(branch_s(), vec![raw_t.clone()]),
+                    (20, 20),
+                )
+                .unwrap();
+            let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
+            ctx.nd_multiverse_shrink("Panic: branch", 0.8, None, Verbosity::Debug, &output)
+                .await
+                .unwrap();
+            let timelines = ctx.origins.get("Panic: branch").unwrap().timelines();
+            assert_eq!(timelines.len(), 2);
+            assert_eq!(timelines[1], branch_s(), "the incumbent is already minimal");
+            assert_eq!(
+                timelines[0][0],
+                ChoiceValue::Boolean(true),
+                "the shared prefix is kept: dropping it would orphan the other branch"
+            );
+            assert_eq!(
+                timeline_order(&timelines[0], &raw_t),
+                core::cmp::Ordering::Less,
+                "the captured t-branch run is shrunk in place (every other proposal of a \
+                 branch-specific candidate lands on the other branch and is a miss, so \
+                 the passes converge partially): {:?}",
+                debug_lines.lock().unwrap()
+            );
+        },
+    );
+    let lines = lines.lock().unwrap();
+    assert!(
+        lines.iter().any(|l| l.starts_with(
+            "nd multiverse shrink component: origin=Panic: branch k=0 3 -> 3 choices"
+        )),
+        "{lines:?}"
     );
 }
