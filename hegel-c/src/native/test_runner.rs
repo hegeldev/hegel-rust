@@ -682,11 +682,12 @@ pub(crate) fn too_large_check(
         Some(format!(
             "FailedHealthCheck: TestCasesTooLarge — generated inputs routinely \
              exceeded the maximum size: {valid_test_cases} inputs were generated \
-             successfully, while {overrun_test_cases} inputs overran the buffer during \
-             generation. Testing with inputs this large is slow and shrinks \
+             successfully, while {overrun_test_cases} inputs overran the choice limit \
+             during generation. Testing with inputs this large is slow and shrinks \
              poorly. Try reducing the amount of data generated, e.g. a smaller \
-             min_size on collections like gs::vecs(). If this is expected, \
-             suppress the check with \
+             min_size on collections like gs::vecs(). If the test genuinely needs \
+             inputs this large, raise the limit with max_choices, or remove it \
+             with max_choices = 0. If this is expected, suppress the check with \
              suppress_health_check = [HealthCheck::TestCasesTooLarge]."
         ))
     } else {
