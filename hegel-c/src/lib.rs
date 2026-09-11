@@ -245,10 +245,10 @@ pub enum hegel_run_status_t {
 #[derive(Copy, Clone)]
 #[allow(non_camel_case_types)]
 pub enum hegel_verbosity_t {
-    /// Nothing besides the final result.
-    HEGEL_VERBOSITY_QUIET = 0,
     /// A short summary line per run. The default.
-    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_NORMAL = 0,
+    /// Nothing besides the final result.
+    HEGEL_VERBOSITY_QUIET = 1,
     /// Per-test-case progress and drawn values, plus panic diagnostics as
     /// they happen.
     HEGEL_VERBOSITY_VERBOSE = 2,

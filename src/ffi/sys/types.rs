@@ -86,8 +86,8 @@ pub(crate) enum hegel_run_status_t {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub(crate) enum hegel_verbosity_t {
-    HEGEL_VERBOSITY_QUIET = 0,
-    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_NORMAL = 0,
+    HEGEL_VERBOSITY_QUIET = 1,
     HEGEL_VERBOSITY_VERBOSE = 2,
     HEGEL_VERBOSITY_DEBUG = 3,
 }

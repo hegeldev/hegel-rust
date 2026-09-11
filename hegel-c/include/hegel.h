@@ -188,13 +188,13 @@ typedef enum {
  */
 typedef enum {
     /*
-     Nothing besides the final result.
-     */
-    HEGEL_VERBOSITY_QUIET = 0,
-    /*
      A short summary line per run. The default.
      */
-    HEGEL_VERBOSITY_NORMAL = 1,
+    HEGEL_VERBOSITY_NORMAL = 0,
+    /*
+     Nothing besides the final result.
+     */
+    HEGEL_VERBOSITY_QUIET = 1,
     /*
      Per-test-case progress and drawn values, plus panic diagnostics as
      they happen.
