@@ -13,7 +13,7 @@ type Captured = Arc<Mutex<Vec<String>>>;
 /// emitting sink that captures every draw/note line, alongside the owning
 /// [`RunHandle`].
 fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
-    let settings = Settings::new().database(None);
+    let settings = Settings::new().database(None).max_choices(8192);
     let c_settings = SettingsHandle::build(&settings, None);
     let run = RunHandle::start(&c_settings, None).unwrap();
     let c_tc = run.next_test_case().unwrap();

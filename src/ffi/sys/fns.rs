@@ -84,6 +84,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_database(ctx: *mut HegelContext, s: *mut HegelSettings, database: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_database_key(ctx: *mut HegelContext, s: *mut HegelSettings, key: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_derandomize(ctx: *mut HegelContext, s: *mut HegelSettings, derandomize: bool) -> hegel_result_t;
+            fn hegel_settings_set_max_choices(ctx: *mut HegelContext, s: *mut HegelSettings, max_choices: u64) -> hegel_result_t;
             fn hegel_settings_set_phases(ctx: *mut HegelContext, s: *mut HegelSettings, phases: u32) -> hegel_result_t;
             fn hegel_settings_set_report_multiple_failures(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_seed(ctx: *mut HegelContext, s: *mut HegelSettings, seed: u64, has_seed: bool) -> hegel_result_t;

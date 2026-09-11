@@ -953,6 +953,33 @@ pub unsafe extern "C" fn hegel_settings_set_show_statistics(
 }
 
 /// Parameters:
+/// `max_choices`: The maximum number of choices (draws, spans, collection
+///   and clone steps) one test case may make before it is concluded as an
+///   overrun: the draw that would exceed the bound returns
+///   `HEGEL_E_STOP_TEST`, and the frontend reports the case with
+///   `HEGEL_STATUS_OVERRUN`. Defaults to 2^20. 0 removes the limit: test
+///   cases are then unbounded, which a long-running test case — a
+///   concurrent state machine driven for hours, say — needs; the cost is
+///   the memory to record every choice it makes.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_max_choices(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    max_choices: u64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_max_choices") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    let limit = usize::try_from(max_choices).unwrap_or(usize::MAX);
+    handle.inner = handle.inner.clone().max_choices(limit);
+    HEGEL_OK
+}
+
+/// Parameters:
 /// `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
 ///   disables the database entirely. Discovered failures will not be
 ///   stored. Anything else is used as the database root directory. The

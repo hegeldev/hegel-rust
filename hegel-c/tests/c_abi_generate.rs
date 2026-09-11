@@ -1243,6 +1243,7 @@ fn generate_string_validates_handles_and_reports_stop_test() {
 
         let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 1000));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert_eq!(
@@ -1508,6 +1509,7 @@ fn structured_draws_after_overrun_report_stop_test() {
     unsafe {
         let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 1000));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         let mut result = hegel_generate_bytes_result_t {
@@ -1592,6 +1594,7 @@ fn typed_draws_after_overrun_report_stop_test() {
     unsafe {
         let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 1000));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         let mut result = hegel_generate_bytes_result_t {

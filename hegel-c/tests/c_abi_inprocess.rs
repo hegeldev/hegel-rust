@@ -10,7 +10,9 @@
 
 mod common;
 
-use common::{last_error, make_settings, next_case, ok, start, start_with_output};
+use common::{
+    last_error, make_settings, make_settings_no_db, next_case, ok, start, start_with_output,
+};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelCollection, HegelContext, HegelFailure, HegelPool,
@@ -197,6 +199,10 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_c::hegel_settings_set_show_statistics(ctx, ptr::null_mut(), true),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_set_max_choices(ctx, ptr::null_mut(), 1),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -1301,6 +1307,7 @@ fn primitives_after_overrun_all_report_stop_test() {
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 1000));
         let run = start(ctx, s);
 
         let tc = next_case(ctx, run);
@@ -2809,6 +2816,75 @@ fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
             ok(hegel_run_free(ctx, run));
             ok(hegel_settings_free(ctx, s));
             ok(hegel_context_free(ctx));
+        }
+    }
+}
+
+#[test]
+fn max_choices_zero_removes_the_limit() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 0));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, u64::MAX));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn max_choices_bounds_a_test_case() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_max_choices(ctx, s, 3));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        let mut value = false;
+        for _ in 0..3 {
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+        }
+        assert_eq!(
+            hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut value),
+            HEGEL_E_STOP_TEST
+        );
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        drain_run_valid(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// Pull every remaining case off `run`, completing each as valid after one
+/// draw, so the run can be freed cleanly.
+unsafe fn drain_run_valid(ctx: *mut HegelContext, run: *mut HegelRun) {
+    loop {
+        let tc = unsafe { next_case(ctx, run) };
+        if tc.is_null() {
+            break;
+        }
+        let mut value = false;
+        unsafe {
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
         }
     }
 }

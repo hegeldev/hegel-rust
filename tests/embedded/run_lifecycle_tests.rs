@@ -148,11 +148,15 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
     );
 }
 
+/// Settings for the single-case runs below. The choice limit is kept at
+/// the historical 8192 so a body that draws until it overruns finishes
+/// quickly.
 fn test_settings() -> Settings {
     Settings::new()
         .database(None)
         .derandomize(true)
         .seed(Some(1))
+        .max_choices(8192)
 }
 
 /// Run one real test case from a fresh engine run through `run_test_case`,

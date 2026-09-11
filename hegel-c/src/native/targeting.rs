@@ -4,9 +4,7 @@ use crate::native::{HashMap, HashSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::native::core::{
-    BUFFER_SIZE, ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status,
-};
+use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status};
 use crate::native::shrinker::search::FindInteger;
 use crate::native::test_runner::{Engine, RunResult};
 
@@ -129,7 +127,8 @@ impl Optimiser<'_, '_> {
         if self.budget_exhausted() {
             return Ok(None);
         }
-        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), BUFFER_SIZE)?;
+        let bound = self.engine.choice_bound();
+        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), bound)?;
         let (run, mismatch) = self.engine.test_function(ntc).await?;
         if let Some(err) = mismatch {
             return Err(err);

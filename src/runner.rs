@@ -137,6 +137,10 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
+    /// The per-test-case choice bound: `None` while unset (the engine's
+    /// default applies), `Some(0)` for unbounded, `Some(n)` for an explicit
+    /// limit. See [`Settings::max_choices`].
+    pub(crate) max_choices: Option<u64>,
 }
 
 impl Settings {
@@ -173,6 +177,7 @@ impl Settings {
             show_statistics: false,
             print_blob: false,
             backend: None,
+            max_choices: None,
         }
     }
 
@@ -195,6 +200,38 @@ impl Settings {
     /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
+        self
+    }
+
+    /// Set the maximum number of choices a single test case may make, or 0
+    /// for no limit. Defaults to 2^20 (1,048,576) choices, except in a
+    /// `#[hegel::main]` binary, where the default is no limit.
+    ///
+    /// Every draw counts as at least one choice, as does each element of a
+    /// collection, each step of a state machine, and each cloned
+    /// [`TestCase`](crate::TestCase). A test case that reaches the limit is
+    /// stopped and discarded, and a run whose test cases routinely do so
+    /// fails the [`HealthCheck::TestCasesTooLarge`] health check (or
+    /// [`HealthCheck::LargeInitialTestCase`] when even the smallest natural
+    /// input does). Remove the limit for a test case that is meant to run
+    /// for a long time, such as a concurrent state machine driven for hours:
+    ///
+    /// ```no_run
+    /// use hegel::TestCase;
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test(test_cases = 1, max_choices = 0)]
+    /// fn soak(tc: TestCase) {
+    ///     for _ in 0..5_000_000 {
+    ///         let _: u8 = tc.draw(gs::integers());
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The engine records every choice a test case makes, so an unbounded
+    /// test case's memory grows with its length.
+    pub fn max_choices(mut self, max_choices: u64) -> Self {
+        self.max_choices = Some(max_choices);
         self
     }
 
@@ -336,9 +373,14 @@ impl Settings {
     /// The settings a `#[hegel::main]` binary runs with: one test case, with
     /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
     /// both measure how valid test cases accumulate over a run and a run of
-    /// one has nothing to measure.
+    /// one has nothing to measure, and no choice limit unless
+    /// [`Settings::max_choices`] set one explicitly, since a binary's one
+    /// test case is typically meant to run for a long time.
     pub(crate) fn for_single_test_case(mut self) -> Self {
         self.test_cases = 1;
+        if self.max_choices.is_none() {
+            self.max_choices = Some(0);
+        }
         for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {
             if !self.suppress_health_check.contains(&check) {
                 self.suppress_health_check.push(check);

@@ -307,14 +307,22 @@ fn normalize_e0283_stderr(raw: &str) -> String {
 
 /// Compile `case` against the freshly built hegel rlib and return its
 /// normalized stderr (see [`normalize_e0283_stderr`]). The case must fail to
-/// compile.
+/// compile. The diagnostic width is pinned to rustc's non-terminal default:
+/// it decides which types in the `required for` notes are elided to `...`,
+/// and would otherwise follow the width of whatever terminal ran the test.
 fn compile_failing_case(case: &str) -> String {
     let search_dirs = crate_search_dirs();
     let rlib = newest_hegel_rlib(&search_dirs);
     let out_dir = tempfile::tempdir().unwrap();
     let mut command = Command::new(rustc_binary());
     command
-        .args(["--edition", "2021", "--emit=metadata", "--color=never"])
+        .args([
+            "--edition",
+            "2021",
+            "--emit=metadata",
+            "--color=never",
+            "--diagnostic-width=140",
+        ])
         .arg("--extern")
         .arg({
             let mut arg = std::ffi::OsString::from("hegel=");
