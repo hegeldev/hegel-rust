@@ -190,11 +190,7 @@ impl Settings {
             output: Output::stderr(),
             seed: None,
             derandomize: false,
-            database: if cfg!(target_family = "wasm") {
-                Database::Disabled
-            } else {
-                Database::Unset
-            },
+            database: BASE_DATABASE,
             suppress_health_check: Vec::new(),
             in_antithesis,
             phases: vec![
@@ -350,6 +346,14 @@ pub(crate) enum Database {
     Disabled,
     Path(String),
 }
+
+/// The database in the base settings: the default disk database, except on
+/// WebAssembly, which has no filesystem to keep one in.
+const BASE_DATABASE: Database = if cfg!(target_family = "wasm") {
+    Database::Disabled
+} else {
+    Database::Unset
+};
 
 pub(crate) fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
