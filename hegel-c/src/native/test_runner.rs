@@ -1709,7 +1709,8 @@ impl<'a> Engine<'a> {
     /// candidates are whole sets judged by [`Self::nd_evaluate_set`], and a
     /// changed first component is installed from the witness that stayed
     /// on it. Every accept is strictly smaller under the order, so the
-    /// rounds end on their own; the deadline bounds them too.
+    /// rounds end on their own; the deadline, checked per round, bounds
+    /// them too.
     async fn nd_multiverse_shrink(
         &mut self,
         origin: &str,
@@ -1783,9 +1784,6 @@ impl<'a> Engine<'a> {
             }
             let mut changed = false;
             for (pass, candidate) in candidates {
-                if expired(deadline) {
-                    return Ok(());
-                }
                 crate::control::hegel_internal_assert!(
                     set_order(&candidate, &set) == core::cmp::Ordering::Less,
                     "nd_multiverse_shrink: a {pass} candidate is not smaller than its set"
@@ -1804,11 +1802,7 @@ impl<'a> Engine<'a> {
                 if !verdict.accepted {
                     continue;
                 }
-                let nodes = if needs_witness {
-                    verdict.witness.map(|w| w.nodes)
-                } else {
-                    None
-                };
+                let nodes = verdict.witness.filter(|_| needs_witness).map(|w| w.nodes);
                 self.origins.entry(origin).install_set(&candidate, nodes);
                 self.persist_incumbent(origin)?;
                 changed = true;
