@@ -534,16 +534,29 @@ pub(crate) fn load() -> Result<ConfigFile, ProfileError> {
     #[cfg(not(miri))]
     {
         static LOADED: crate::sys::sync::Lazy<Result<ConfigFile, ProfileError>> =
-            crate::sys::sync::Lazy::new(|| {
-                load_from(
-                    crate::sys::env_var(CONFIG_VAR),
-                    crate::sys::cwd(),
-                    crate::sys::fs::exists,
-                    |path| crate::sys::fs::read(path).ok(),
-                )
-            });
+            crate::sys::sync::Lazy::new(load_from_sys);
         LOADED.clone()
     }
+}
+
+/// [`load_from`] against the real environment, working directory, and
+/// filesystem.
+#[cfg(all(not(miri), not(target_family = "wasm")))]
+fn load_from_sys() -> Result<ConfigFile, ProfileError> {
+    load_from(
+        crate::sys::env_var(CONFIG_VAR),
+        crate::sys::cwd(),
+        crate::sys::fs::exists,
+        |path| crate::sys::fs::read(path).ok(),
+    )
+}
+
+/// [`load_from`] on WebAssembly, which has no working directory or
+/// filesystem: discovery finds nothing, and a `HEGEL_CONFIG` the host does
+/// supply names a file that cannot be read.
+#[cfg(all(not(miri), target_family = "wasm"))]
+fn load_from_sys() -> Result<ConfigFile, ProfileError> {
+    load_from(crate::sys::env_var(CONFIG_VAR), None, |_| false, |_| None)
 }
 
 /// [`load`] with the environment, directory, and filesystem reads injected.

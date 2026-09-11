@@ -216,6 +216,7 @@ pub fn env_var(name: &str) -> Option<String> {
 
 /// The current working directory, decoded lossily. `None` if the OS cannot
 /// report one; callers treat that as "no directory to search".
+#[cfg(not(target_family = "wasm"))]
 pub fn cwd() -> Option<String> {
     imp::cwd()
 }
