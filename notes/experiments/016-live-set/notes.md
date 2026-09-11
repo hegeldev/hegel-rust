@@ -1,7 +1,7 @@
 # 016: the counterexample as one test case — reproduction and cost under the live set
 
-Status: two campaigns run on 2026-09-11 against decisions 74/75 as built
-(commits `6dd1ac65`, `0849197e`, `7210c4f8`).
+Status: six campaigns run on 2026-09-11 against decisions 74/75 as built, each
+forcing the correction the next one measured (commits `0849197e` → `b2ff7905`).
 
 Question: with the pool replayed as one test case (the live set, decision 74), the
 gauntlet counting only on-timeline evidence, and the multiverse passes shrinking the
@@ -208,8 +208,8 @@ run that can tell "the test took another branch" from "the proposal misfits".
 
 ## Where this leaves the numbers
 
-Against campaign 1 (decisions 74/75 as first built) the final tree (`74b5134c` + the
-revert) has: reproduction unchanged at the ceiling (reuse 80/80, blob 240/240); replay
+Against campaign 1 (decisions 74/75 as first built) the final tree (`b2ff7905`: `74b5134c`
+plus the revert of `e3d8ee1f`) has: reproduction unchanged at the ceiling (reuse 80/80, blob 240/240); replay
 cost one execution; `branch` discovery 5306 → 2013 executions and reuse uniformly the
 fast mode (median 2, from a 13/7 split with a slow mode in the thousands); `twobranch`
 pools covering all four failing paths in 20/20 episodes (from two in 15/20) and reuse
