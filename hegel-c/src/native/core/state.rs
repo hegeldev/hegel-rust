@@ -1703,9 +1703,11 @@ impl NativeTestCase {
         self.replay.divergence()
     }
 
-    /// Which of the replayed counterexample's timelines are still live.
-    #[cfg(test)]
-    pub(crate) fn live_timelines(&self) -> Vec<bool> {
+    /// Which of the replayed counterexample's timelines are still live, in
+    /// counterexample order: at the end of a run, the timelines every draw
+    /// of every stream agreed with. `[true]` for a proposal replay, empty
+    /// for fresh generation.
+    pub fn live_timelines(&self) -> Vec<bool> {
         self.replay.live()
     }
 

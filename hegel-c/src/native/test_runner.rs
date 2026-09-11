@@ -35,7 +35,9 @@ use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, Divergence, MAX_SHRINKING_SECONDS, NativeTestCase, Span,
     Spans, Status, sort_key,
 };
-use crate::native::counterexample::{Counterexample, Counterexamples, pooled_timelines};
+use crate::native::counterexample::{
+    Counterexample, Counterexamples, pooled_timelines, set_order, timeline_order,
+};
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
@@ -72,6 +74,10 @@ pub struct RunResult {
     /// run that stayed on its counterexample — and for fresh generation
     /// and cache hits.
     pub divergence: Option<Divergence>,
+    /// Which of the replayed counterexample's timelines the whole run
+    /// stayed on, in counterexample order (`[true]` for a proposal replay;
+    /// empty for fresh generation and cache hits).
+    pub live: Vec<bool>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -109,6 +115,10 @@ struct NdReplayOnce {
     run: RunResult,
     realized: Vec<ChoiceValue>,
     failed: bool,
+    /// Whether the run stayed live on the replayed set's first timeline
+    /// (decision 75): the one measurement that is evidence about that
+    /// timeline rather than about the set.
+    on_timeline: bool,
 }
 
 /// Outcome of one evidence batch (experiment 005): the replays, their
@@ -122,7 +132,38 @@ struct NdBatch {
     evidence: nd::Evidence,
     witness: Option<RunResult>,
     captured: Vec<Vec<ChoiceValue>>,
+    /// Replays that did not stay live on the incumbent (decision 75).
+    bounces: u64,
 }
+
+/// The verdict of one structural shrink candidate — a whole counterexample
+/// — under the gauntlet (decision 75).
+struct SetVerdict {
+    accepted: bool,
+    /// A failing run that stayed live on the candidate's first timeline,
+    /// whose nodes can serve as the new incumbent.
+    witness: Option<RunResult>,
+}
+
+/// Off-timeline reruns a shrink candidate may spend before it is abandoned
+/// as no evidence (decision 75): none when the incumbent never bounced,
+/// otherwise the bounces expected while collecting [`nd::GAUNTLET_CAP`]
+/// on-timeline runs at the incumbent's own rate.
+fn bounce_budget(bounces: u64, runs: u64) -> u64 {
+    if bounces == 0 {
+        return 0;
+    }
+    if bounces >= runs {
+        return nd::GAUNTLET_CAP;
+    }
+    let rate = bounces as f64 / runs as f64;
+    libm::ceil(nd::GAUNTLET_CAP as f64 * rate / (1.0 - rate)) as u64
+}
+
+/// Structural shrink rounds per origin (decision 75): every accepted move
+/// is strictly smaller under [`set_order`], so the passes terminate on
+/// their own; the cap bounds the replays a long descent may spend.
+const MULTIVERSE_ROUNDS: usize = 4;
 
 /// Outcome of one history backtrack (seam plan step 4, gate G25).
 enum Backtrack {
@@ -1558,11 +1599,167 @@ impl<'a> Engine<'a> {
         let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
         let failed = run.status == Status::Interesting
             && origin.is_none_or(|o| run.origin.as_deref() == Some(o));
+        let on_timeline = run.live.first().copied().unwrap_or(false);
         Ok(NdReplayOnce {
             run,
             realized,
             failed,
+            on_timeline,
         })
+    }
+
+    /// The gauntlet over one structural shrink candidate — `set`, a whole
+    /// counterexample — driven to a bound (decision 75): every replay is a
+    /// trial of the set, so all of them are evidence, charged against the
+    /// origin's alpha budget like any proposal. `needs_witness` asks for a
+    /// failing run that stayed live on the set's first timeline, the nodes
+    /// a changed incumbent is installed from; without one such an accept
+    /// is refused.
+    async fn nd_evaluate_set(
+        &mut self,
+        origin: &str,
+        set: &[Vec<ChoiceValue>],
+        anchor: f64,
+        needs_witness: bool,
+    ) -> Result<SetVerdict, RunError> {
+        let min_fails = self.origins.entry(origin).gauntlet_spend.charge(
+            &nd::Evidence::default(),
+            anchor,
+            true,
+            None,
+        );
+        let mut evidence = nd::Evidence::default();
+        let mut witness = None;
+        loop {
+            match nd::gauntlet(&evidence, anchor, min_fails) {
+                nd::GauntletVerdict::Accept => {
+                    if evidence.runs() >= nd::ANCHOR_SEED_RUNS {
+                        return Ok(SetVerdict {
+                            accepted: !needs_witness || witness.is_some(),
+                            witness,
+                        });
+                    }
+                }
+                nd::GauntletVerdict::Reject => {
+                    return Ok(SetVerdict {
+                        accepted: false,
+                        witness,
+                    });
+                }
+                nd::GauntletVerdict::Continue => {}
+            }
+            let replay = self.nd_replay_set(set, Some(origin)).await?;
+            evidence.record(replay.failed);
+            if replay.failed && replay.on_timeline && witness.is_none() {
+                witness = Some(replay.run);
+            }
+        }
+    }
+
+    /// The multiverse passes (decision 75): shrink the counterexample as a
+    /// set, under [`set_order`]. Each round proposes deleting a component
+    /// (a run that still reproduces without it described the failure with
+    /// one branch fewer), swapping adjacent components toward sorted order
+    /// (which timeline serves first at a disagreement is state, and sorted
+    /// is the fixpoint), and replacing a component with a positional
+    /// splice of another's prefix onto it when the splice is smaller. Every
+    /// candidate is a whole set judged by [`Self::nd_evaluate_set`]; a
+    /// changed first component is installed from the witness that stayed
+    /// on it. Stops at the deadline, after a round with no accept, or
+    /// after [`MULTIVERSE_ROUNDS`] rounds.
+    async fn nd_multiverse_shrink(
+        &mut self,
+        origin: &str,
+        anchor: f64,
+        deadline: Option<crate::sys::Instant>,
+        verbosity: Verbosity,
+        output: &Output,
+    ) -> Result<(), RunError> {
+        let expired = |d: Option<crate::sys::Instant>| {
+            d.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
+        };
+        for _ in 0..MULTIVERSE_ROUNDS {
+            let mut changed = false;
+            let mut set = self.origins.entry(origin).timelines();
+            if set.len() < 2 {
+                return Ok(());
+            }
+            let mut candidates: Vec<(&'static str, Vec<Vec<ChoiceValue>>)> = Vec::new();
+            for k in (0..set.len()).rev() {
+                let mut candidate = set.clone();
+                candidate.remove(k);
+                candidates.push(("delete", candidate));
+            }
+            for k in 1..set.len() {
+                if timeline_order(&set[k], &set[k - 1]) == core::cmp::Ordering::Less {
+                    let mut candidate = set.clone();
+                    candidate.swap(k - 1, k);
+                    candidates.push(("reorder", candidate));
+                }
+            }
+            for k in 0..set.len() {
+                let mut j = self.rng.random_range(0..set.len() - 1);
+                if j >= k {
+                    j += 1;
+                }
+                let bound = set[j].len().min(set[k].len());
+                if bound < 2 {
+                    continue;
+                }
+                let cut = bound - 1;
+                let mut spliced = set[j][..cut].to_vec();
+                spliced.extend_from_slice(&set[k][cut..]);
+                if timeline_order(&spliced, &set[k]) == core::cmp::Ordering::Less
+                    && !set.contains(&spliced)
+                {
+                    let mut candidate = set.clone();
+                    candidate[k] = spliced;
+                    candidates.push(("splice", candidate));
+                }
+            }
+            for (pass, candidate) in candidates {
+                if expired(deadline) {
+                    return Ok(());
+                }
+                crate::control::hegel_internal_assert!(
+                    set_order(&candidate, &set) == core::cmp::Ordering::Less,
+                    "nd_multiverse_shrink: a {pass} candidate is not smaller than its set"
+                );
+                let needs_witness = candidate[0] != set[0];
+                let verdict = self
+                    .nd_evaluate_set(origin, &candidate, anchor, needs_witness)
+                    .await?;
+                if verbosity == Verbosity::Debug {
+                    output.line(&format!(
+                        "nd multiverse {pass}: origin={origin} timelines={} accepted={}",
+                        candidate.len(),
+                        verdict.accepted
+                    ));
+                }
+                if !verdict.accepted {
+                    continue;
+                }
+                let nodes = if needs_witness {
+                    verdict.witness.map(|w| w.nodes)
+                } else {
+                    None
+                };
+                self.origins.entry(origin).install_set(&candidate, nodes);
+                let incumbent = self
+                    .origins
+                    .incumbent(origin)
+                    .map(<[ChoiceNode]>::to_vec)
+                    .unwrap_or_default();
+                self.record_nd_incumbent(origin, &incumbent)?;
+                set = self.origins.entry(origin).timelines();
+                changed = true;
+                break;
+            }
+            if !changed {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     /// Replay-until-failure over stored ND state (decisions 25 and 74): the
@@ -1708,6 +1905,7 @@ impl<'a> Engine<'a> {
                     batch.captured.into_iter().chain(trusted.pool().to_vec()),
                 );
                 trusted.confirm(probe_anchor, None, pool, evidence)?;
+                trusted.record_bounces(batch.bounces, evidence.1);
                 self.record_nd_incumbent(&origin, &initial)?;
                 witness
             } else {
@@ -1747,9 +1945,9 @@ impl<'a> Engine<'a> {
             );
             probe_anchor = batch.evidence.lower_bound();
             let pool = pooled_timelines(choices.clone(), batch.captured);
-            self.origins
-                .entry(&origin)
-                .confirm(probe_anchor, None, pool, evidence)?;
+            let admitted = self.origins.entry(&origin);
+            admitted.confirm(probe_anchor, None, pool, evidence)?;
+            admitted.record_bounces(batch.bounces, evidence.1);
             self.record_nd_incumbent(&origin, &initial)?;
             witness
         };
@@ -1765,6 +1963,10 @@ impl<'a> Engine<'a> {
 
         let initial_spans = Spans::from(verify.spans.clone());
         let gauntleted = self.nd_handling();
+        let incumbent_bounces = self
+            .origins
+            .get(&origin)
+            .map_or((0, 0), Counterexample::bounce_stats);
         let (shrunk, timed_out) = {
             let probe = EngineShrinkProbe {
                 engine: &mut *self,
@@ -1777,6 +1979,7 @@ impl<'a> Engine<'a> {
                 sweep: SweepMode::Fast,
                 raised: crate::native::HashSet::default(),
                 pending_accept: None,
+                incumbent_bounces,
             };
             let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
             shrinker.deadline = shrink_deadline;
@@ -1788,10 +1991,19 @@ impl<'a> Engine<'a> {
             shrinker.shrink().await?;
             (shrinker.current_nodes, shrinker.timed_out)
         };
+        let anchor = self
+            .origins
+            .get(&origin)
+            .and_then(Counterexample::anchor)
+            .unwrap_or(probe_anchor);
         if !gauntleted && self.nd_handling() {
             self.origins.entry(&origin).replace(initial);
         } else {
             self.origins.entry(&origin).replace(shrunk);
+            if gauntleted && !timed_out {
+                self.nd_multiverse_shrink(&origin, anchor, shrink_deadline, verbosity, output)
+                    .await?;
+            }
             shrunk_origins.insert(origin);
         }
         Ok(timed_out)
@@ -2001,14 +2213,17 @@ impl<'a> Engine<'a> {
         let mut evidence = self.origins.entry(origin).take_seed().unwrap_or_default();
         let mut witness = None;
         let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
+        let mut bounces = 0;
+        let set = self.origins.entry(origin).timelines_from(choices.to_vec());
         let capture_entry = self.capture_replays;
         self.capture_replays = true;
         let bar_accepted = loop {
             if deadline.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d)) {
                 break false;
             }
-            let replay = self.nd_replay_once(choices, Some(origin)).await?;
+            let replay = self.nd_replay_set(&set, Some(origin)).await?;
             evidence.record(replay.failed);
+            bounces += u64::from(!replay.on_timeline);
             if replay.failed {
                 if captured.len() < nd::POOL_CAP && !captured.contains(&replay.realized) {
                     captured.push(replay.realized);
@@ -2031,8 +2246,9 @@ impl<'a> Engine<'a> {
             }
         };
         while bar_accepted && evidence.runs() < nd::ANCHOR_SEED_RUNS {
-            let replay = self.nd_replay_once(choices, Some(origin)).await?;
+            let replay = self.nd_replay_set(&set, Some(origin)).await?;
             evidence.record(replay.failed);
+            bounces += u64::from(!replay.on_timeline);
             if replay.failed
                 && captured.len() < nd::POOL_CAP
                 && !captured.contains(&replay.realized)
@@ -2046,6 +2262,7 @@ impl<'a> Engine<'a> {
             evidence,
             witness,
             captured,
+            bounces,
         })
     }
 
@@ -2744,6 +2961,9 @@ impl<'a> Engine<'a> {
                     evidence,
                 );
                 confirmed?;
+                self.origins
+                    .entry(&origin)
+                    .record_bounces(batch.bounces, evidence.1);
                 self.record_nd_incumbent(&origin, &nodes)?;
             } else {
                 self.reject_origin(&origin, evidence, false);
@@ -3007,6 +3227,7 @@ impl<'a> Engine<'a> {
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let events = NativeDataSource::take_events(&handle);
         let divergence = NativeDataSource::take_divergence(&handle);
+        let live = NativeDataSource::take_live(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
@@ -3024,6 +3245,7 @@ impl<'a> Engine<'a> {
             target_observations,
             events,
             divergence,
+            live,
         })
     }
 
@@ -3069,6 +3291,7 @@ impl<'a> Engine<'a> {
                     target_observations: HashMap::default(),
                     events: Vec::new(),
                     divergence: None,
+                    live: Vec::new(),
                 });
             }
         }
@@ -3131,6 +3354,11 @@ struct EngineShrinkProbe<'e, 'a> {
     /// nothing: the anchor bounds the *incumbent's* rate, and a
     /// never-adopted candidate never becomes the incumbent.
     pending_accept: Option<PendingAccept>,
+    /// The incumbent's (bounces, runs) — how often its own measurement
+    /// replays left it — from which every candidate's [`bounce_budget`] is
+    /// derived (decision 75). Starts from the confirmation batch and
+    /// follows each adopted candidate's ledger.
+    incumbent_bounces: (u64, u64),
 }
 
 /// See [`EngineShrinkProbe::pending_accept`].
@@ -3138,6 +3366,7 @@ struct PendingAccept {
     key: Vec<u8>,
     lower_bound: f64,
     nodes: Vec<ChoiceNode>,
+    bounces: (u64, u64),
 }
 
 /// One realized timeline's gauntlet state within the shrink of one origin.
@@ -3153,6 +3382,9 @@ struct CandidateLedger {
     /// their recruiting run went (a nested clone shrink's final splice
     /// re-proposes exactly such timelines).
     verdict: Option<bool>,
+    /// Reruns that left the candidate (decision 75): no evidence either
+    /// way, counted against the bounce budget.
+    bounces: u64,
 }
 
 impl EngineShrinkProbe<'_, '_> {
@@ -3181,6 +3413,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 .entry(&self.target_origin)
                 .raise_anchor(accept.lower_bound);
         }
+        self.incumbent_bounces = accept.bounces;
         self.engine
             .record_nd_incumbent(&self.target_origin, &accept.nodes)
     }
@@ -3230,6 +3463,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     evidence: nd::Evidence::default(),
                     min_fails,
                     verdict: None,
+                    bounces: 0,
                 });
             }
             let entry = self.ledger.get_mut(&key).unwrap();
@@ -3243,15 +3477,24 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     key,
                     lower_bound: entry.evidence.lower_bound(),
                     nodes: run.nodes.clone(),
+                    bounces: (entry.bounces, entry.evidence.runs() + entry.bounces),
                 });
                 return Ok((true, run.nodes, Spans::from(run.spans)));
             }
             if !matched && self.sweep == SweepMode::Fast {
                 return Ok((false, run.nodes, Spans::from(run.spans)));
             }
+            let budget = bounce_budget(self.incumbent_bounces.0, self.incumbent_bounces.1);
+            let set = self
+                .engine
+                .origins
+                .entry(&self.target_origin)
+                .timelines_from(realized);
             let mut accepted = false;
             loop {
-                let evidence = self.ledger.get(&key).unwrap().evidence;
+                let ledger = self.ledger.get(&key).unwrap();
+                let evidence = ledger.evidence;
+                let bounces = ledger.bounces;
                 if !accepted {
                     match nd::gauntlet(&evidence, self.anchor, min_fails) {
                         nd::GauntletVerdict::Accept => accepted = true,
@@ -3270,18 +3513,30 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         key,
                         lower_bound: evidence.lower_bound(),
                         nodes: run.nodes.clone(),
+                        bounces: (bounces, evidence.runs() + bounces),
                     });
                     return Ok((true, run.nodes, Spans::from(run.spans)));
                 }
                 let rerun = self
                     .engine
-                    .nd_replay_once(&realized, Some(self.target_origin.as_str()))
+                    .nd_replay_set(&set, Some(self.target_origin.as_str()))
                     .await?;
-                self.ledger
-                    .get_mut(&key)
-                    .unwrap()
-                    .evidence
-                    .record(rerun.failed);
+                let ledger = self.ledger.get_mut(&key).unwrap();
+                if rerun.on_timeline {
+                    ledger.evidence.record(rerun.failed);
+                } else {
+                    ledger.bounces += 1;
+                    if ledger.bounces > budget {
+                        if self.verbosity == Verbosity::Debug {
+                            self.output.line(&format!(
+                                "gauntlet abandoned a candidate: {} reruns left the timeline \
+                                 (budget {budget})",
+                                ledger.bounces
+                            ));
+                        }
+                        return Ok((false, run.nodes, Spans::from(run.spans)));
+                    }
+                }
             }
         })
     }

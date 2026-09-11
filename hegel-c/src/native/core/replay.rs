@@ -257,7 +257,6 @@ impl Replay {
     }
 
     /// Which timelines are live, in counterexample order.
-    #[cfg(test)]
     pub(crate) fn live(&self) -> Vec<bool> {
         self.shared.lock().live.clone()
     }

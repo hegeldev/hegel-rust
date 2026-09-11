@@ -879,3 +879,45 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     replay conclusions; decision 5's storage stands. (DRM directed, in discussion;
     the lenient positional alternative — never prune on a value disagreement — was
     rejected as semantics and kept as the first rescue policy.)
+
+75. **The multiverse shrinker and the three-valued gauntlet** (implements decision 74's
+    corollaries; `test_runner.rs`, `counterexample.rs`). Every measurement replay runs
+    the counterexample as a set (`nd_replay_set`: the incumbent's values then the pool,
+    `NativeTestCase::for_counterexample`), including the confirmation batch and the
+    gauntlet's reruns, and reports whether the run stayed live on the first timeline
+    (`RunResult.live`). A per-timeline shrink candidate's gauntlet counts as evidence
+    only the reruns that stayed on the candidate; a rerun that left it is a bounce — no
+    evidence either way — charged against a per-candidate budget derived from the
+    incumbent's own bounce rate (`bounce_budget`: none if the incumbent never bounced,
+    otherwise the bounces expected while collecting `GAUNTLET_CAP` on-timeline runs at
+    that rate); exceeding it abandons the candidate without latching a verdict, so
+    pass repetition can retry it. The incumbent's rate comes from its confirmation batch
+    (`Counterexample::record_bounces`) and follows each adopted candidate's ledger.
+    Known bias, accepted for measurement: the candidate's evidence is conditional on
+    staying on it while the anchor is the set's unconditional rate; the bounce budget
+    is what bounds a candidate from bouncing more than the incumbent did. After the
+    per-timeline shrink, `nd_multiverse_shrink` runs structural passes over the set
+    under `set_order` (fewer timelines first, then `timeline_order` — the database's
+    shortlex over serialized values — lexicographically): delete a component, swap
+    adjacent components toward sorted order, and replace a component with a positional
+    splice of another's prefix (the longest shared-length prefix) onto its tail when
+    the splice is smaller. Each candidate is a whole set judged by `nd_evaluate_set` —
+    the gauntlet driven to a bound with every replay as evidence (the set's own
+    estimand), charged against the alpha budget — and a candidate whose first timeline
+    changed is installed only from a failing run that stayed live on it, so the
+    incumbent is always a realized failing execution. Rounds repeat while a candidate
+    is accepted, capped at `MULTIVERSE_ROUNDS = 4` per shrink and by the shrink
+    deadline; every accept is strictly smaller so the descent terminates anyway.
+    Consequences observed in the tests: a stored pool member that never serves a
+    replay is deleted (a promoted trusted origin persists one timeline, not a merge);
+    a pool member smaller than the incumbent is promoted to the front and becomes the
+    incumbent; a one-branch set is kept only if the rescue tier's random fill reaches
+    the gauntlet threshold — decision 2's guarantee is the gauntlet's gamma, not zero
+    loss. Not built: a shared-prefix edit across components (capture at confirmation
+    regrows the branches under the shrunk incumbent and the delete pass removes the
+    orphaned ones, which covers most of that pass's purpose); nodes for pool members;
+    boost and ND targeting replays still use the proposal mode. The pool cap stays 10
+    pending measurement (experiment 016). (DRM directed the shape — "retain the current
+    shrinker as a per-timeline shrinker, add ones that operate on whole multiverse
+    representations", "distinguish worked / didn't work / no evidence"; the bounce
+    budget and the order key are the implementation's choices.)

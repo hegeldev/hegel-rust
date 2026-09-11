@@ -16,6 +16,7 @@ fn witness(origin: &str) -> RunResult {
         target_observations: HashMap::default(),
         events: Vec::new(),
         divergence: None,
+        live: Vec::new(),
     }
 }
 
@@ -411,4 +412,72 @@ fn the_map_reports_live_and_unconfirmed_origins_in_origin_order() {
     assert!(all.incumbent("c").is_none());
     assert!(all.caveat("c").is_some());
     assert_eq!(all.iter().count(), 3);
+}
+
+#[test]
+fn timeline_order_is_shortlex_over_serialized_values() {
+    use core::cmp::Ordering;
+    let short = vec![ChoiceValue::Boolean(true)];
+    let long = vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)];
+    assert_eq!(timeline_order(&short, &long), Ordering::Less);
+    assert_eq!(timeline_order(&long, &short), Ordering::Greater);
+    let int = vec![ChoiceValue::Integer(BigInt::from(7))];
+    assert_eq!(
+        timeline_order(&int, &short),
+        Ordering::Less,
+        "an integer's tag precedes a boolean's"
+    );
+    assert_eq!(timeline_order(&short, &short), Ordering::Equal);
+    let mut deep = ChoiceValue::Clone(alloc::sync::Arc::new(
+        crate::native::core::CloneRecord::from_values(Vec::new()),
+    ));
+    for _ in 0..=crate::native::core::MAX_CLONE_DEPTH {
+        deep = ChoiceValue::Clone(alloc::sync::Arc::new(
+            crate::native::core::CloneRecord::from_values(vec![deep]),
+        ));
+    }
+    let too_deep = vec![deep];
+    assert_eq!(
+        timeline_order(&too_deep, &too_deep),
+        Ordering::Equal,
+        "timelines that cannot be serialized compare equal"
+    );
+}
+
+#[test]
+fn set_order_counts_timelines_first_then_compares_them_lexicographically() {
+    use core::cmp::Ordering;
+    let a = vec![ChoiceValue::Boolean(true)];
+    let b = vec![ChoiceValue::Boolean(false)];
+    assert_eq!(
+        set_order(core::slice::from_ref(&a), &[b.clone(), a.clone()]),
+        Ordering::Less
+    );
+    assert_eq!(
+        set_order(&[b.clone(), a.clone()], &[a.clone(), b.clone()]),
+        Ordering::Less
+    );
+    assert_eq!(
+        set_order(&[a.clone(), b.clone()], &[a.clone(), b]),
+        Ordering::Equal
+    );
+}
+
+#[test]
+fn install_set_replaces_the_pool_and_optionally_the_incumbent() {
+    let mut c = Counterexample::default();
+    c.adopt(vec![int_node(9)]);
+    assert_eq!(c.anchor(), None);
+    c.confirm(0.6, None, Vec::new(), (4, 4)).unwrap();
+    assert_eq!(c.anchor(), Some(0.6));
+    c.install_set(&[values(&[int_node(9)]), values(&[int_node(3)])], None);
+    assert_eq!(c.incumbent().unwrap(), &[int_node(9)]);
+    assert_eq!(c.pool(), &[values(&[int_node(3)])]);
+    c.install_set(&[values(&[int_node(3)])], Some(vec![int_node(3)]));
+    assert_eq!(c.incumbent().unwrap(), &[int_node(3)]);
+    assert!(c.pool().is_empty());
+    assert_eq!(c.bounce_stats(), (0, 0));
+    c.record_bounces(2, 10);
+    c.record_bounces(1, 5);
+    assert_eq!(c.bounce_stats(), (3, 15));
 }

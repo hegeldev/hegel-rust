@@ -79,6 +79,11 @@ impl NativeDataSource {
         handle.lock().divergence()
     }
 
+    /// Which stored timelines the whole run stayed on.
+    pub fn take_live(handle: &NativeTestCaseHandle) -> Vec<bool> {
+        handle.lock().live_timelines()
+    }
+
     /// The test case's outcome, reconstructed from its family's write-once
     /// conclusion. Whoever concluded the family first — a draw that overran
     /// or hit a terminal assume, or the body via `mark_complete` — set the

@@ -37,6 +37,7 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::HashSet;
@@ -188,9 +189,76 @@ pub(crate) struct Counterexample {
     /// on the shrink probe so a re-shrink's rebuilt probe keeps spending
     /// from the same budget.
     pub(crate) gauntlet_spend: GauntletSpend,
+    /// How often the incumbent's own measurement replays left it — did not
+    /// stay live on the first timeline — out of how many (decision 75): the
+    /// rate a shrink candidate's bounce budget is derived from.
+    bounces: u64,
+    bounce_runs: u64,
+}
+
+/// The order of two timelines within a counterexample (decision 74): the
+/// database's shortlex over serialized values — fewer flattened choices
+/// first, then the bytes. Timelines that cannot be serialized compare equal.
+pub(crate) fn timeline_order(a: &[ChoiceValue], b: &[ChoiceValue]) -> Ordering {
+    match crate::native::core::flattened_values_len(a)
+        .cmp(&crate::native::core::flattened_values_len(b))
+    {
+        Ordering::Equal => {}
+        ord => return ord,
+    }
+    match (serialize_choices(a), serialize_choices(b)) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        _ => Ordering::Equal,
+    }
+}
+
+/// The order of two counterexamples (decision 74): fewer timelines first,
+/// then the timelines lexicographically under [`timeline_order`].
+pub(crate) fn set_order(a: &[Vec<ChoiceValue>], b: &[Vec<ChoiceValue>]) -> Ordering {
+    match a.len().cmp(&b.len()) {
+        Ordering::Equal => {}
+        ord => return ord,
+    }
+    for (x, y) in a.iter().zip(b) {
+        match timeline_order(x, y) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+    }
+    Ordering::Equal
 }
 
 impl Counterexample {
+    /// The confirmation anchor, once confirmed.
+    pub(crate) fn anchor(&self) -> Option<f64> {
+        match self.standing {
+            Standing::Confirmed { anchor, .. } => Some(anchor),
+            _ => None,
+        }
+    }
+
+    /// Fold an incumbent measurement batch's bounces — replays that did not
+    /// stay live on the incumbent — into the origin's record.
+    pub(crate) fn record_bounces(&mut self, bounces: u64, runs: u64) {
+        self.bounces += bounces;
+        self.bounce_runs += runs;
+    }
+
+    /// The incumbent's (bounces, runs) so far.
+    pub(crate) fn bounce_stats(&self) -> (u64, u64) {
+        (self.bounces, self.bounce_runs)
+    }
+
+    /// Install a structurally shrunk counterexample (decision 74's
+    /// multiverse passes): `set[0]` becomes the incumbent — as `nodes` when
+    /// it changed, which must be a run that stayed live on it — and the
+    /// rest becomes the pool, in order.
+    pub(crate) fn install_set(&mut self, set: &[Vec<ChoiceValue>], nodes: Option<Vec<ChoiceNode>>) {
+        if let Some(nodes) = nodes {
+            self.incumbent = Some(nodes);
+        }
+        self.pool = set.iter().skip(1).cloned().collect();
+    }
     /// The best failing execution held, if any.
     pub(crate) fn incumbent(&self) -> Option<&[ChoiceNode]> {
         self.incumbent.as_deref()

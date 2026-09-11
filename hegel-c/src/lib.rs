@@ -60,6 +60,15 @@ pub mod __bench {
         ))
     }
 
+    /// The stored timelines of a blob: one for a deterministic blob, the
+    /// counterexample's pool for a nondeterministic one.
+    pub fn blob_timelines(blob: &str) -> Option<Vec<Vec<ChoiceValue>>> {
+        Some(match crate::native::blob::decode_blob(blob)? {
+            crate::native::blob::DecodedBlob::Choices(choices) => alloc::vec![choices],
+            crate::native::blob::DecodedBlob::Nd(state) => state.timelines,
+        })
+    }
+
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
         crate::native::core::state::biased_integer_sample(
             ic,

@@ -286,6 +286,26 @@ successive halving over the incumbent, its pool, and prefix-mutant fills (up to
 `BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
 it never runs; each race logs one Debug line at entry; there is no public setting.
 
+### Shrinking the counterexample as a set (decision 75)
+
+The gauntlet's reruns replay the candidate *set* — the candidate's realized values in
+front of the origin's pool — and only reruns that stayed live on the candidate are its
+evidence; a rerun that left it (a bounce: the test took another stored branch, or
+diverged) is no evidence either way and is charged against a per-candidate bounce budget
+derived from the incumbent's own bounce rate (`bounce_budget`; zero when the incumbent
+never bounced). Past the budget the candidate is abandoned without a verdict and pass
+repetition may retry it. After the per-timeline shrink, `nd_multiverse_shrink` shrinks
+the set under `set_order` (fewer timelines, then `timeline_order` lexicographically):
+delete a component, swap adjacent components toward sorted order (the order is state —
+it decides which timeline serves at a disagreement — and sorted is the fixpoint), and
+replace a component with a positional splice of another's prefix onto its tail when the
+splice is smaller. Each candidate set faces `nd_evaluate_set` — the gauntlet driven to
+a bound with every replay as evidence, since the set is the estimand — and a set whose
+first timeline changed is installed only from a failing run that stayed live on it. The
+bounds are the shrink deadline and `MULTIVERSE_ROUNDS`. Not built: a shared-prefix edit
+across components (capture at confirmation plus the delete pass covers most of it), and
+nodes for pool members (a promoted component's nodes come from its witness run).
+
 ### Targeting under ND handling
 
 Targeting runs under ND handling as a measured race (`optimise_targets_nd`,
