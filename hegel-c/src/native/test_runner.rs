@@ -460,16 +460,11 @@ impl<'a> Engine<'a> {
                             trusted.trust(stored.clone(), reuse_evidence);
                             trusted.mark_first_checked();
                         }
-                        let incumbent = &stored[0];
                         if i < primary_count {
                             found_interesting_in_primary = true;
-                            if run.nodes.len() != incumbent.len()
-                                || run
-                                    .nodes
-                                    .iter()
-                                    .zip(incumbent)
-                                    .any(|(node, stored)| node.data.value_ref() != *stored)
-                            {
+                            let realized: Vec<ChoiceValue> =
+                                run.nodes.iter().map(|n| n.value()).collect();
+                            if !stored.contains(&realized) {
                                 replay_aligned = false;
                             }
                         } else {

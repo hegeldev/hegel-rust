@@ -8412,3 +8412,66 @@ fn the_warn_notice_is_suppressed_in_antithesis() {
         "Antithesis is deterministic, so the notice does not apply:\n{text}"
     );
 }
+
+#[test]
+fn a_reuse_replay_that_realizes_any_stored_timeline_is_aligned_and_skips_the_shrink() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    let state = crate::native::blob::NdReproState {
+        timelines: vec![branch_s(), branch_t()],
+        entropy: 0,
+        extension: 4,
+    };
+    db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let executions = AtomicUsize::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path))
+            .phases([Phase::Reuse, Phase::Shrink])
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            let n = executions.fetch_add(1, Ordering::SeqCst);
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if n % 2 == 0 {
+                match (rint(ds, 0, 100), rint(ds, 0, 100)) {
+                    (Ok(7), Ok(9)) => boom("branch"),
+                    (Ok(_), Ok(_)) => TestCaseResult::Valid,
+                    _ => TestCaseResult::Overrun,
+                }
+            } else {
+                match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
+                    (Ok(true), Ok(true), Ok(42)) => boom("branch"),
+                    (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
+                    _ => TestCaseResult::Overrun,
+                }
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l == "Skipping shrink: reused aligned database replay"),
+        "the first reuse replay took the second stored branch; realizing a stored \
+         timeline other than the incumbent is still aligned"
+    );
+    assert!(
+        executions.load(Ordering::SeqCst) < 60,
+        "no confirmation batch and no shrink: {} executions",
+        executions.load(Ordering::SeqCst)
+    );
+}
