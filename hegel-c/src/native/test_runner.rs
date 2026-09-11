@@ -160,10 +160,11 @@ fn bounce_budget(bounces: u64, runs: u64) -> u64 {
     libm::ceil(nd::GAUNTLET_CAP as f64 * rate / (1.0 - rate)) as u64
 }
 
-/// Structural shrink rounds per origin (decision 75): every accepted move
-/// is strictly smaller under [`set_order`], so the passes terminate on
-/// their own; the cap bounds the replays a long descent may spend.
-const MULTIVERSE_ROUNDS: usize = 4;
+/// Replays in one multiverse census (decision 75): enough that a branch the
+/// failure takes one time in five is seen with probability above 0.9998,
+/// so a timeline the census never saw serve describes a branch too rare to
+/// cost the counterexample anything measurable when dropped.
+const CENSUS_RUNS: u64 = 40;
 
 /// Outcome of one history backtrack (seam plan step 4, gate G25).
 enum Backtrack {
@@ -1651,17 +1652,41 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// One census of `set` (decision 75): [`CENSUS_RUNS`] replays of the
+    /// whole counterexample, recording which timeline each failing run
+    /// followed — the first one still live at its end. A timeline that
+    /// never served a failing run describes no branch the failure takes at
+    /// a rate the census could see, and deleting it changes nothing about
+    /// how the counterexample reproduces.
+    async fn nd_census(
+        &mut self,
+        origin: &str,
+        set: &[Vec<ChoiceValue>],
+    ) -> Result<Vec<bool>, RunError> {
+        let mut served = alloc::vec![false; set.len()];
+        for _ in 0..CENSUS_RUNS {
+            let replay = self.nd_replay_set(set, Some(origin)).await?;
+            if replay.failed {
+                if let Some(k) = replay.run.live.iter().position(|live| *live) {
+                    served[k] = true;
+                }
+            }
+        }
+        Ok(served)
+    }
+
     /// The multiverse passes (decision 75): shrink the counterexample as a
-    /// set, under [`set_order`]. Each round proposes deleting a component
-    /// (a run that still reproduces without it described the failure with
-    /// one branch fewer), swapping adjacent components toward sorted order
-    /// (which timeline serves first at a disagreement is state, and sorted
-    /// is the fixpoint), and replacing a component with a positional
-    /// splice of another's prefix onto it when the splice is smaller. Every
-    /// candidate is a whole set judged by [`Self::nd_evaluate_set`]; a
+    /// set, under [`set_order`]. Each round first takes a census
+    /// ([`Self::nd_census`]) and drops every pool timeline that served no
+    /// failing run — the one deletion that costs no reproduction — then
+    /// proposes swapping adjacent components toward sorted order (which
+    /// timeline serves first at a disagreement is state, and sorted is the
+    /// fixpoint) and replacing a component with a positional splice of
+    /// another's prefix onto it when the splice is smaller; those
+    /// candidates are whole sets judged by [`Self::nd_evaluate_set`], and a
     /// changed first component is installed from the witness that stayed
-    /// on it. Stops at the deadline, after a round with no accept, or
-    /// after [`MULTIVERSE_ROUNDS`] rounds.
+    /// on it. Every accept is strictly smaller under the order, so the
+    /// rounds end on their own; the deadline bounds them too.
     async fn nd_multiverse_shrink(
         &mut self,
         origin: &str,
@@ -1673,18 +1698,31 @@ impl<'a> Engine<'a> {
         let expired = |d: Option<crate::sys::Instant>| {
             d.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
         };
-        for _ in 0..MULTIVERSE_ROUNDS {
-            let mut changed = false;
-            let mut set = self.origins.entry(origin).timelines();
-            if set.len() < 2 {
+        loop {
+            let set = self.origins.entry(origin).timelines();
+            if set.len() < 2 || expired(deadline) {
                 return Ok(());
             }
-            let mut candidates: Vec<(&'static str, Vec<Vec<ChoiceValue>>)> = Vec::new();
-            for k in (0..set.len()).rev() {
-                let mut candidate = set.clone();
-                candidate.remove(k);
-                candidates.push(("delete", candidate));
+            let served = self.nd_census(origin, &set).await?;
+            let kept: Vec<Vec<ChoiceValue>> = set
+                .iter()
+                .enumerate()
+                .filter(|(k, _)| *k == 0 || served[*k])
+                .map(|(_, timeline)| timeline.clone())
+                .collect();
+            if verbosity == Verbosity::Debug {
+                output.line(&format!(
+                    "nd multiverse census: origin={origin} kept {} of {} timelines",
+                    kept.len(),
+                    set.len()
+                ));
             }
+            if kept.len() < set.len() {
+                self.origins.entry(origin).install_set(&kept, None);
+                self.persist_incumbent(origin)?;
+                continue;
+            }
+            let mut candidates: Vec<(&'static str, Vec<Vec<ChoiceValue>>)> = Vec::new();
             for k in 1..set.len() {
                 if timeline_order(&set[k], &set[k - 1]) == core::cmp::Ordering::Less {
                     let mut candidate = set.clone();
@@ -1712,6 +1750,7 @@ impl<'a> Engine<'a> {
                     candidates.push(("splice", candidate));
                 }
             }
+            let mut changed = false;
             for (pass, candidate) in candidates {
                 if expired(deadline) {
                     return Ok(());
@@ -1740,13 +1779,7 @@ impl<'a> Engine<'a> {
                     None
                 };
                 self.origins.entry(origin).install_set(&candidate, nodes);
-                let incumbent = self
-                    .origins
-                    .incumbent(origin)
-                    .map(<[ChoiceNode]>::to_vec)
-                    .unwrap_or_default();
-                self.record_nd_incumbent(origin, &incumbent)?;
-                set = self.origins.entry(origin).timelines();
+                self.persist_incumbent(origin)?;
                 changed = true;
                 break;
             }
@@ -1754,7 +1787,16 @@ impl<'a> Engine<'a> {
                 return Ok(());
             }
         }
-        Ok(())
+    }
+
+    /// Persist `origin`'s current incumbent and pool.
+    fn persist_incumbent(&mut self, origin: &str) -> Result<(), InternalError> {
+        let incumbent = self
+            .origins
+            .incumbent(origin)
+            .map(<[ChoiceNode]>::to_vec)
+            .unwrap_or_default();
+        self.record_nd_incumbent(origin, &incumbent)
     }
 
     /// Replay-until-failure over stored ND state (decisions 25 and 74): the

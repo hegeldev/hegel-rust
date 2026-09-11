@@ -5762,7 +5762,8 @@ fn the_multiverse_passes_keep_both_branches_and_promote_the_smaller_one() {
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("nd multiverse delete") && l.ends_with("accepted=false"))
+            .any(|l| l == "nd multiverse census: origin=Panic: branch kept 2 of 2 timelines"),
+        "both branches serve failing runs, so the census keeps both: {lines:?}"
     );
     assert!(
         lines
@@ -5778,7 +5779,7 @@ fn the_multiverse_passes_keep_both_branches_and_promote_the_smaller_one() {
 }
 
 #[test]
-fn the_multiverse_passes_stop_after_the_round_cap_and_on_the_deadline() {
+fn the_census_drops_every_timeline_that_never_serves_and_the_deadline_stops_the_passes() {
     with_engine(
         nd_settings(),
         None,
@@ -5819,19 +5820,16 @@ fn the_multiverse_passes_stop_after_the_round_cap_and_on_the_deadline() {
             assert_eq!(
                 ctx.origins.entry("Panic: bug").timelines().len(),
                 7,
-                "an expired deadline stops before the first candidate"
+                "an expired deadline stops before the census"
             );
             ctx.nd_multiverse_shrink("Panic: bug", 0.5, None, Verbosity::Quiet, &output)
                 .await
                 .unwrap();
             assert_eq!(
                 ctx.origins.entry("Panic: bug").timelines().len(),
-                7 - MULTIVERSE_ROUNDS,
-                "one dead timeline goes per round, up to the round cap"
+                1,
+                "the incumbent serves every failing run; the six dead timelines go at once"
             );
-            ctx.origins
-                .entry("Panic: bug")
-                .install_set(&[vec![ChoiceValue::Boolean(true)]], None);
             ctx.nd_multiverse_shrink("Panic: bug", 0.5, None, Verbosity::Quiet, &output)
                 .await
                 .unwrap();
