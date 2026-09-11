@@ -15,6 +15,7 @@ fn witness(origin: &str) -> RunResult {
         origin: Some(String::from(origin)),
         target_observations: HashMap::default(),
         events: Vec::new(),
+        divergence: None,
     }
 }
 

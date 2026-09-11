@@ -1,5 +1,6 @@
 pub(crate) mod choices;
 pub(crate) mod float_index;
+pub(crate) mod replay;
 pub(crate) mod state;
 pub(crate) mod state_machine;
 pub use choices::{
@@ -8,6 +9,7 @@ pub use choices::{
     StringChoice, flattened_len, flattened_values_len, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
+pub use replay::Divergence;
 pub(crate) use state::float_clamp;
 pub use state::{
     GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables,

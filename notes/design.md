@@ -230,13 +230,24 @@ fires solely on constraint drift (decision 32, measured in 007).
 ### Replay-until-failure (`nd_reproduce`)
 
 One primitive serves database reuse, the final replay, and blob replay (decision 25);
-confirmation runs its own bar-driven batch (`nd_evidence_batch`). Replay order: each stored
-timeline first-fit under a per-timeline replay budget, then
-positional splices of random timeline pairs (10, decision 52), then fresh generations where the caller
-allows them. Splices cut whole timelines at top-level positions, so a clone stream — one
-`ChoiceValue::Clone` element — crosses over intact. Executions run through `measure()`, which
-detects nondeterminism and admits origins like any run but moves none of the runner's
-quantitative state (below).
+confirmation runs its own bar-driven batch (`nd_evidence_batch`). Every measurement replay
+runs the whole counterexample as one test case (decision 74, `core/replay.rs`,
+`NativeTestCase::for_counterexample`): the *live set* is the timelines that agree with every
+value drawn so far in every stream; each draw is served from the first live timeline whose
+stored value fits the request, and the live timelines whose value there differs drop out;
+following a stored branch is not a divergence. A *divergence* is the moment no live timeline
+fits — recorded once, as the stream and position, on `RunResult.divergence` — after which
+the pruned timelines continue positionally where they fit (most recently pruned first) and
+the run draws randomly where none does, under the continuation budget of the longest
+timeline. Replay order in `nd_reproduce`: the whole set up to `reuse_replay_budget()` times,
+then positional splices of random timeline pairs (10, decision 52), then fresh generations
+where the caller allows them. Splices cut whole timelines at top-level positions, so a
+clone stream — one `ChoiceValue::Clone` element — crosses over intact. Punning (a misfit
+served as the draw's simplest or unit value, the sequence staying the positional prefix)
+survives only as `Rescue::Pun`, the mode of shrink proposals and probes (`for_choices`,
+`for_probe`), whose misfits are the shrink's own edits and never count as divergences.
+Executions run through `measure()`, which detects nondeterminism and admits origins like
+any run but moves none of the runner's quantitative state (below).
 
 ### Shrinking
 
@@ -434,6 +445,7 @@ root crate's changelog covers only the user-facing behavior.
 | Boost default | Reliability-floor heuristic, no setting (decision 28) |
 | Clone-kind serialization fidelity | Values-only kept (decision 32) |
 | Multiple-testing correction | Sequential per-origin budgets, not Benjamini-Hochberg (decision 72): verdicts act immediately and irreversibly, so there is no p-value batch to rank |
+| Replay semantics over the pool | First-fit per timeline retired (decision 74): the whole pool replays as one test case under the live set, deciding between stored branches only when the test's own choices reveal one; splices are the rescue tier. Reopens the replay conclusions of decisions 22/25/31; the pool as storage stands |
 
 ## Known risks (accepted)
 

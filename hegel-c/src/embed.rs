@@ -73,9 +73,10 @@ pub(crate) async fn run_native_async(
 /// blob reproduced its failure (the property failed) or is stale (it
 /// passed). A deterministic blob replays exactly, and choices that no
 /// longer match the caller's generators surface as a stop-test error from
-/// the draw that overruns; a nondeterministic blob replays its incumbent
-/// timeline with the stored entropy seed and continuation budget, so a
-/// diverging replay completes with fresh draws instead.
+/// the draw that overruns; a nondeterministic blob replays its whole
+/// counterexample as one test case (decision 74) with the stored entropy
+/// seed and continuation budget, so a replay that leaves every stored
+/// timeline completes with fresh draws instead.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
@@ -100,10 +101,16 @@ pub fn data_source_for_blob(
                     state.timelines.len() - 1
                 ));
             }
-            let budget =
-                crate::native::core::flattened_values_len(incumbent) + state.extension as usize;
+            let budget = state
+                .timelines
+                .iter()
+                .map(|t| crate::native::core::flattened_values_len(t))
+                .max()
+                .unwrap_or(0)
+                + state.extension as usize;
             let rng = crate::native::rng::EngineRng::seeded(state.entropy);
-            crate::native::core::NativeTestCase::for_probe(incumbent, rng, budget).ok()?
+            crate::native::core::NativeTestCase::for_counterexample(&state.timelines, rng, budget)
+                .ok()?
         }
     };
     ntc.family()

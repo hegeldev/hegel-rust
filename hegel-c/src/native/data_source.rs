@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseResult};
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
-    NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
+    ChoiceNode, Divergence, EngineError, InterestingOrigin, ManyState, NativeStateMachine,
+    NativeTestCase, NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
 };
 use crate::native::draws;
 
@@ -72,6 +72,11 @@ impl NativeDataSource {
 
     pub fn take_events(handle: &NativeTestCaseHandle) -> Vec<(String, Option<f64>)> {
         handle.lock().family().events.lock().clone()
+    }
+
+    /// Where the replay first left its stored timelines, if it did.
+    pub fn take_divergence(handle: &NativeTestCaseHandle) -> Option<Divergence> {
+        handle.lock().divergence()
     }
 
     /// The test case's outcome, reconstructed from its family's write-once

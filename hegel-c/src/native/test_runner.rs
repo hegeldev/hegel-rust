@@ -32,8 +32,8 @@ use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
 use crate::control::InternalError;
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
-    Status, sort_key,
+    BUFFER_SIZE, ChoiceNode, ChoiceValue, Divergence, MAX_SHRINKING_SECONDS, NativeTestCase, Span,
+    Spans, Status, sort_key,
 };
 use crate::native::counterexample::{Counterexample, Counterexamples, pooled_timelines};
 use crate::native::data_source::NativeDataSource;
@@ -67,6 +67,11 @@ pub struct RunResult {
     /// in recording order. Empty for tests that record no events and on a
     /// result served from the execution cache.
     pub events: Vec<(String, Option<f64>)>,
+    /// Where the replay first left its stored timelines (decision 74):
+    /// `None` for a run every draw of which a stored timeline served — a
+    /// run that stayed on its counterexample — and for fresh generation
+    /// and cache hits.
+    pub divergence: Option<Divergence>,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -253,7 +258,7 @@ pub(crate) async fn reproduce_blob(
                 .nd_reproduce(
                     None,
                     &state.timelines,
-                    nd::reuse_replay_budget().div_ceil(state.timelines.len() as u64),
+                    nd::reuse_replay_budget(),
                     nd::REPRODUCE_SPLICES,
                     0,
                 )
@@ -399,7 +404,7 @@ impl<'a> Engine<'a> {
                             .nd_reproduce(
                                 None,
                                 &stored,
-                                nd::reuse_replay_budget().div_ceil(stored.len() as u64),
+                                nd::reuse_replay_budget(),
                                 nd::REPRODUCE_SPLICES,
                                 0,
                             )
@@ -1518,9 +1523,35 @@ impl<'a> Engine<'a> {
         timeline: &[ChoiceValue],
         origin: Option<&str>,
     ) -> Result<NdReplayOnce, RunError> {
-        let budget = nd::continuation_budget(crate::native::core::flattened_values_len(timeline));
-        let ntc = NativeTestCase::for_probe(timeline, self.rng.spawn(), budget)?;
+        self.nd_replay_set(core::slice::from_ref(&timeline.to_vec()), origin)
+            .await
+    }
+
+    /// One measurement replay of a whole counterexample — `timelines` in
+    /// order, as one test case under the live-set semantics (decision 74)
+    /// — with the standard continuation budget for its longest timeline.
+    async fn nd_replay_set(
+        &mut self,
+        timelines: &[Vec<ChoiceValue>],
+        origin: Option<&str>,
+    ) -> Result<NdReplayOnce, RunError> {
+        let budget = nd::continuation_budget(
+            timelines
+                .iter()
+                .map(|t| crate::native::core::flattened_values_len(t))
+                .max()
+                .unwrap_or(0),
+        );
+        let ntc = NativeTestCase::for_counterexample(timelines, self.rng.spawn(), budget)?;
         let (run, mismatch) = self.measure(ntc).await?;
+        if let Some(divergence) = &run.divergence {
+            if self.settings.verbosity == Verbosity::Debug {
+                self.settings.output.line(&format!(
+                    "replay left its counterexample at position {} of stream {:?}",
+                    divergence.position, divergence.stream
+                ));
+            }
+        }
         if let Some(err) = mismatch {
             return Err(err);
         }
@@ -1534,8 +1565,8 @@ impl<'a> Engine<'a> {
         })
     }
 
-    /// Replay-until-failure over stored ND state (decision 25): each
-    /// timeline first-fit under a per-timeline replay budget, then
+    /// Replay-until-failure over stored ND state (decisions 25 and 74): the
+    /// whole counterexample as one test case, up to `attempts` times, then
     /// positional splices of random timeline pairs, then up to `fresh`
     /// fresh generations. Returns the first reproducing run plus the
     /// evidence accumulated across every attempt, for the caller's hygiene
@@ -1545,14 +1576,14 @@ impl<'a> Engine<'a> {
         &mut self,
         origin: Option<&str>,
         timelines: &[Vec<ChoiceValue>],
-        per_timeline_budget: u64,
+        attempts: u64,
         splices: u64,
         fresh: u64,
     ) -> Result<(Option<RunResult>, nd::Evidence), RunError> {
         let mut evidence = nd::Evidence::default();
-        for timeline in timelines {
-            for _ in 0..per_timeline_budget {
-                let replay = self.nd_replay_once(timeline, origin).await?;
+        if !timelines.is_empty() {
+            for _ in 0..attempts {
+                let replay = self.nd_replay_set(timelines, origin).await?;
                 evidence.record(replay.failed);
                 if replay.failed {
                     return Ok((Some(replay.run), evidence));
@@ -1864,7 +1895,7 @@ impl<'a> Engine<'a> {
                 .nd_reproduce(
                     Some(&origin),
                     &timelines,
-                    nd::reuse_replay_budget().div_ceil(timelines.len() as u64),
+                    nd::reuse_replay_budget(),
                     nd::REPRODUCE_SPLICES,
                     nd::FINAL_REPLAY_FRESH,
                 )
@@ -2975,6 +3006,7 @@ impl<'a> Engine<'a> {
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let events = NativeDataSource::take_events(&handle);
+        let divergence = NativeDataSource::take_divergence(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
@@ -2991,6 +3023,7 @@ impl<'a> Engine<'a> {
             origin,
             target_observations,
             events,
+            divergence,
         })
     }
 
@@ -3035,6 +3068,7 @@ impl<'a> Engine<'a> {
                     origin: hit.origin,
                     target_observations: HashMap::default(),
                     events: Vec::new(),
+                    divergence: None,
                 });
             }
         }

@@ -2161,6 +2161,7 @@ fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
         origin: Some(origin.to_string()),
         target_observations: crate::native::HashMap::default(),
         events: Vec::new(),
+        divergence: None,
     }
 }
 
@@ -2174,6 +2175,7 @@ fn valid_at(nodes: Vec<ChoiceNode>) -> RunResult {
         origin: None,
         target_observations: crate::native::HashMap::default(),
         events: Vec::new(),
+        divergence: None,
     }
 }
 
@@ -5103,6 +5105,7 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
                 origin: None,
                 target_observations: crate::native::HashMap::default(),
                 events: Vec::new(),
+                divergence: None,
             };
             ctx.record_run(&valid, Duration::from_secs(1), true)
                 .unwrap();
@@ -5133,7 +5136,93 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
 }
 
 #[test]
-fn nd_reproduce_spends_the_per_timeline_budget_on_diverged_clone_replays() {
+fn nd_reproduce_replays_the_counterexample_as_one_test_case_whichever_branch_the_test_takes() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let executions = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&executions);
+    with_engine(
+        nd_settings(),
+        None,
+        move |ds| {
+            if rbool(ds).is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if counter.fetch_add(1, Ordering::SeqCst) % 2 == 1 {
+                match rint(ds, 0, 100) {
+                    Ok(7) => boom("branch"),
+                    Ok(_) => TestCaseResult::Valid,
+                    Err(()) => TestCaseResult::Overrun,
+                }
+            } else {
+                match rbool(ds) {
+                    Ok(true) => boom("branch"),
+                    Ok(false) => TestCaseResult::Valid,
+                    Err(()) => TestCaseResult::Overrun,
+                }
+            }
+        },
+        async |ctx| {
+            let stored = vec![
+                vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+                vec![
+                    ChoiceValue::Boolean(true),
+                    ChoiceValue::Integer(BigInt::from(7)),
+                ],
+            ];
+            for _ in 0..2 {
+                let (run, evidence) = ctx
+                    .nd_reproduce(Some("Panic: branch"), &stored, 1, 0, 0)
+                    .await
+                    .unwrap();
+                let run = run.unwrap();
+                assert_eq!(run.origin.as_deref(), Some("Panic: branch"));
+                assert_eq!(
+                    evidence.runs(),
+                    1,
+                    "one attempt reproduces whichever branch the test took (decision 74)"
+                );
+                assert_eq!(run.divergence, None, "a served branch is not a divergence");
+            }
+        },
+    );
+}
+
+#[test]
+fn a_replay_that_leaves_its_counterexample_is_named_at_debug_verbosity() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    with_engine(
+        nd_settings()
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        None,
+        |ds| match rint(ds, 0, 100) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx| {
+            let stored = vec![vec![ChoiceValue::Boolean(true)]];
+            let (run, _) = ctx.nd_reproduce(None, &stored, 1, 0, 0).await.unwrap();
+            assert!(run.is_none());
+        },
+    );
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l == "replay left its counterexample at position 0 of stream []"),
+        "{:?}",
+        lines.lock().unwrap()
+    );
+}
+
+#[test]
+fn nd_reproduce_spends_its_attempts_on_diverged_clone_replays() {
     use crate::native::core::CloneRecord;
     use alloc::sync::Arc;
     with_engine(
@@ -5202,8 +5291,8 @@ fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
             let run = run.unwrap();
             assert_eq!(run.origin.as_deref(), Some("Panic: splice"));
             assert!(
-                evidence.runs() > 4,
-                "both timelines face the first-fit tier before the splices"
+                evidence.runs() > 2,
+                "the counterexample faces its attempts before the splices"
             );
         },
     );

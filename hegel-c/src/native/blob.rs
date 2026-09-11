@@ -117,14 +117,15 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
 /// The replay state a nondeterministic failure persists (blob prefix 2/3,
 /// or a version-2 database entry): every stored timeline, an entropy seed
 /// for a deterministic single replay, and the continuation budget beyond
-/// the incumbent's length.
+/// the stored timelines' length.
 pub(crate) struct NdReproState {
     /// Stored failing timelines, incumbent first.
     pub(crate) timelines: Vec<Vec<ChoiceValue>>,
     /// Seed for the fresh draws a single blob replay may need past a
     /// divergence.
     pub(crate) entropy: u64,
-    /// Fresh-draw budget beyond the incumbent's flattened length.
+    /// Fresh-draw budget beyond the longest stored timeline's flattened
+    /// length (derived from the incumbent's at encoding).
     pub(crate) extension: u32,
 }
 

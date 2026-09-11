@@ -22,6 +22,7 @@ use super::choices::{
     StringChoice,
 };
 use super::float_index::index_to_float;
+use super::replay::{Divergence, Replay, Resolved};
 use super::{
     BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
     DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
@@ -1458,16 +1459,17 @@ impl FamilyCore {
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
-/// During replay/shrinking, choices are drawn from a prefix.
+/// During replay/shrinking, choices are drawn from a [`Replay`]: the
+/// stored timelines this stream can serve from, and the family's live set.
 ///
 /// One `NativeTestCase` is one *stream* of a test-case family: the root
 /// stream, or a cloned stream created by [`Self::clone_stream`]. Each stream
-/// has its own prefix, RNG, nodes, and span structure, so streams driven
-/// from different threads generate independently; the conclusion, draw
-/// budget, and stateful bookkeeping are shared through [`FamilyCore`].
+/// has its own replay view, RNG, nodes, and span structure, so streams
+/// driven from different threads generate independently; the conclusion,
+/// draw budget, live set, and stateful bookkeeping are shared through
+/// [`FamilyCore`] and the replay.
 pub struct NativeTestCase {
-    prefix: Vec<ChoiceValue>,
-    prefix_nodes: Option<Vec<ChoiceNode>>,
+    replay: Replay,
     rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
@@ -1560,8 +1562,7 @@ impl NativeTestCase {
             usize::MAX
         };
         Self::new_stream(
-            choices.to_vec(),
-            prefix_nodes.map(|n| n.to_vec()),
+            Replay::pun(choices.to_vec(), prefix_nodes.map(|n| n.to_vec())),
             None,
             trailing,
             max_size,
@@ -1572,11 +1573,36 @@ impl NativeTestCase {
         )
     }
 
+    /// Replay a whole counterexample — its timelines in order — as one
+    /// test case under [`Rescue::Continue`] (decision 74): every draw is
+    /// served from the first live timeline that fits it, and a run that
+    /// leaves every timeline continues with random draws up to `max_size`
+    /// choices in total. `max_size` is floored to the longest timeline's
+    /// length.
+    pub fn for_counterexample(
+        timelines: &[Vec<ChoiceValue>],
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        let replay = Replay::counterexample(timelines.to_vec());
+        let max_size = max_size.max(replay.longest());
+        Self::new_stream(
+            replay,
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
     fn new_stream(
-        prefix: Vec<ChoiceValue>,
-        prefix_nodes: Option<Vec<ChoiceNode>>,
+        replay: Replay,
         rng: Option<EngineRng>,
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
@@ -1586,8 +1612,7 @@ impl NativeTestCase {
         clone_id: Vec<usize>,
     ) -> Self {
         NativeTestCase {
-            prefix,
-            prefix_nodes,
+            replay,
             rng,
             max_size,
             nodes: Vec::new(),
@@ -1672,6 +1697,18 @@ impl NativeTestCase {
         &self.family
     }
 
+    /// Where this test case's replay first left its stored timelines, if
+    /// it did (decision 74): the family's first divergence.
+    pub fn divergence(&self) -> Option<Divergence> {
+        self.replay.divergence()
+    }
+
+    /// Which of the replayed counterexample's timelines are still live.
+    #[cfg(test)]
+    pub(crate) fn live_timelines(&self) -> Vec<bool> {
+        self.replay.live()
+    }
+
     /// Stamp this test case for capture.
     pub(crate) fn set_should_capture(&mut self) {
         self.should_capture = true;
@@ -1703,13 +1740,7 @@ impl NativeTestCase {
             return Err(EngineError::InvalidTestCase);
         }
         let idx = self.nodes.len();
-        let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
-            Some(ChoiceValue::Clone(record)) => (
-                record.owned_values(),
-                record.realized_nodes().map(<[ChoiceNode]>::to_vec),
-            ),
-            _ => (Vec::new(), None),
-        };
+        let child_replay = self.replay.clone_child(&self.clone_id, idx);
         let child_rng = self.rng.as_mut().map(EngineRng::spawn);
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
@@ -1718,15 +1749,14 @@ impl NativeTestCase {
         let child_max_size = if child_rng.is_some() || child_template.is_some() {
             usize::MAX
         } else {
-            child_prefix.len()
+            child_replay.longest()
         };
         let mut child_id = self.clone_id.clone();
         child_id.push(self.clone_counter);
         self.clone_counter += 1;
 
         let child = Self::new_stream(
-            child_prefix,
-            child_prefix_nodes,
+            child_replay,
             child_rng,
             child_template,
             child_max_size,
@@ -2319,35 +2349,36 @@ impl NativeTestCase {
         Ok(())
     }
 
-    /// Resolve a typed choice value from forced, prefix, or random.
+    /// Resolve a typed choice value from the replay, the trailing template,
+    /// or random.
     ///
-    /// `from_prefix` both validates a replayed prefix value against the
-    /// draw's constraint and extracts the typed payload, so a successful
-    /// replay hands back a value proven to fit the draw. A prefix value
-    /// that doesn't fit puns exactly as before: to the draw's `simplest()`
-    /// when the stale value was its original kind's simplest, and to
-    /// `unit()` otherwise.
+    /// `from_prefix` both validates a stored value against the draw's
+    /// constraint and extracts the typed payload, so a successful replay
+    /// hands back a value proven to fit the draw. Under [`Rescue::Pun`] a
+    /// stored value that doesn't fit puns exactly as before: to the draw's
+    /// `simplest()` when the stale value was its original kind's simplest,
+    /// and to `unit()` otherwise.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
         unit: impl FnOnce() -> Result<V, InternalError>,
-        from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
+        from_prefix: impl Fn(&ChoiceValue) -> Option<V>,
         random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
 
-        if idx < self.prefix.len() {
-            let prefix_value = &self.prefix[idx];
-            if let Some(v) = from_prefix(prefix_value) {
-                return Ok((v, false));
+        match self.replay.resolve(&self.clone_id, idx, from_prefix) {
+            Resolved::Served(v) => return Ok((v, false)),
+            Resolved::Misfit(stored) => {
+                let is_simplest = match self.replay.proposal_node(idx) {
+                    Some(pn) => *stored == pn.data.simplest_value()?,
+                    None => false,
+                };
+                return Ok((if is_simplest { simplest()? } else { unit()? }, false));
             }
-            let is_simplest = match self.prefix_nodes.as_ref().and_then(|pn| pn.get(idx)) {
-                Some(pn) => *prefix_value == pn.data.simplest_value()?,
-                None => false,
-            };
-            return Ok((if is_simplest { simplest()? } else { unit()? }, false));
+            Resolved::Exhausted => {}
         }
 
         if let Some(template) = self.trailing_template.as_mut() {
