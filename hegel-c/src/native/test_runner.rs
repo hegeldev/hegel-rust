@@ -2060,6 +2060,7 @@ impl<'a> Engine<'a> {
                 self.origins.entry(&origin).timelines().len()
             ));
         }
+        let anchored_pool = self.origins.get(&origin).map_or(0, |c| c.pool().len());
         let (shrunk, timed_out) = {
             let probe = EngineShrinkProbe {
                 engine: &mut *self,
@@ -2073,6 +2074,7 @@ impl<'a> Engine<'a> {
                 raised: crate::native::HashSet::default(),
                 pending_accept: None,
                 incumbent_bounces,
+                anchored_pool,
             };
             let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
             shrinker.deadline = shrink_deadline;
@@ -3459,6 +3461,11 @@ struct EngineShrinkProbe<'e, 'a> {
     /// derived (decision 75). Starts from the confirmation batch and
     /// follows each adopted candidate's ledger.
     incumbent_bounces: (u64, u64),
+    /// The pool's size when the anchor was last measured on the whole set
+    /// (decision 75): a pool that has grown since — a capture during a
+    /// rerun — makes the set reproduce more than the anchor says, and the
+    /// anchor is re-measured before the next candidate is judged.
+    anchored_pool: usize,
 }
 
 /// See [`EngineShrinkProbe::pending_accept`].
@@ -3546,6 +3553,26 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             let matched = self.matches(&run);
             if !self.gauntlet {
                 return Ok((matched, run.nodes, Spans::from(run.spans)));
+            }
+            let pool_len = self
+                .engine
+                .origins
+                .get(&self.target_origin)
+                .map_or(0, |c| c.pool().len());
+            if pool_len > self.anchored_pool {
+                self.anchored_pool = pool_len;
+                let set = self.engine.origins.entry(&self.target_origin).timelines();
+                let measured = self
+                    .engine
+                    .nd_measure_set(&self.target_origin, &set)
+                    .await?;
+                if measured.lower_bound() > self.anchor {
+                    self.anchor = measured.lower_bound();
+                    self.engine
+                        .origins
+                        .entry(&self.target_origin)
+                        .raise_anchor(self.anchor);
+                }
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let key = crate::control::hegel_internal_unwrap!(
