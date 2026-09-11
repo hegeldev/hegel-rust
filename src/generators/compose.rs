@@ -31,8 +31,12 @@ impl<T, F> Generator<T> for ComposedGenerator<T, F>
 where
     F: Fn(&TestCase) -> T + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(self.label);
+        tc.start_span(self.label());
         let result = (self.f)(tc);
         tc.stop_span(false);
         result
@@ -47,25 +51,6 @@ where
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
     }
-}
-
-/// Compile-time FNV-1a hash of a byte slice, producing a u64 label.
-#[doc(hidden)]
-// nocov start
-pub const fn fnv1a_hash(bytes: &[u8]) -> u64 {
-    // nocov end
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    // nocov start
-    let mut hash = FNV_OFFSET;
-    let mut i = 0;
-    while i < bytes.len() {
-        hash ^= bytes[i] as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        i += 1;
-    }
-    hash
-    // nocov end
 }
 
 /// Create a generator from imperative code that draws from other generators.
@@ -98,7 +83,7 @@ macro_rules! compose {
         $crate::compose!(|$tc| { $($body)* })
     };
     (|$tc:ident| { $($body:tt)* }) => {{
-        const LABEL: u64 = $crate::generators::fnv1a_hash(stringify!($($body)*).as_bytes());
+        const LABEL: u64 = $crate::generators::label_from_name(stringify!($($body)*));
         $crate::generators::ComposedGenerator::new(LABEL, move |$tc: &$crate::TestCase| { $($body)* })
     }};
 }

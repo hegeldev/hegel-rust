@@ -1,15 +1,16 @@
-use super::{Generator, PrintableGenerator, TestCase};
+use super::{Generator, PrintableGenerator, TestCase, combine_labels, label_from_name};
 use crate::control::{AttemptMispriced, LeafBudgetExceeded, raise_control};
 use crate::ffi::RecursionHandle;
 use crate::ffi::sys::hegel_result_t;
 use crate::pretty::PrettyPrinter;
-use crate::test_case::{labels, raise_for_rc};
+use crate::test_case::raise_for_rc;
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
 const DEFAULT_MAX_DEPTH: usize = 32;
 const DEFAULT_MAX_LEAVES: usize = 100;
+const RECURSIVE_LABEL: u64 = label_from_name("hegel.recursive");
 
 /// The leaf generator and branch function of a [`recursive()`] generator,
 /// type-erased so that [`SubtreeGenerator`] (which appears in the branch
@@ -102,6 +103,10 @@ pub struct SubtreeGenerator<T> {
     core: Arc<dyn SubtreeDraw<T>>,
     recursion: Arc<RecursionHandle>,
     depth: u64,
+    /// The label of the whole recursive generator, shared by every
+    /// sub-value at every depth: that is what lets the shrinker replace a
+    /// tree with one of its own subtrees.
+    label: u64,
 }
 
 impl<T> Clone for SubtreeGenerator<T> {
@@ -110,6 +115,7 @@ impl<T> Clone for SubtreeGenerator<T> {
             core: Arc::clone(&self.core),
             recursion: Arc::clone(&self.recursion),
             depth: self.depth,
+            label: self.label,
         }
     }
 }
@@ -120,13 +126,14 @@ impl<T> SubtreeGenerator<T> {
             core: Arc::clone(&self.core),
             recursion: Arc::clone(&self.recursion),
             depth: self.depth + 1,
+            label: self.label,
         }
     }
 
     /// The one leaf-or-branch body both draw paths run; the silent path
     /// passes the no-op printer.
     fn draw_subtree(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        tc.start_span(labels::RECURSIVE);
+        tc.start_span(self.label);
         let branch = match tc.with_ctc(|ctc| ctc.recursion_branch(&self.recursion, self.depth)) {
             Ok(branch) => branch,
             Err(rc) => raise_for_rc(rc),
@@ -153,6 +160,10 @@ impl<T> SubtreeGenerator<T> {
 }
 
 impl<T> Generator<T> for SubtreeGenerator<T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.draw_subtree(tc, &mut PrettyPrinter::noop())
     }
@@ -208,6 +219,7 @@ impl<T, G, F, R> RecursiveGenerator<T, G, F, R> {
     fn draw_recursive(
         &self,
         tc: &TestCase,
+        label: u64,
         core: Arc<dyn SubtreeDraw<T>>,
         printer: &mut PrettyPrinter,
     ) -> T {
@@ -223,6 +235,7 @@ impl<T, G, F, R> RecursiveGenerator<T, G, F, R> {
                 core: Arc::clone(&core),
                 recursion: Arc::clone(&recursion),
                 depth: 0,
+                label,
             };
             let mut speculation = printer.speculate();
             match catch_unwind(AssertUnwindSafe(|| {
@@ -256,13 +269,17 @@ where
     F: Fn(SubtreeGenerator<T>) -> R + Send + Sync + 'static,
     R: Generator<T> + 'static,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[RECURSIVE_LABEL, self.leaf.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         let core: Arc<dyn SubtreeDraw<T>> = Arc::new(SilentCore {
             leaf: Arc::clone(&self.leaf),
             branch: Arc::clone(&self.branch),
             _phantom: PhantomData,
         });
-        self.draw_recursive(tc, core, &mut PrettyPrinter::noop())
+        self.draw_recursive(tc, self.label(), core, &mut PrettyPrinter::noop())
     }
 }
 
@@ -279,7 +296,7 @@ where
             branch: Arc::clone(&self.branch),
             _phantom: PhantomData,
         });
-        self.draw_recursive(tc, core, printer)
+        self.draw_recursive(tc, self.label(), core, printer)
     }
 }
 

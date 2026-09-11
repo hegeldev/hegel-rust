@@ -323,7 +323,10 @@ fn cached_test_function_serves_interesting_from_cache_with_origin_and_spans() {
             assert_eq!(second.spans[0].label, "7");
             assert_eq!(second.spans[0].start, 0);
             assert_eq!(second.spans[0].end, 1);
-            assert_eq!(second.spans[1].label, "28");
+            assert_eq!(
+                second.spans[1].label,
+                crate::native::draws::LABEL_BOOLEAN.to_string()
+            );
             assert_eq!(second.spans[1].parent, Some(0));
         },
     );
@@ -744,6 +747,41 @@ fn span_mutation_returns_interesting_proposal() {
                 .next()
                 .expect("the first proposal should be Interesting");
             assert!(origin.contains("Panic"));
+        },
+    );
+}
+
+/// A recursive value's span and its first sub-value's span share a label
+/// and a start; whichever the probe picks as the donor, the proposal must
+/// splice without reaching outside the choice sequence.
+#[test]
+fn span_mutation_handles_same_label_spans_sharing_a_start() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..3 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true), bool_node(false)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 3), span(0, 1)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert_eq!(ctx.calls as usize, count.get());
+            assert!(ctx.interesting.is_empty());
         },
     );
 }

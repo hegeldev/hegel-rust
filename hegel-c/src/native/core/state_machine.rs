@@ -7,7 +7,6 @@ use alloc::vec::Vec;
 use super::choices::EngineError;
 use super::state::NativeTestCase;
 use crate::control::hegel_internal_assert;
-use crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::draws;
 
@@ -118,7 +117,7 @@ impl FeatureFlags {
         group: usize,
         i: usize,
     ) -> Result<bool, EngineError> {
-        ntc.start_span(HEGEL_LABEL_FEATURE_FLAG as u64);
+        ntc.start_span(draws::LABEL_FEATURE_FLAG);
         let candidates = &self.at_least_one_of[group];
         let forced = if candidates.len() == 1 && candidates.contains(&i) {
             Some(false)

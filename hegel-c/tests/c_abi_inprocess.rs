@@ -18,15 +18,15 @@ use hegel_c::{
     hegel_collection_free, hegel_collection_more, hegel_collection_reject, hegel_context_free,
     hegel_context_last_error, hegel_context_new, hegel_event, hegel_event_value,
     hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
-    hegel_generate_boolean, hegel_generate_integer, hegel_label_t, hegel_mark_complete,
-    hegel_new_collection, hegel_new_pool, hegel_new_recursion, hegel_new_state_machine,
-    hegel_next_test_case, hegel_pool_add, hegel_pool_free, hegel_pool_generate,
-    hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free, hegel_recursion_leaf,
-    hegel_recursion_retry, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_phases,
+    hegel_generate_boolean, hegel_generate_integer, hegel_label_combine, hegel_label_from_name,
+    hegel_mark_complete, hegel_new_collection, hegel_new_pool, hegel_new_recursion,
+    hegel_new_state_machine, hegel_next_test_case, hegel_pool_add, hegel_pool_free,
+    hegel_pool_generate, hegel_recursion_branch, hegel_recursion_finish, hegel_recursion_free,
+    hegel_recursion_leaf, hegel_recursion_retry, hegel_run_free, hegel_run_result,
+    hegel_run_result_error, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_status_t,
+    hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
     hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
@@ -98,6 +98,69 @@ unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *con
     let mut p: *const c_char = ptr::null();
     assert_eq!(unsafe { hegel_run_result_error(ctx, r, &mut p) }, HEGEL_OK);
     p
+}
+
+#[test]
+fn labels_are_derived_from_names_and_combined() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut label = 0u64;
+        assert_eq!(
+            hegel_label_from_name(ctx, ptr::null(), &mut label),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("name is null"));
+        assert_eq!(
+            hegel_label_from_name(ctx, c"x".as_ptr(), ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        ok(hegel_label_from_name(ctx, c"".as_ptr(), &mut label));
+        assert_eq!(label, 0xcbf29ce484222325);
+        ok(hegel_label_from_name(ctx, c"a".as_ptr(), &mut label));
+        assert_eq!(label, 0xaf63dc4c8601ec8c);
+        ok(hegel_label_from_name(ctx, c"foobar".as_ptr(), &mut label));
+        assert_eq!(label, 0x85944171f73967e8);
+
+        let parts = [label, 7u64];
+        let mut combined = 0u64;
+        assert_eq!(
+            hegel_label_combine(ctx, ptr::null(), 2, &mut combined),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("labels is null"));
+        assert_eq!(
+            hegel_label_combine(ctx, parts.as_ptr(), 2, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        ok(hegel_label_combine(ctx, parts.as_ptr(), 2, &mut combined));
+        let mut again = 0u64;
+        ok(hegel_label_combine(ctx, parts.as_ptr(), 2, &mut again));
+        assert_eq!(combined, again);
+        let swapped = [7u64, label];
+        let mut reversed = 0u64;
+        ok(hegel_label_combine(ctx, swapped.as_ptr(), 2, &mut reversed));
+        assert_ne!(combined, reversed);
+        let mut single = 0u64;
+        ok(hegel_label_combine(ctx, parts.as_ptr(), 1, &mut single));
+        assert_ne!(single, label);
+        assert_ne!(single, combined);
+        let mut empty = 1u64;
+        ok(hegel_label_combine(ctx, ptr::null(), 0, &mut empty));
+        let mut empty_again = 2u64;
+        ok(hegel_label_combine(
+            ctx,
+            parts.as_ptr(),
+            0,
+            &mut empty_again,
+        ));
+        assert_eq!(empty, empty_again);
+        assert_ne!(empty, single);
+        assert_eq!(hegel_context_free(ctx), HEGEL_OK);
+    }
 }
 
 #[test]
@@ -978,11 +1041,7 @@ fn recursion_budget_retry_and_depth_limit() {
         ok(hegel_recursion_branch(ctx, tc, recursion, 7, &mut branch));
         assert!(!branch);
 
-        ok(hegel_start_span(
-            ctx,
-            tc,
-            hegel_label_t::HEGEL_LABEL_RECURSIVE as u64,
-        ));
+        ok(hegel_start_span(ctx, tc, 35));
         ok(hegel_recursion_leaf(ctx, tc, recursion));
         ok(hegel_recursion_leaf(ctx, tc, recursion));
         assert_eq!(hegel_recursion_leaf(ctx, tc, recursion), HEGEL_E_RETRY);
@@ -1282,10 +1341,7 @@ fn primitives_after_overrun_all_report_stop_test() {
         }
         assert!(overran, "drawing should eventually overrun the budget");
 
-        assert_eq!(
-            hegel_start_span(ctx, tc, hegel_label_t::HEGEL_LABEL_LIST as u64),
-            HEGEL_E_STOP_TEST
-        );
+        assert_eq!(hegel_start_span(ctx, tc, 1), HEGEL_E_STOP_TEST);
         assert_eq!(hegel_stop_span(ctx, tc, false), HEGEL_E_STOP_TEST);
         let mut id = 0i64;
         let mut post_overrun: *mut HegelCollection = ptr::null_mut();
