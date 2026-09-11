@@ -1629,7 +1629,10 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  Register a *state machine* for engine-owned stateful (rule-based)
  testing, sequential or concurrent: `num_rules` rules — each assigned to
  a concurrency group by `rule_groups`, an array of group ids parallel to
- `rule_names` — and `num_invariants` invariants, with names as
+ `rule_names`, and given a selection weight by `rule_weights`, an array
+ of `num_rules` finite, strictly positive doubles parallel to
+ `rule_names` (NULL for all-equal weights) — and `num_invariants`
+ invariants, with names as
  NUL-terminated UTF-8, plus concurrency bounds. `invariant_always_check`
  is an array of `num_invariants` flags parallel to `invariant_names`
  (NULL for all-false): `hegel_state_machine_should_check_invariant`
@@ -1703,14 +1706,15 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  exhausted (the caller should abort the body and call
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
- is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
- `max_concurrency < min_concurrency`, `step_count < 1`, or on null /
- non-UTF-8 names.
+ is `HEGEL_STATE_MACHINE_DONE`, an entry of `rule_weights` is not finite
+ and positive, `min_concurrency < 1`, `max_concurrency < min_concurrency`,
+ `step_count < 1`, or on null / non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
                                        const char *const *rule_names,
                                        const int64_t *rule_groups,
+                                       const double *rule_weights,
                                        size_t num_rules,
                                        const char *const *invariant_names,
                                        const bool *invariant_always_check,

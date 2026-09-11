@@ -189,6 +189,11 @@ pub struct NativeStateMachine {
     /// Per group: the caller-supplied identifier, as it appeared in
     /// `rule_groups`. `next_group` reports the current group by this id.
     group_ids: Vec<i64>,
+    /// Per rule: its selection weight relative to the other rules of its
+    /// group, as supplied at creation (parallel to `rule_groups`). Every
+    /// weight is finite and strictly positive.
+    #[allow(dead_code)]
+    rule_weights: Vec<f64>,
     concurrency: i64,
     /// The group whose rules are handed out this round, written by every
     /// `next_group` call. Meaningful only once `rounds_started > 0`;
@@ -221,11 +226,15 @@ impl NativeStateMachine {
     /// `[min_concurrency, max_concurrency]`, weighted toward the maximum —
     /// see [`draw_concurrency`]) and every worker's swarm disabling
     /// probability are drawn here, from the creating handle's stream, so no
-    /// per-worker state is ever pending. `step_count` is the target number
-    /// of counted rounds the machine runs; see [`Self::next_group`].
+    /// per-worker state is ever pending. `rule_weights` gives each rule's
+    /// selection weight relative to the other rules of its group, parallel
+    /// to `rule_groups`; every weight must be finite and strictly positive.
+    /// `step_count` is the target number of counted rounds the machine
+    /// runs; see [`Self::next_group`].
     pub fn new(
         ntc: &mut NativeTestCase,
         rule_groups: Vec<i64>,
+        rule_weights: Vec<f64>,
         invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
@@ -234,6 +243,14 @@ impl NativeStateMachine {
         hegel_internal_assert!(
             !rule_groups.is_empty(),
             "Stateful testing: there must be at least one rule"
+        );
+        hegel_internal_assert!(
+            rule_weights.len() == rule_groups.len(),
+            "Stateful testing: rule weights must be parallel to rule groups"
+        );
+        hegel_internal_assert!(
+            rule_weights.iter().all(|w| w.is_finite() && *w > 0.0),
+            "Stateful testing: rule weights must be finite and positive"
         );
         hegel_internal_assert!(
             min_concurrency >= 1 && min_concurrency <= max_concurrency,
@@ -270,6 +287,7 @@ impl NativeStateMachine {
         Ok(NativeStateMachine {
             groups,
             group_ids,
+            rule_weights,
             concurrency,
             current_group: 0,
             rounds_started: 0,

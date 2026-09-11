@@ -30,6 +30,16 @@ struct MethodInfo {
     name: syn::Ident,
     attrs: Vec<Attribute>,
     always_run: bool,
+    weight: Option<f64>,
+}
+
+/// The `.with_weight(...)` call appended to a rule constructor when the
+/// `#[rule]` attribute carries a `weight = ...` argument.
+fn weight_call(weight: Option<f64>) -> TokenStream {
+    match weight {
+        Some(weight) => quote! { .with_weight(#weight) },
+        None => TokenStream::new(),
+    }
 }
 
 fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> {
@@ -58,6 +68,7 @@ fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> 
             // and the method-call syntax inside the closure lets methods take
             // either `&self` or `&mut self` (an `&mut M` auto-coerces to
             // `&M`), as the `stateful` module docs promise for invariants.
+            let weight = weight_call(m.weight);
             quote! {
                 #(#attrs)*
                 #constructor(
@@ -66,6 +77,7 @@ fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> 
                         __hegel_machine.#name(__hegel_tc)
                     },
                 )
+                #weight
             }
         })
         .collect()
@@ -79,28 +91,71 @@ enum RuleGroup {
     Named(String),
 }
 
-/// Extract the `group = "..."` argument of a `#[rule]` attribute, if any.
-fn rule_group(attr: &Attribute) -> syn::Result<RuleGroup> {
-    if matches!(attr.meta, syn::Meta::Path(_)) {
-        return Ok(RuleGroup::Anonymous);
+/// The arguments of one `#[rule]` attribute.
+struct RuleArgs {
+    group: RuleGroup,
+    weight: Option<f64>,
+}
+
+/// Parse the `weight = <number>` value of a `#[rule]` attribute: an integer
+/// or float literal that is finite and strictly positive.
+fn rule_weight(meta: &syn::meta::ParseNestedMeta) -> syn::Result<f64> {
+    let value: syn::Lit = meta.value()?.parse()?;
+    let weight = match &value {
+        syn::Lit::Float(lit) => lit.base10_parse::<f64>()?,
+        syn::Lit::Int(lit) => lit.base10_parse::<f64>()?,
+        other => {
+            return Err(syn::Error::new_spanned(
+                other,
+                "#[rule] weight must be a number literal, like `weight = 2.0`",
+            ));
+        }
+    };
+    if !(weight.is_finite() && weight > 0.0) {
+        return Err(syn::Error::new_spanned(
+            &value,
+            "#[rule] weight must be finite and positive",
+        ));
     }
-    let mut group = None;
+    Ok(weight)
+}
+
+/// Extract the arguments of a `#[rule]` attribute. `group = "..."` is
+/// accepted only when `concurrent`. `weight = ...` is accepted in both 
+/// kinds of machine.
+fn rule_args(attr: &Attribute, concurrent: bool) -> syn::Result<RuleArgs> {
+    let mut args = RuleArgs {
+        group: RuleGroup::Anonymous,
+        weight: None,
+    };
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(args);
+    }
+    let mut any = false;
     attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("group") {
+        any = true;
+        if concurrent && meta.path.is_ident("group") {
             let value: syn::LitStr = meta.value()?.parse()?;
-            group = Some(value.value());
+            args.group = RuleGroup::Named(value.value());
             Ok(())
-        } else {
+        } else if meta.path.is_ident("weight") {
+            args.weight = Some(rule_weight(&meta)?);
+            Ok(())
+        } else if concurrent {
             Err(meta.error("unsupported #[rule] argument; expected `group = \"...\"`"))
+        } else {
+            Err(meta.error("unsupported #[rule] argument"))
         }
     })?;
-    match group {
-        Some(group) => Ok(RuleGroup::Named(group)),
-        None => Err(syn::Error::new_spanned(
-            attr,
-            "#[rule(...)] requires `group = \"...\"`",
-        )),
+    if !any {
+        let message = if concurrent {
+            "#[rule(...)] requires `group = \"...\"`"
+        } else {
+            "#[rule()] has no arguments; write #[rule] instead"
+        };
+        return Err(syn::Error::new_spanned(attr, message));
     }
+    Ok(args)
 }
 
 /// Extract the `always_run` argument of an `#[invariant]` attribute, if any.
@@ -130,6 +185,7 @@ fn invariant_always_run(attr: &Attribute) -> syn::Result<bool> {
 struct ConcurrentMethodInfo {
     name: syn::Ident,
     group: Option<RuleGroup>,
+    weight: Option<f64>,
     attrs: Vec<Attribute>,
     always_run: bool,
 }

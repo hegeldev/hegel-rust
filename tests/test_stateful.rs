@@ -1115,3 +1115,93 @@ mod stateful {
         );
     }
 }
+
+mod weights {
+    use super::common::utils::expect_panic;
+    use hegel::TestCase;
+    use hegel::stateful::{Invariant, Rule, StateMachine};
+    use hegel::{Hegel, Settings, Verbosity};
+
+    struct Weighted {
+        steps: i64,
+    }
+
+    #[hegel::state_machine]
+    impl Weighted {
+        #[rule(weight = 2.5)]
+        fn heavy(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[rule(weight = 3)]
+        fn integral(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[rule]
+        fn plain(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[invariant]
+        fn non_negative(&self, _: TestCase) {
+            assert!(self.steps >= 0);
+        }
+    }
+
+    #[test]
+    fn test_rule_weight_argument_sets_the_rule_weight() {
+        let rules = Weighted { steps: 0 }.rules();
+        let weights: Vec<(&str, f64)> = rules.iter().map(|r| (r.name.as_str(), r.weight)).collect();
+        assert_eq!(
+            weights,
+            vec![("heavy", 2.5), ("integral", 3.0), ("plain", 1.0)]
+        );
+    }
+
+    #[hegel::test]
+    fn test_weighted_machine_runs(tc: TestCase) {
+        hegel::stateful::machine(Weighted { steps: 0 }).run(tc);
+    }
+
+    #[test]
+    fn test_with_weight_replaces_the_default_weight() {
+        let rule = Rule::new("bump", |m: &mut Weighted, _tc| m.steps += 1);
+        assert_eq!(rule.weight, 1.0);
+        let rule = rule.with_weight(0.25);
+        assert_eq!(rule.weight, 0.25);
+        assert_eq!(rule.name, "bump");
+    }
+
+    struct BadWeight {
+        weight: f64,
+    }
+
+    impl StateMachine for BadWeight {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![
+                Rule::new("fine", |_m: &mut BadWeight, _tc| {}),
+                Rule::new("bad", |_m: &mut BadWeight, _tc| {}).with_weight(self.weight),
+            ]
+        }
+        fn invariants(&self) -> Vec<Invariant<Self>> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_non_positive_or_non_finite_weights_are_usage_errors() {
+        for weight in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+            expect_panic(
+                || {
+                    Hegel::new(move |tc: TestCase| {
+                        hegel::stateful::machine(BadWeight { weight }).run(tc);
+                    })
+                    .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+                    .run();
+                },
+                "rule weights must be finite and positive, but rule 1 \\(bad\\) has weight",
+            );
+        }
+    }
+}

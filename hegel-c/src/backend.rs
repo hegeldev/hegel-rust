@@ -187,7 +187,9 @@ pub trait DataSource: Send + Sync {
 
     /// Register a state machine for engine-owned (swarm) rule selection:
     /// rules (each assigned to a concurrency group via `rule_groups`,
-    /// parallel to `rule_names`), invariants (each flagged always-check or
+    /// parallel to `rule_names`) and a selection weight (`rule_weights`,
+    /// also parallel to `rule_names`; every weight finite and strictly
+    /// positive), invariants (each flagged always-check or
     /// sampled via `invariant_always_check`, parallel to
     /// `invariant_names`), and concurrency bounds.
     /// Groups are identified by arbitrary `i64` ids: the machine has one
@@ -203,14 +205,16 @@ pub trait DataSource: Send + Sync {
     /// may drive it. `step_count` is the target number of counted rounds
     /// the machine runs per test case: each case runs at least one round
     /// and at most `step_count`. Errors with `InvalidArgument` if
-    /// `rule_names` is empty, `rule_groups` is not parallel to
-    /// `rule_names`, `invariant_always_check` is not parallel to
-    /// `invariant_names`, `min_concurrency < 1`,
-    /// `max_concurrency < min_concurrency`, or `step_count < 1`.
+    /// `rule_names` is empty, `rule_groups` or `rule_weights` is not
+    /// parallel to `rule_names`, a weight is not finite and positive,
+    /// `invariant_always_check` is not parallel to `invariant_names`,
+    /// `min_concurrency < 1`, `max_concurrency < min_concurrency`, or
+    /// `step_count < 1`.
     fn new_state_machine(
         &self,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
+        rule_weights: Vec<f64>,
         invariant_names: Vec<String>,
         invariant_always_check: Vec<bool>,
         min_concurrency: i64,
