@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.44.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.41.0.
+
 ## 0.44.0 - 2026-09-11
 
 This release adds named settings profiles. Three ship with Hegel: `development` (what local runs get), `ci` (selected automatically on CI servers), and `workload` (selected automatically inside Antithesis). Modify a shipped profile or define your own in a `hegel.toml` at your package or workspace root:
