@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.38.1 - 2026-09-11
+
+This patch adds support for building the raw C ABI as `wasm32-unknown-unknown` for host integrations such as browser TypeScript and Swift. The Wasm build uses host-provided entropy and time, disables filesystem failure persistence and concurrent state machines, and is published as module and static archive release assets. The static archive uses stable C hook symbols.
+
 ## 0.38.0 - 2026-09-10
 
 This release makes the stateful step count a per-machine parameter. `hegel_new_state_machine` takes a new `step_count` argument. `hegel_settings_set_stateful_step_count` is removed, and the engine no longer has a default step count. Frontends pass one explicitly (50 is the conventional choice). A `step_count` below 1 is rejected with `HEGEL_E_INVALID_ARG`.

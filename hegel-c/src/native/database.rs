@@ -1,11 +1,16 @@
+#[cfg(not(target_family = "wasm"))]
 use alloc::borrow::ToOwned;
+#[cfg(not(target_family = "wasm"))]
 use alloc::format;
+#[cfg(not(target_family = "wasm"))]
 use alloc::string::String;
 use alloc::vec::Vec;
+#[cfg(not(target_family = "wasm"))]
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceValue, ChoiceValueRef, CloneRecord, MAX_CLONE_DEPTH};
+#[cfg(not(target_family = "wasm"))]
 use crate::sys;
 
 /// Multi-value key/value store backing the native engine's replay phase.
@@ -37,6 +42,7 @@ pub trait TestCaseDatabase: Send + Sync {
 
 /// Name of the bookkeeping key under which every save() records its
 /// own key bytes.
+#[cfg(not(target_family = "wasm"))]
 pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 
 /// Prefix prepended to every key before it's hashed onto disk. Keeps
@@ -44,8 +50,10 @@ pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 /// store that happens to share `db_root` (e.g. a future hegel `core:`
 /// store): the formats aren't cross-compatible, so we never want their
 /// paths to coincide.
+#[cfg(not(target_family = "wasm"))]
 const KEY_PREFIX: &[u8] = b"native:";
 
+#[cfg(not(target_family = "wasm"))]
 fn key_hash(key: &[u8]) -> String {
     let mut buf = Vec::with_capacity(KEY_PREFIX.len() + key.len());
     buf.extend_from_slice(KEY_PREFIX);
@@ -53,11 +61,13 @@ fn key_hash(key: &[u8]) -> String {
     fnv_hex(&buf)
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub struct DirectoryTestCaseDatabase {
     db_root: String,
     metakeys_hash: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl DirectoryTestCaseDatabase {
     pub fn new(db_root: &str) -> Self {
         DirectoryTestCaseDatabase {
@@ -78,11 +88,13 @@ impl DirectoryTestCaseDatabase {
 /// Within-process discriminator for temporary file names, so concurrent
 /// saves in one process never collide (the process id keeps them unique
 /// across processes).
+#[cfg(not(target_family = "wasm"))]
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A `<path>.tmp.<pid>.<counter>` sibling name for [`atomic_write`]'s
 /// temporary file: the counter keeps concurrent saves in one process
 /// distinct, the process id keeps processes sharing a database distinct.
+#[cfg(not(target_family = "wasm"))]
 fn temp_path(path: &str) -> String {
     format!(
         "{path}.tmp.{}.{}",
@@ -95,6 +107,7 @@ fn temp_path(path: &str) -> String {
 /// sibling [`temp_path`] file, then rename over `path` (same-directory
 /// renames are atomic). Failures leave no partial file behind — the
 /// temporary is removed and `path` is untouched.
+#[cfg(not(target_family = "wasm"))]
 fn atomic_write(path: &str, value: &[u8]) {
     let tmp = temp_path(path);
     if sys::fs::write(&tmp, value).is_ok() && sys::fs::rename(&tmp, path).is_ok() {
@@ -103,6 +116,7 @@ fn atomic_write(path: &str, value: &[u8]) {
     let _ = sys::fs::remove_file(&tmp);
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl TestCaseDatabase for DirectoryTestCaseDatabase {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let dir = self.key_path(key);
@@ -179,6 +193,7 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
 /// `::` separators) and values are serialized choice sequences full
 /// of arbitrary bytes.  FNV-1a is fine here because we only need
 /// collision-avoidance, not cryptographic security.
+#[cfg(not(target_family = "wasm"))]
 pub(super) fn fnv_hex(s: &[u8]) -> String {
     format!("{:016x}", fnv1a(s))
 }
@@ -466,6 +481,6 @@ pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/database_tests.rs"]
 mod tests;

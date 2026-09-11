@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.42.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.38.1.
+
 ## 0.42.0 - 2026-09-10
 
 This release replaces `hegel::stateful::run` and `hegel::stateful::run_concurrent` with a builder, `hegel::stateful::Machine`. `Settings::stateful_step_count` is removed. Each state machine chooses its own step count, instead of every stateful test in a run sharing one setting.
