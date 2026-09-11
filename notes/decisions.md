@@ -836,3 +836,46 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     takes explicit nodes for that reason), folding the Persister's `last_saved`
     into the record, and span-aware splicing. (DRM directed: "come up with a clean
     test case representation and move this branch over to it.")
+
+## 2026-09-11
+
+74. **Replay semantics: the counterexample is an ordered pool replayed as one test
+    case; first-fit per timeline is retired.** Decision 5 kept the branch-point
+    semantics as semantics and the pool as storage, but the replay that shipped
+    (`nd_reproduce`) committed to one timeline per attempt and discovered a wrong
+    pick only by not failing; a misfit punned silently and nothing switched. The
+    pool stays (compact, one shrinker-friendly shape; DRM: "a pretty reasonable
+    representation"). Replay changes to DRM's rule: (1) the live set is the set of
+    timelines that agree with every value drawn so far, defined recursively — a
+    clone stream's live set is the child sequences of its parent's live timelines,
+    and a child-stream disagreement prunes the parent; (2) the pool is ordered and
+    every draw is served from the first live timeline whose value fits the request;
+    (3) when no timeline is live the rest is generated, by a rescue policy: first a
+    positional continuation from the timelines pruned most recently at that point
+    (the observation-driven form of decision 25's splices), then splices, then fresh
+    draws under the continuation budget. Punning — serving simplest/unit for a
+    misfit and continuing positionally — is permitted only as the rescue policy of a
+    shrink candidate's first run, where the candidate is a proposal whose misfits
+    are the shrink's own edits; in every other replay a misfit is a divergence: it
+    is reported, it is nondeterminism evidence, and under `error` strictness it
+    aborts. Every replay therefore has three outcomes, not two — reproduced, did
+    not reproduce, and left the counterexample (no evidence about the timeline
+    under test) — and per-timeline shrink evidence counts only runs that stayed on
+    the timeline. Corollaries: a total order on counterexamples — shortlex, fewer
+    timelines first, then the components lexicographically in shrink order — which
+    governs shrink acceptance (compare the proposed set; capture afterwards) and
+    never persistence gating, since confirm-time capture grows the key; the order
+    of timelines is state, so the shrinker gains multiverse-level passes (delete a
+    component, reorder toward sorted order, splice, and shrink a shared prefix
+    across every component that has it) with the existing shrinker as the
+    per-timeline sub-shrinker; and a reorder is accepted only when it is smaller
+    under the order and passes the gauntlet, so sorted order is the fixpoint, not
+    an invariant. Open, to be settled by measurement: the policy when a shrink
+    candidate's gauntlet run leaves the timeline (abandon at once versus retry
+    within a budget derived from the incumbent's own bounce rate); and the pool cap
+    — decision 22's 10 was measured for first-fit, where each extra timeline cost
+    a replay, whereas under the live set an unused timeline costs storage and
+    shrink work only, so the number is reopened. Reopens decisions 22, 25 and 31's
+    replay conclusions; decision 5's storage stands. (DRM directed, in discussion;
+    the lenient positional alternative — never prune on a value disagreement — was
+    rejected as semantics and kept as the first rescue policy.)
