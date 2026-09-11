@@ -102,7 +102,7 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal -c llvm-tools-preview
           rustup default stable
           rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -117,7 +117,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          symbols=$(nm -u target/wasm32-unknown-unknown/release/libhegel_c.a)
+          nm="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-nm"
+          symbols=$("$nm" -u target/wasm32-unknown-unknown/release/libhegel_c.a)
           grep -q 'hegel_host_entropy_fill' <<<"$symbols"
           grep -q 'hegel_host_monotonic_nanos' <<<"$symbols"
           if grep -Eq '_RN.*host_entropy_fill' <<<"$symbols"; then exit 1; fi
