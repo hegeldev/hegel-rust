@@ -242,14 +242,12 @@ file it loaded, or that it loaded none.
 
 ## Format
 
-The file is a strict subset of TOML: an optional top-level
-`default = "<profile>"` entry, then `[profiles.<name>]` tables whose
-entries are strings, integers, booleans, or single-line arrays of strings,
-plus `#` comments. Anything else — an unknown key, a value of the wrong
-type, a misplaced `default`, a duplicate key or section, another kind of
-table, a multi-line value — is an error carrying the file and line number.
-Profile names use ASCII letters, digits, `-` and `_`; `base` and `default`
-cannot be sections.
+The file is TOML: an optional top-level `default = "<profile>"` entry and
+`[profiles.<name>]` tables whose entries are the settings keys. The
+vocabulary is strict: an unknown key, a value of the wrong type, a
+misplaced `default`, or any other top-level key is an error carrying the
+file and line number, as is malformed TOML. Profile names use ASCII
+letters, digits, `-` and `_`; `base` and `default` cannot be sections.
 
 ```toml
 default = "nightly"      # optional: the default profile for this project

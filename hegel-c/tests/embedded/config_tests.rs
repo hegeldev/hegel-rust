@@ -58,12 +58,50 @@ fn parses_every_key() {
 }
 
 #[test]
-fn parses_multiple_sections_in_order() {
-    let config = parse("[profiles.a]\ntest_cases = 1\n[profiles.b]\ntest_cases = 2\n").unwrap();
-    assert_eq!(config.profiles[0].0, "a");
-    assert_eq!(config.profiles[0].1.test_cases, Some(1));
-    assert_eq!(config.profiles[1].0, "b");
-    assert_eq!(config.profiles[1].1.test_cases, Some(2));
+fn parses_multiple_sections_in_file_order() {
+    let config = parse("[profiles.b]\ntest_cases = 2\n[profiles.a]\ntest_cases = 1\n").unwrap();
+    assert_eq!(config.profiles[0].0, "b");
+    assert_eq!(config.profiles[0].1.test_cases, Some(2));
+    assert_eq!(config.profiles[1].0, "a");
+    assert_eq!(config.profiles[1].1.test_cases, Some(1));
+}
+
+#[test]
+fn parses_an_empty_profiles_table() {
+    assert_eq!(parse("[profiles]\n"), Ok(ConfigFile::default()));
+}
+
+#[test]
+fn parses_inline_and_dotted_forms() {
+    let config = parse("profiles.x = { test_cases = 3 }\n").unwrap();
+    assert_eq!(
+        config.profiles,
+        vec![(
+            "x".to_owned(),
+            ProfileDelta {
+                test_cases: Some(3),
+                ..ProfileDelta::default()
+            }
+        )]
+    );
+}
+
+#[test]
+fn parses_integer_forms() {
+    assert_eq!(
+        parse_one("[profiles.x]\nseed = 0x10\n").seed,
+        Some(Some(16))
+    );
+    assert_eq!(
+        parse_one("[profiles.x]\ntest_cases = 1_000\n").test_cases,
+        Some(1000)
+    );
+}
+
+#[test]
+fn parses_multi_line_arrays() {
+    let delta = parse_one("[profiles.x]\nphases = [\n    \"reuse\",\n    \"generate\",\n]\n");
+    assert_eq!(delta.phases, Some(vec![Phase::Reuse, Phase::Generate]));
 }
 
 #[test]
@@ -119,7 +157,7 @@ fn parses_a_top_level_default_entry() {
 fn rejects_duplicate_default_entries() {
     let e = parse_err("default = \"a\"\ndefault = \"b\"\n");
     assert_eq!(e.line, 2);
-    assert_eq!(e.message, "duplicate key `default`");
+    assert_eq!(e.message, "duplicate key");
 }
 
 #[test]
@@ -149,7 +187,8 @@ fn rejects_a_default_entry_after_a_section() {
     assert_eq!(e.line, 2);
     assert_eq!(
         e.message,
-        "`default` must appear before the first [profiles.<name>] header"
+        "`default` is a top-level key, not a profile setting: \
+         move it above the first [profiles.<name>] header"
     );
 }
 
@@ -220,69 +259,73 @@ fn parses_string_escapes() {
 }
 
 #[test]
-fn rejects_non_profile_tables() {
+fn rejects_unknown_top_level_keys() {
+    let expected = |key: &str| {
+        format!(
+            "unknown top-level key `{key}`: only `default` and \
+             [profiles.<name>] tables are allowed"
+        )
+    };
+    assert_eq!(parse_err("[foo]\n").message, expected("foo"));
+    let e = parse_err("\ntest_cases = 5\n");
+    assert_eq!(e.line, 2);
+    assert_eq!(e.message, expected("test_cases"));
+}
+
+#[test]
+fn rejects_a_profiles_entry_that_is_not_a_table() {
     assert_eq!(
-        parse_err("[foo]\n").message,
-        "only [profiles.<name>] tables are allowed"
+        parse_err("profiles = 5\n").message,
+        "`profiles` expects [profiles.<name>] tables, got an integer"
     );
+    let e = parse_err("[profiles]\nx = \"y\"\n");
+    assert_eq!(e.line, 2);
     assert_eq!(
-        parse_err("[profiles]\n").message,
-        "only [profiles.<name>] tables are allowed"
+        e.message,
+        "`profiles.x` expects a table of settings, got a string"
     );
 }
 
 #[test]
-fn rejects_unterminated_table_header() {
-    assert_eq!(
-        parse_err("[profiles.x\n").message,
-        "unterminated table header"
-    );
-}
-
-#[test]
-fn rejects_text_after_table_header() {
-    assert_eq!(
-        parse_err("[profiles.x] junk\n").message,
-        "unexpected text after table header"
-    );
+fn reports_toml_syntax_errors_with_their_line() {
+    let e = parse_err("[profiles.x]\n\n[profiles.y\n");
+    assert_eq!(e.line, 3);
+    assert_eq!(e.message, "unclosed table, expected `]`");
+    for text in [
+        "[profiles.x] junk\n",
+        "[profiles.x]\nwhat is this\n",
+        "[profiles.x]\ntest_cases = 5 junk\n",
+        "[profiles.x]\nderandomize = yes\n",
+        "[profiles.x]\ndatabase = \"a\\qb\"\n",
+        "[profiles.x]\ndatabase = \"abc\n",
+        "[profiles.x]\nphases = [\"a\" \"b\"]\n",
+    ] {
+        let e = parse_err(text);
+        assert_eq!(e.line, text.lines().count(), "{text:?}");
+        assert!(!e.message.is_empty());
+    }
 }
 
 #[test]
 fn rejects_invalid_profile_names() {
-    for text in ["[profiles.]\n", "[profiles.bad name]\n", "[profiles.a.b]\n"] {
+    for text in ["[profiles.\"bad name\"]\n", "[profiles.\"\"]\n"] {
         assert!(parse_err(text).message.starts_with("invalid profile name"));
     }
+    assert_eq!(parse_err("[profiles.a.b]\n").message, "unknown key `b`");
 }
 
 #[test]
 fn rejects_duplicate_sections() {
     let e = parse_err("[profiles.x]\n[profiles.x]\n");
     assert_eq!(e.line, 2);
-    assert_eq!(e.message, "duplicate section [profiles.x]");
-}
-
-#[test]
-fn rejects_lines_that_are_neither_headers_nor_entries() {
-    assert_eq!(
-        parse_err("[profiles.x]\nwhat is this\n").message,
-        "expected `key = value` or a [profiles.<name>] header"
-    );
-}
-
-#[test]
-fn rejects_entries_before_any_section() {
-    assert_eq!(
-        parse_err("test_cases = 5\n").message,
-        "only `default = \"<profile>\"` may appear before the \
-         first [profiles.<name>] header"
-    );
+    assert_eq!(e.message, "duplicate key");
 }
 
 #[test]
 fn rejects_duplicate_keys_within_a_section() {
     let e = parse_err("[profiles.x]\ntest_cases = 1\ntest_cases = 2\n");
     assert_eq!(e.line, 3);
-    assert_eq!(e.message, "duplicate key `test_cases`");
+    assert_eq!(e.message, "duplicate key");
 }
 
 #[test]
@@ -292,62 +335,12 @@ fn allows_the_same_key_in_different_sections() {
 }
 
 #[test]
-fn rejects_trailing_text_after_values() {
-    assert_eq!(
-        parse_err("[profiles.x]\ntest_cases = 5 junk\n").message,
-        "unexpected trailing text `junk`"
-    );
-}
-
-#[test]
-fn rejects_unrecognised_bare_tokens() {
-    assert_eq!(
-        parse_err("[profiles.x]\nderandomize = yes\n").message,
-        "expected a string, integer, boolean, or array, got `yes`"
-    );
-    assert_eq!(
-        parse_err("[profiles.x]\ntest_cases =\n").message,
-        "expected a string, integer, boolean, or array, got ``"
-    );
-}
-
-#[test]
-fn rejects_unsupported_escapes() {
-    assert_eq!(
-        parse_err("[profiles.x]\ndatabase = \"a\\qb\"\n").message,
-        "unsupported escape `\\q`"
-    );
-}
-
-#[test]
-fn rejects_unterminated_strings() {
-    assert_eq!(
-        parse_err("[profiles.x]\ndatabase = \"abc\n").message,
-        "unterminated string"
-    );
-    assert_eq!(
-        parse_err("[profiles.x]\ndatabase = \"abc\\\n").message,
-        "unterminated string"
-    );
-}
-
-#[test]
 fn rejects_non_string_array_elements() {
+    let e = parse_err("[profiles.x]\nphases = [\n  \"reuse\",\n  1,\n]\n");
+    assert_eq!(e.line, 4);
     assert_eq!(
-        parse_err("[profiles.x]\nphases = [1]\n").message,
-        "arrays may contain only strings"
-    );
-}
-
-#[test]
-fn rejects_malformed_arrays() {
-    assert_eq!(
-        parse_err("[profiles.x]\nphases = [\"a\" \"b\"]\n").message,
-        "expected `,` or `]` in array"
-    );
-    assert_eq!(
-        parse_err("[profiles.x]\nphases = [\"a\"\n").message,
-        "expected `,` or `]` in array"
+        e.message,
+        "elements of `phases` must be strings, got an integer"
     );
 }
 
@@ -373,6 +366,18 @@ fn rejects_wrong_value_types() {
         parse_err("[profiles.x]\ntest_cases = [\"a\"]\n").message,
         "`test_cases` expects an integer, got an array"
     );
+    assert_eq!(
+        parse_err("[profiles.x]\ntest_cases = 1.5\n").message,
+        "`test_cases` expects an integer, got a float"
+    );
+    assert_eq!(
+        parse_err("[profiles.x]\ndatabase = 1979-05-27\n").message,
+        "`database` expects a string, got a datetime"
+    );
+    assert_eq!(
+        parse_err("[profiles.x]\nextends = { a = 1 }\n").message,
+        "`extends` expects a string, got a table"
+    );
 }
 
 #[test]
@@ -392,6 +397,10 @@ fn rejects_out_of_range_integers() {
             .message
             .starts_with("`test_cases` must be between 1 and")
     );
+    let huge = "1".repeat(50);
+    let e = parse_err(&format!("[profiles.x]\ntest_cases = {huge}\n"));
+    assert!(e.message.starts_with("`test_cases` must be between 1 and"));
+    assert!(e.message.ends_with(&format!("got {huge}")));
 }
 
 #[test]

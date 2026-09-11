@@ -32,6 +32,7 @@ rustc-hash = { version = "2", default-features = false }
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
 libm = { version = "0.2", default-features = false }
 once_cell = { version = "1.21", default-features = false, features = ["alloc"] }
+toml = { version = "1.1.6", default-features = false, features = ["parse"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = ["alloc", "fs", "time", "rand", "stdio", "process", "thread"] }

@@ -1,14 +1,13 @@
 //! `hegel.toml` discovery and parsing.
 //!
 //! The config file defines and modifies settings profiles
-//! ([`crate::profiles`]). The accepted format is a strict subset of TOML: an
-//! optional top-level `default = "<profile>"` entry naming the default
-//! profile, then `[profiles.<name>]` tables whose entries are basic strings,
-//! decimal integers, booleans, or single-line arrays of basic strings, plus
-//! `#` comments. Everything else — unknown keys, wrong value types, other
-//! tables, multi-line values — is a hard error carrying a line number:
-//! silent misconfiguration in a file that changes test behaviour is worse
-//! than strictness.
+//! ([`crate::profiles`]). It is a TOML document with an optional top-level
+//! `default = "<profile>"` entry naming the default profile, and
+//! `[profiles.<name>]` tables whose entries are the settings keys. The
+//! vocabulary is strict: an unknown key, a value of the wrong type, a
+//! misplaced `default`, or any other top-level table is a hard error
+//! carrying a line number, because silent misconfiguration in a file that
+//! changes test behaviour is worse than strictness.
 //!
 //! The file is discovered by checking the current directory and then each
 //! ancestor up to the filesystem root, first hit wins — the same shape as
@@ -20,6 +19,9 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+
+use toml::Spanned;
+use toml::de::{DeString, DeTable, DeValue};
 
 use crate::profiles::{BASE, DEFAULT, ProfileDelta, ProfileError, is_valid_name};
 use crate::settings::{Backend, Database, HealthCheck, Phase, Verbosity};
@@ -57,85 +59,134 @@ fn err(line: usize, message: impl Into<String>) -> ParseError {
     }
 }
 
-/// One parsed value: the only shapes the format accepts.
-enum Value {
-    Str(String),
-    Int(i128),
-    Bool(bool),
-    Array(Vec<String>),
+/// The parsed document, for turning the byte offsets of the spans the TOML
+/// parser records into line numbers.
+struct Source<'t> {
+    text: &'t str,
 }
 
-impl Value {
-    fn kind(&self) -> &'static str {
-        match self {
-            Value::Str(_) => "a string",
-            Value::Int(_) => "an integer",
-            Value::Bool(_) => "a boolean",
-            Value::Array(_) => "an array",
-        }
+impl Source<'_> {
+    fn line_at(&self, offset: usize) -> usize {
+        self.text[..offset.min(self.text.len())]
+            .matches('\n')
+            .count()
+            + 1
+    }
+
+    fn line_of<T>(&self, spanned: &Spanned<T>) -> usize {
+        self.line_at(spanned.span().start)
+    }
+
+    fn err_at<T>(&self, spanned: &Spanned<T>, message: impl Into<String>) -> ParseError {
+        err(self.line_of(spanned), message)
     }
 }
 
 /// Parse the text of a `hegel.toml`.
 pub(crate) fn parse(text: &str) -> Result<ConfigFile, ParseError> {
+    let src = Source { text };
+    let table = DeTable::parse(text).map_err(|e| {
+        err(
+            src.line_at(e.span().map_or(0, |span| span.start)),
+            e.message(),
+        )
+    })?;
     let mut out = ConfigFile::default();
-    let mut keys: Vec<String> = Vec::new();
-    for (idx, raw) in text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix('[') {
-            let name = parse_header(rest, line_no)?;
-            if out.profiles.iter().any(|(n, _)| n == name) {
-                return Err(err(line_no, format!("duplicate section [profiles.{name}]")));
+    for (key, value) in in_file_order(table.get_ref()) {
+        match key.get_ref().as_ref() {
+            "default" => {
+                let name = expect_string(&src, value, "default")?;
+                if name == DEFAULT {
+                    return Err(src.err_at(
+                        value,
+                        format!("`default` cannot name the {DEFAULT:?} alias it resolves"),
+                    ));
+                }
+                if !is_valid_name(name) {
+                    return Err(invalid_name_err(name, src.line_of(value)));
+                }
+                out.default = Some(name.to_string());
             }
-            out.profiles
-                .push((name.to_string(), ProfileDelta::default()));
-            keys.clear();
-            continue;
-        }
-        let Some(eq) = line.find('=') else {
-            return Err(err(
-                line_no,
-                "expected `key = value` or a [profiles.<name>] header",
-            ));
-        };
-        let key = line[..eq].trim();
-        let Some((_, delta)) = out.profiles.last_mut() else {
-            if key != "default" {
-                return Err(err(
-                    line_no,
-                    "only `default = \"<profile>\"` may appear before the \
-                     first [profiles.<name>] header",
+            "profiles" => {
+                let DeValue::Table(profiles) = value.get_ref() else {
+                    return Err(type_error(
+                        &src,
+                        value,
+                        "profiles",
+                        "[profiles.<name>] tables",
+                    ));
+                };
+                for (name, delta) in in_file_order(profiles) {
+                    out.profiles.push(parse_profile(&src, name, delta)?);
+                }
+            }
+            other => {
+                return Err(src.err_at(
+                    key,
+                    format!(
+                        "unknown top-level key `{other}`: only `default` and \
+                         [profiles.<name>] tables are allowed"
+                    ),
                 ));
             }
-            if out.default.is_some() {
-                return Err(err(line_no, "duplicate key `default`"));
-            }
-            let value = parse_value(line[eq + 1..].trim(), line_no)?;
-            let name = expect_string(value, key, line_no)?;
-            if name == DEFAULT {
-                return Err(err(
-                    line_no,
-                    format!("`default` cannot name the {DEFAULT:?} alias it resolves"),
-                ));
-            }
-            if !is_valid_name(&name) {
-                return Err(invalid_name_err(&name, line_no));
-            }
-            out.default = Some(name);
-            continue;
-        };
-        if keys.iter().any(|k| k == key) {
-            return Err(err(line_no, format!("duplicate key `{key}`")));
         }
-        let value = parse_value(line[eq + 1..].trim(), line_no)?;
-        assign(delta, key, value, line_no)?;
-        keys.push(key.to_string());
     }
     Ok(out)
+}
+
+/// A table's entries sorted by where they appear in the file, since the
+/// parsed table orders them by key.
+fn in_file_order<'a, 'i>(
+    table: &'a DeTable<'i>,
+) -> Vec<(&'a Spanned<DeString<'i>>, &'a Spanned<DeValue<'i>>)> {
+    let mut entries: Vec<_> = table.iter().collect();
+    entries.sort_by_key(|(key, _)| key.span().start);
+    entries
+}
+
+/// Parse one `[profiles.<name>]` table into a named delta, validating the
+/// name.
+fn parse_profile(
+    src: &Source<'_>,
+    name: &Spanned<DeString<'_>>,
+    table: &Spanned<DeValue<'_>>,
+) -> Result<(String, ProfileDelta), ParseError> {
+    let line = src.line_of(name);
+    let name = name.get_ref().as_ref();
+    if name == BASE {
+        return Err(err(
+            line,
+            format!(
+                "{BASE:?} is the reserved base profile and cannot be modified; \
+                 customize [profiles.development] instead"
+            ),
+        ));
+    }
+    if name == DEFAULT {
+        return Err(err(
+            line,
+            format!(
+                "{DEFAULT:?} is an alias for the default profile and cannot be defined; \
+                 choose it with `default = \"<profile>\"` instead"
+            ),
+        ));
+    }
+    if !is_valid_name(name) {
+        return Err(invalid_name_err(name, line));
+    }
+    let DeValue::Table(entries) = table.get_ref() else {
+        return Err(type_error(
+            src,
+            table,
+            &format!("profiles.{name}"),
+            "a table of settings",
+        ));
+    };
+    let mut delta = ProfileDelta::default();
+    for (key, value) in in_file_order(entries) {
+        assign(src, &mut delta, key, value)?;
+    }
+    Ok((name.to_string(), delta))
 }
 
 fn invalid_name_err(name: &str, line_no: usize) -> ParseError {
@@ -145,223 +196,140 @@ fn invalid_name_err(name: &str, line_no: usize) -> ParseError {
     )
 }
 
-/// Parse a table header after its opening `[`, returning the profile name.
-fn parse_header(rest: &str, line_no: usize) -> Result<&str, ParseError> {
-    let Some(rest) = rest.strip_prefix("profiles.") else {
-        return Err(err(line_no, "only [profiles.<name>] tables are allowed"));
-    };
-    let Some(end) = rest.find(']') else {
-        return Err(err(line_no, "unterminated table header"));
-    };
-    let name = &rest[..end];
-    let after = rest[end + 1..].trim();
-    if !after.is_empty() && !after.starts_with('#') {
-        return Err(err(line_no, "unexpected text after table header"));
+fn kind(value: &DeValue<'_>) -> &'static str {
+    match value {
+        DeValue::String(_) => "a string",
+        DeValue::Integer(_) => "an integer",
+        DeValue::Float(_) => "a float",
+        DeValue::Boolean(_) => "a boolean",
+        DeValue::Datetime(_) => "a datetime",
+        DeValue::Array(_) => "an array",
+        DeValue::Table(_) => "a table",
     }
-    if name == BASE {
-        return Err(err(
-            line_no,
-            format!(
-                "{BASE:?} is the reserved base profile and cannot be modified; \
-                 customize [profiles.development] instead"
-            ),
-        ));
-    }
-    if name == DEFAULT {
-        return Err(err(
-            line_no,
-            format!(
-                "{DEFAULT:?} is an alias for the default profile and cannot be defined; \
-                 choose it with `default = \"<profile>\"` instead"
-            ),
-        ));
-    }
-    if !is_valid_name(name) {
-        return Err(invalid_name_err(name, line_no));
-    }
-    Ok(name)
 }
 
-/// Parse the value part of a `key = value` line, allowing a trailing
-/// comment.
-fn parse_value(s: &str, line_no: usize) -> Result<Value, ParseError> {
-    let (value, rest) = scan_value(s, line_no)?;
-    let rest = rest.trim_start();
-    if !rest.is_empty() && !rest.starts_with('#') {
-        return Err(err(line_no, format!("unexpected trailing text `{rest}`")));
-    }
-    Ok(value)
+fn type_error(
+    src: &Source<'_>,
+    value: &Spanned<DeValue<'_>>,
+    key: &str,
+    expected: &str,
+) -> ParseError {
+    src.err_at(
+        value,
+        format!("`{key}` expects {expected}, got {}", kind(value.get_ref())),
+    )
 }
 
-fn scan_value(s: &str, line_no: usize) -> Result<(Value, &str), ParseError> {
-    if let Some(rest) = s.strip_prefix('"') {
-        let (string, rest) = scan_string(rest, line_no)?;
-        return Ok((Value::Str(string), rest));
+fn expect_string<'a>(
+    src: &Source<'_>,
+    value: &'a Spanned<DeValue<'_>>,
+    key: &str,
+) -> Result<&'a str, ParseError> {
+    match value.get_ref() {
+        DeValue::String(s) => Ok(s.as_ref()),
+        _ => Err(type_error(src, value, key, "a string")),
     }
-    if let Some(rest) = s.strip_prefix('[') {
-        let (items, rest) = scan_array(rest, line_no)?;
-        return Ok((Value::Array(items), rest));
+}
+
+fn expect_bool(
+    src: &Source<'_>,
+    value: &Spanned<DeValue<'_>>,
+    key: &str,
+) -> Result<bool, ParseError> {
+    match value.get_ref() {
+        DeValue::Boolean(b) => Ok(*b),
+        _ => Err(type_error(src, value, key, "a boolean")),
     }
-    let end = s
-        .find(|c: char| c.is_whitespace() || c == '#')
-        .unwrap_or(s.len());
-    let (token, rest) = s.split_at(end);
-    match token {
-        "true" => Ok((Value::Bool(true), rest)),
-        "false" => Ok((Value::Bool(false), rest)),
-        _ => match token.parse::<i128>() {
-            Ok(n) => Ok((Value::Int(n), rest)),
-            Err(_) => Err(err(
-                line_no,
-                format!("expected a string, integer, boolean, or array, got `{token}`"),
+}
+
+fn expect_array<'a>(
+    src: &Source<'_>,
+    value: &'a Spanned<DeValue<'_>>,
+    key: &str,
+) -> Result<Vec<&'a str>, ParseError> {
+    let DeValue::Array(items) = value.get_ref() else {
+        return Err(type_error(src, value, key, "an array of strings"));
+    };
+    items
+        .iter()
+        .map(|item| match item.get_ref() {
+            DeValue::String(s) => Ok(s.as_ref()),
+            other => Err(src.err_at(
+                item,
+                format!("elements of `{key}` must be strings, got {}", kind(other)),
             )),
-        },
-    }
-}
-
-/// Scan a basic string after its opening quote. Supports the escapes
-/// `\"`, `\\`, `\n`, and `\t` only.
-fn scan_string(s: &str, line_no: usize) -> Result<(String, &str), ParseError> {
-    let mut out = String::new();
-    let mut chars = s.char_indices();
-    while let Some((i, c)) = chars.next() {
-        match c {
-            '"' => return Ok((out, &s[i + 1..])),
-            '\\' => match chars.next() {
-                Some((_, '"')) => out.push('"'),
-                Some((_, '\\')) => out.push('\\'),
-                Some((_, 'n')) => out.push('\n'),
-                Some((_, 't')) => out.push('\t'),
-                Some((_, other)) => {
-                    return Err(err(line_no, format!("unsupported escape `\\{other}`")));
-                }
-                None => break,
-            },
-            other => out.push(other),
-        }
-    }
-    Err(err(line_no, "unterminated string"))
-}
-
-/// Scan an array after its opening bracket. Elements must be basic strings.
-fn scan_array(s: &str, line_no: usize) -> Result<(Vec<String>, &str), ParseError> {
-    let mut items = Vec::new();
-    let mut rest = s.trim_start();
-    if let Some(r) = rest.strip_prefix(']') {
-        return Ok((items, r));
-    }
-    loop {
-        let Some(r) = rest.strip_prefix('"') else {
-            return Err(err(line_no, "arrays may contain only strings"));
-        };
-        let (item, r) = scan_string(r, line_no)?;
-        items.push(item);
-        rest = r.trim_start();
-        if let Some(r) = rest.strip_prefix(',') {
-            rest = r.trim_start();
-            continue;
-        }
-        if let Some(r) = rest.strip_prefix(']') {
-            return Ok((items, r));
-        }
-        return Err(err(line_no, "expected `,` or `]` in array"));
-    }
-}
-
-fn expect_string(value: Value, key: &str, line_no: usize) -> Result<String, ParseError> {
-    match value {
-        Value::Str(s) => Ok(s),
-        other => Err(type_error(key, "a string", &other, line_no)),
-    }
-}
-
-fn expect_bool(value: Value, key: &str, line_no: usize) -> Result<bool, ParseError> {
-    match value {
-        Value::Bool(b) => Ok(b),
-        other => Err(type_error(key, "a boolean", &other, line_no)),
-    }
-}
-
-fn expect_array(value: Value, key: &str, line_no: usize) -> Result<Vec<String>, ParseError> {
-    match value {
-        Value::Array(items) => Ok(items),
-        other => Err(type_error(key, "an array of strings", &other, line_no)),
-    }
+        })
+        .collect()
 }
 
 fn expect_int(
-    value: Value,
+    src: &Source<'_>,
+    value: &Spanned<DeValue<'_>>,
     key: &str,
-    line_no: usize,
     min: i128,
     max: i128,
 ) -> Result<i128, ParseError> {
-    let n = match value {
-        Value::Int(n) => n,
-        other => return Err(type_error(key, "an integer", &other, line_no)),
+    let DeValue::Integer(n) = value.get_ref() else {
+        return Err(type_error(src, value, key, "an integer"));
     };
-    if n < min || n > max {
-        return Err(err(
-            line_no,
+    match i128::from_str_radix(n.as_str(), n.radix()) {
+        Ok(v) if (min..=max).contains(&v) => Ok(v),
+        _ => Err(src.err_at(
+            value,
             format!("`{key}` must be between {min} and {max}, got {n}"),
-        ));
+        )),
     }
-    Ok(n)
-}
-
-fn type_error(key: &str, expected: &str, got: &Value, line_no: usize) -> ParseError {
-    err(
-        line_no,
-        format!("`{key}` expects {expected}, got {}", got.kind()),
-    )
 }
 
 /// Set the field `key` names on `delta`, validating the value's type and
 /// vocabulary.
 fn assign(
+    src: &Source<'_>,
     delta: &mut ProfileDelta,
-    key: &str,
-    value: Value,
-    line_no: usize,
+    key: &Spanned<DeString<'_>>,
+    value: &Spanned<DeValue<'_>>,
 ) -> Result<(), ParseError> {
+    let line_no = src.line_of(value);
+    let key = key.get_ref().as_ref();
     match key {
         "default" => {
             return Err(err(
                 line_no,
-                "`default` must appear before the first [profiles.<name>] header",
+                "`default` is a top-level key, not a profile setting: \
+                 move it above the first [profiles.<name>] header",
             ));
         }
         "extends" => {
-            let name = expect_string(value, key, line_no)?;
-            if !is_valid_name(&name) {
-                return Err(invalid_name_err(&name, line_no));
+            let name = expect_string(src, value, key)?;
+            if !is_valid_name(name) {
+                return Err(invalid_name_err(name, line_no));
             }
-            delta.extends = Some(name);
+            delta.extends = Some(name.to_string());
         }
         "test_cases" => {
-            delta.test_cases = Some(expect_int(value, key, line_no, 1, u64::MAX as i128)? as u64);
+            delta.test_cases = Some(expect_int(src, value, key, 1, u64::MAX as i128)? as u64);
         }
         "seed" => {
-            delta.seed = Some(match value {
-                Value::Str(s) if s == "none" => None,
-                Value::Str(s) => {
+            delta.seed = Some(match value.get_ref() {
+                DeValue::String(s) if s == "none" => None,
+                DeValue::String(s) => {
                     return Err(err(
                         line_no,
                         format!("`seed` expects an integer or \"none\", got {s:?}"),
                     ));
                 }
-                other => Some(expect_int(other, key, line_no, 0, u64::MAX as i128)? as u64),
+                _ => Some(expect_int(src, value, key, 0, u64::MAX as i128)? as u64),
             });
         }
-        "derandomize" => delta.derandomize = Some(expect_bool(value, key, line_no)?),
+        "derandomize" => delta.derandomize = Some(expect_bool(src, value, key)?),
         "report_multiple_failures" => {
-            delta.report_multiple_failures = Some(expect_bool(value, key, line_no)?);
+            delta.report_multiple_failures = Some(expect_bool(src, value, key)?);
         }
-        "show_statistics" => delta.show_statistics = Some(expect_bool(value, key, line_no)?),
-        "print_blob" => delta.print_blob = Some(expect_bool(value, key, line_no)?),
+        "show_statistics" => delta.show_statistics = Some(expect_bool(src, value, key)?),
+        "print_blob" => delta.print_blob = Some(expect_bool(src, value, key)?),
         "verbosity" => {
-            let s = expect_string(value, key, line_no)?;
-            delta.verbosity = Some(match s.as_str() {
+            let s = expect_string(src, value, key)?;
+            delta.verbosity = Some(match s {
                 "quiet" => Verbosity::Quiet,
                 "normal" => Verbosity::Normal,
                 "verbose" => Verbosity::Verbose,
@@ -377,8 +345,8 @@ fn assign(
             });
         }
         "backend" => {
-            let s = expect_string(value, key, line_no)?;
-            delta.backend = Some(match s.as_str() {
+            let s = expect_string(src, value, key)?;
+            delta.backend = Some(match s {
                 "default" => Backend::Default,
                 "urandom" => Backend::Urandom,
                 other => {
@@ -390,28 +358,28 @@ fn assign(
             });
         }
         "database" => {
-            let s = expect_string(value, key, line_no)?;
+            let s = expect_string(src, value, key)?;
             if s.is_empty() {
                 return Err(err(
                     line_no,
                     "`database` expects a path, \"disabled\", or \"default\", got \"\"",
                 ));
             }
-            delta.database = Some(match s.as_str() {
+            delta.database = Some(match s {
                 "disabled" => Database::Disabled,
                 "default" => Database::Unset,
-                _ => Database::Path(s),
+                _ => Database::Path(s.to_string()),
             });
         }
         "suppress_health_check" => {
-            let items = expect_array(value, key, line_no)?;
+            let items = expect_array(src, value, key)?;
             delta.suppress_health_check = Some(parse_health_checks(&items, line_no)?);
         }
         "phases" => {
-            let items = expect_array(value, key, line_no)?;
+            let items = expect_array(src, value, key)?;
             let mut phases = Vec::with_capacity(items.len());
-            for item in &items {
-                phases.push(match item.as_str() {
+            for item in items {
+                phases.push(match item {
                     "explicit" => Phase::Explicit,
                     "reuse" => Phase::Reuse,
                     "generate" => Phase::Generate,
@@ -438,8 +406,8 @@ fn assign(
 /// The health-check name vocabulary, shared with the frontend's
 /// `--suppress-health-check` flag: the four snake_case check names, or
 /// `"all"` as the only element.
-fn parse_health_checks(items: &[String], line_no: usize) -> Result<Vec<HealthCheck>, ParseError> {
-    if items.iter().any(|i| i == "all") {
+fn parse_health_checks(items: &[&str], line_no: usize) -> Result<Vec<HealthCheck>, ParseError> {
+    if items.contains(&"all") {
         if items.len() != 1 {
             return Err(err(
                 line_no,
@@ -455,7 +423,7 @@ fn parse_health_checks(items: &[String], line_no: usize) -> Result<Vec<HealthChe
     }
     let mut checks = Vec::with_capacity(items.len());
     for item in items {
-        checks.push(match item.as_str() {
+        checks.push(match *item {
             "filter_too_much" => HealthCheck::FilterTooMuch,
             "too_slow" => HealthCheck::TooSlow,
             "test_cases_too_large" => HealthCheck::TestCasesTooLarge,
