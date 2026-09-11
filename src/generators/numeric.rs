@@ -208,6 +208,7 @@ impl<T> FloatGenerator<T> {
     /// Set the minimum value (inclusive by default).
     pub fn min_value(mut self, min_value: T) -> Self {
         self.min = Some(min_value);
+        self.exclude_min = false;
         self.params = OnceLock::new();
         self
     }
@@ -215,22 +216,43 @@ impl<T> FloatGenerator<T> {
     /// Set the maximum value (inclusive by default).
     pub fn max_value(mut self, max_value: T) -> Self {
         self.max = Some(max_value);
+        self.exclude_max = false;
+        self.params = OnceLock::new();
+        self
+    }
+
+    /// Set the minimum value (exclusive).
+    pub fn min_value_exclusive(mut self, min_value: T) -> Self {
+        self.min = Some(min_value);
+        self.exclude_min = true;
+        self.params = OnceLock::new();
+        self
+    }
+
+    /// Set the maximum value (exclusive).
+    pub fn max_value_exclusive(mut self, max_value: T) -> Self {
+        self.max = Some(max_value);
+        self.exclude_max = true;
         self.params = OnceLock::new();
         self
     }
 
     /// Set whether to exclude the minimum value from the range.
-    pub fn exclude_min(mut self, exclude_min: bool) -> Self {
-        self.exclude_min = exclude_min;
-        self.params = OnceLock::new();
-        self
+    #[deprecated(since = "0.42.0", note = "use `min_value_exclusive(bound)` instead")]
+    pub fn exclude_min(self, exclude_min: bool) -> Self {
+        unreachable!(
+            "`exclude_min({exclude_min})` has been removed from `gs::floats()`; \
+             pass the bound to `min_value_exclusive` instead"
+        );
     }
 
     /// Set whether to exclude the maximum value from the range.
-    pub fn exclude_max(mut self, exclude_max: bool) -> Self {
-        self.exclude_max = exclude_max;
-        self.params = OnceLock::new();
-        self
+    #[deprecated(since = "0.42.0", note = "use `max_value_exclusive(bound)` instead")]
+    pub fn exclude_max(self, exclude_max: bool) -> Self {
+        unreachable!(
+            "`exclude_max({exclude_max})` has been removed from `gs::floats()`; \
+             pass the bound to `max_value_exclusive` instead"
+        );
     }
 
     /// Whether NaN values are allowed. Cannot be used with bounds.
@@ -294,28 +316,21 @@ impl<T: Float> FloatGenerator<T> {
             let zero_pair = min_f == 0.0 && max_f == 0.0;
             if (min_f == max_f || zero_pair) && (self.exclude_min || self.exclude_max) {
                 invalid_argument!(
-                    "InvalidArgument: exclude_min/exclude_max leave no \
+                    "InvalidArgument: min_value_exclusive/max_value_exclusive leave no \
                      {width}-bit floating-point values in [{min_f}, {max_f}]"
                 );
             }
         }
 
-        if self.exclude_min && !has_min {
-            invalid_argument!("InvalidArgument: Cannot have exclude_min=true without min_value");
-        }
-        if self.exclude_max && !has_max {
-            invalid_argument!("InvalidArgument: Cannot have exclude_max=true without max_value");
-        }
-
         if self.exclude_min && self.min.is_some_and(|v| v.to_f64() == f64::INFINITY) {
             invalid_argument!(
-                "InvalidArgument: exclude_min=true with min_value=+inf leaves \
+                "InvalidArgument: min_value_exclusive=+inf leaves \
                  no {width}-bit floating-point values"
             );
         }
         if self.exclude_max && self.max.is_some_and(|v| v.to_f64() == f64::NEG_INFINITY) {
             invalid_argument!(
-                "InvalidArgument: exclude_max=true with max_value=-inf leaves \
+                "InvalidArgument: max_value_exclusive=-inf leaves \
                  no {width}-bit floating-point values"
             );
         }

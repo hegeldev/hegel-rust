@@ -141,10 +141,6 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_settings_set_stateful_step_count(ctx, ptr::null_mut(), 1),
-            HEGEL_E_INVALID_HANDLE
-        );
-        assert_eq!(
             hegel_c::hegel_settings_set_verbosity(
                 ctx,
                 ptr::null_mut(),
@@ -678,15 +674,6 @@ fn out_of_range_enum_values_are_invalid_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("unknown verbosity"));
-        assert_eq!(
-            hegel_c::hegel_settings_set_stateful_step_count(ctx, s, 0),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("step count must be at least 1"));
-        assert_eq!(
-            hegel_c::hegel_settings_set_stateful_step_count(ctx, s, -3),
-            HEGEL_E_INVALID_ARG
-        );
 
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
@@ -1181,6 +1168,7 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 0,
                 2,
                 2,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             );
@@ -1279,6 +1267,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             0,
             1,
             1,
+            50,
             &mut machine,
             &mut out_concurrency,
         ));
@@ -1338,6 +1327,7 @@ fn primitives_after_overrun_all_report_stop_test() {
                 0,
                 1,
                 1,
+                50,
                 &mut post_overrun_machine,
                 &mut out_concurrency,
             ),
@@ -1416,6 +1406,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1448,7 +1439,6 @@ fn state_machine_and_primitive_boolean_paths() {
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
-        ok(hegel_c::hegel_settings_set_stateful_step_count(ctx, s, 10));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
@@ -1465,6 +1455,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 ptr::null_mut(),
                 &mut out_concurrency,
             ),
@@ -1482,6 +1473,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 ptr::null_mut(),
             ),
@@ -1500,6 +1492,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1519,6 +1512,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1538,6 +1532,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1557,6 +1552,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1576,6 +1572,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 1,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1595,6 +1592,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1613,6 +1611,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 0,
                 1,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1631,6 +1630,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 3,
                 2,
+                50,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1638,6 +1638,28 @@ fn state_machine_and_primitive_boolean_paths() {
         );
         assert!(last_error(ctx).contains("concurrency bounds must satisfy 1 <= min <= max"));
 
+        for step_count in [0, -3] {
+            assert_eq!(
+                hegel_new_state_machine(
+                    ctx,
+                    tc,
+                    rules.as_ptr(),
+                    rule_groups.as_ptr(),
+                    1,
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    1,
+                    1,
+                    step_count,
+                    &mut machine,
+                    &mut out_concurrency,
+                ),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("step count must be at least 1"));
+            assert!(machine.is_null());
+        }
         assert_eq!(
             hegel_new_state_machine(
                 ctx,
@@ -1650,6 +1672,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 1,
                 1,
+                10,
                 &mut machine,
                 &mut out_concurrency,
             ),
@@ -1708,7 +1731,7 @@ fn state_machine_and_primitive_boolean_paths() {
             rounds += 1;
             assert!(
                 rounds <= 11,
-                "at most stateful_step_count counted rounds plus one rejected round"
+                "at most step_count counted rounds plus one rejected round"
             );
             assert_eq!(
                 hegel_state_machine_next_rule(ctx, tc, machine, 1, &mut rule_idx),
@@ -1759,6 +1782,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 1,
                 1,
                 1,
+                50,
                 &mut checked,
                 &mut out_concurrency,
             ),
@@ -1812,6 +1836,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 1,
                 1,
                 1,
+                50,
                 &mut always_checked,
                 &mut out_concurrency,
             ),
@@ -1846,6 +1871,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 2,
                 4,
+                50,
                 &mut ranged,
                 &mut out_concurrency,
             ),
@@ -1889,6 +1915,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 0,
                 2,
                 4,
+                50,
                 &mut ranged,
                 &mut out_concurrency,
             ),
@@ -2495,6 +2522,7 @@ fn object_handles_are_freed_safely_after_the_run() {
             0,
             1,
             1,
+            50,
             &mut machine,
             &mut out_concurrency,
         ));

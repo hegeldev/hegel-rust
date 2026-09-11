@@ -4,7 +4,7 @@
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
 //! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
 //! and final state, and sampled in between — each invariant runs after any given rule with
-//! probability `1 / stateful_step_count`, so its expected cost per test case stays constant
+//! probability `1 / step_count`, so its expected cost per test case stays constant
 //! as the step count grows). `#[invariant(always_run)]` opts an invariant out of the
 //! sampling: it runs after every rule, for invariants that must observe every intermediate
 //! state or that mutate state when checked.
@@ -12,7 +12,9 @@
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
 //!
-//! To run a state machine, call [`run()`] inside a Hegel test.
+//! To run a state machine, wrap it with [`machine()`] and call [`Machine::run`]
+//! inside a Hegel test. By default it runs up to [`DEFAULT_STEP_COUNT`] rules
+//! per test case; [`Machine::steps`] changes that.
 //!
 //! Example:
 //! ```rust
@@ -67,7 +69,7 @@
 //! #[hegel::test]
 //! fn test_integer_stack(tc: TestCase) {
 //!     let stack = IntegerStack { stack: Vec::new() };
-//!     hegel::stateful::run(stack, tc);
+//!     hegel::stateful::machine(stack).run(tc);
 //! }
 //! ```
 //!
@@ -86,7 +88,7 @@
 //! Concurrent state machines are defined using the
 //! [`concurrent_state_machine`](crate::concurrent_state_machine) attribute macro. These work
 //! similarly, but the rules are run concurrently from a number of worker threads. See
-//! [`run_concurrent()`] for a detailed explanation of the execution model.
+//! [`Machine::run_concurrent`] for a detailed explanation of the execution model.
 //!
 //! Example:
 //! ```rust
@@ -133,12 +135,9 @@
 //!         stack: Mutex::new(Vec::new()),
 //!         pushes: AtomicUsize::new(0),
 //!     };
-//!     hegel::stateful::run_concurrent(
-//!         stack,
-//!         tc,
-//!         1,          // minimum concurrency
-//!         3           // maximum concurrency
-//!     );
+//!     hegel::stateful::machine(stack)
+//!         .max_concurrency(3)
+//!         .run_concurrent(tc);
 //! }
 //! ```
 
@@ -151,7 +150,7 @@ use crate::ffi::{PoolHandle, StateMachineHandle};
 use crate::generators::Generator;
 use crate::run_lifecycle::{self, PanicInfo};
 use crate::test_case::{labels, raise_for_rc};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Mutex, mpsc};
@@ -163,21 +162,6 @@ use std::sync::{Mutex, mpsc};
 /// overlap with any named group's rules (see
 /// [`ConcurrentStateMachine`]).
 pub const ANONYMOUS_GROUP: &str = "<anonymous>";
-
-thread_local! {
-    /// The worker-thread index [`run_concurrent`] assigns to each of its
-    /// worker threads, used to tag that worker's draw/note output lines.
-    /// `None` outside a concurrent stateful worker.
-    static WORKER_INDEX: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-/// The calling thread's concurrent-worker index, if it is one of
-/// [`run_concurrent`]'s worker threads. Read by the output machinery to tag
-/// each worker line with its worker's index and time offset, and to regroup
-/// the failure report's buffered lines worker by worker within each round.
-pub(crate) fn current_worker_index() -> Option<usize> {
-    WORKER_INDEX.with(|cell| cell.get())
-}
 
 /// A rule that can be applied to the state machine during testing.
 pub struct Rule<M: ?Sized> {
@@ -363,7 +347,7 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
     }
 }
 
-/// A pool of previously generated values that [`run_concurrent`]'s worker
+/// A pool of previously generated values that [`Machine::run_concurrent`]'s worker
 /// threads may share.
 ///
 /// The concurrent counterpart of [`Pool`], designed for `&self` access from
@@ -372,7 +356,7 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
 /// [`values_reusable`](ConcurrentPool::values_reusable) /
 /// [`values_consumed`](ConcurrentPool::values_consumed) from any worker.
 /// `ConcurrentPool<T>` is `Sync` whenever `T: Send`, so a model holding one
-/// satisfies [`run_concurrent`]'s `Sync` bound.
+/// satisfies [`Machine::run_concurrent`]'s `Sync` bound.
 ///
 /// The engine performs each pool draw's empty check, selection, and
 /// consumption atomically, so concurrent workers cannot double-consume a
@@ -531,7 +515,7 @@ pub trait StateMachine {
     fn rules(&self) -> Vec<Rule<Self>>;
     /// Invariants: checked on the machine's initial and final state, and
     /// sampled after rules in between with probability
-    /// `1 / stateful_step_count` each — except invariants whose
+    /// `1 / step_count` each — except invariants whose
     /// [`always_run`](Invariant::always_run) flag is set, which run after
     /// every rule.
     fn invariants(&self) -> Vec<Invariant<Self>>;
@@ -617,7 +601,7 @@ fn machine_rule_rejected(tc: &TestCase, machine: &StateMachineHandle, worker_ind
 /// Ask the engine whether invariant `invariant_index` should run at the
 /// current join point — true unconditionally for an invariant registered
 /// always-run, otherwise a recorded draw that is true with probability
-/// `1 / stateful_step_count`, making a sampled invariant's expected sampled
+/// `1 / step_count`, making a sampled invariant's expected sampled
 /// runs per test case one regardless of step count.
 fn machine_should_check_invariant(
     tc: &TestCase,
@@ -630,22 +614,210 @@ fn machine_should_check_invariant(
     }
 }
 
-/// Execute a stateful test by repeatedly applying random rules and checking invariants.
+/// The step count a fresh [`Machine`] uses: the target number of rules
+/// (rounds, for a concurrent machine) per test case.
+pub const DEFAULT_STEP_COUNT: i64 = 50;
+
+/// A state machine model paired with the configuration for running it: the
+/// step count and, for concurrent machines, the concurrency bounds. Wrap the
+/// model with [`machine()`] (or [`Machine::new`]), adjust the configuration
+/// with the builder methods, and finish with [`Machine::run`] for a
+/// [`StateMachine`] or [`Machine::run_concurrent`] for a
+/// [`ConcurrentStateMachine`].
 ///
-/// A sequential machine is the special case of the engine's concurrent
-/// state-machine protocol with a single group and concurrency 1: the engine
-/// hands out exactly one rule per round, so the join points where sampled
-/// invariant checks may run fall after each rule. Invariants run in full on
-/// the machine's initial and final state; in between, each invariant runs at
-/// a join point only when the engine's sampling draw (probability
-/// `1 / stateful_step_count`) says to, keeping an invariant's expected cost
-/// per test case constant as the step count grows — except always-run
-/// invariants (`#[invariant(always_run)]`), which run at every join point.
-/// One consequence of the
-/// join-point timing: a sampled check can land after a rule that stopped on
-/// a violated assumption (rules are expected to reject before mutating the
-/// model, and nothing restores model state on rejection anyway).
-pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
+/// The concurrency bounds default to 1 and exist only for concurrent models:
+/// [`Machine::min_concurrency`] and [`Machine::max_concurrency`] are defined
+/// when `M: ConcurrentStateMachine`, so a sequential machine cannot be given
+/// bounds it would ignore.
+///
+/// # Example
+///
+/// ```no_run
+/// use hegel::TestCase;
+/// use hegel::stateful::machine;
+///
+/// struct Counter {
+///     value: u32,
+/// }
+///
+/// #[hegel::state_machine]
+/// impl Counter {
+///     #[rule]
+///     fn increment(&mut self, _: TestCase) {
+///         self.value += 1;
+///     }
+/// }
+///
+/// #[hegel::test]
+/// fn test_counter(tc: TestCase) {
+///     machine(Counter { value: 0 }).steps(200).run(tc);
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct Machine<M> {
+    model: M,
+    step_count: i64,
+    min_concurrency: i64,
+    max_concurrency: i64,
+}
+
+/// Shorthand for [`Machine::new`]: wrap `model` with the default step count
+/// and concurrency bounds, ready for the builder methods.
+pub fn machine<M>(model: M) -> Machine<M> {
+    Machine::new(model)
+}
+
+impl<M> Machine<M> {
+    /// Wrap `model` with the defaults: [`DEFAULT_STEP_COUNT`] steps and a
+    /// minimum and maximum concurrency of 1.
+    pub fn new(model: M) -> Self {
+        Machine {
+            model,
+            step_count: DEFAULT_STEP_COUNT,
+            min_concurrency: 1,
+            max_concurrency: 1,
+        }
+    }
+
+    /// Set the target number of steps per test case: every case runs at
+    /// least one step and at most `step_count`. For a sequential machine a
+    /// step is one completed rule (rules that stop on a violated assumption
+    /// do not count); for a concurrent machine it is one round. Each sampled
+    /// invariant runs after any given step with probability
+    /// `1 / step_count`. Most test cases run the full `step_count`; the
+    /// shrinker is free to shorten a failing one. The count must be at least
+    /// 1, or the run fails with a usage error.
+    pub fn steps(mut self, step_count: i64) -> Self {
+        self.step_count = step_count;
+        self
+    }
+}
+
+impl<M: StateMachine> Machine<M> {
+    /// Execute a stateful test by repeatedly applying random rules and checking invariants.
+    ///
+    /// A sequential machine is the special case of the engine's concurrent
+    /// state-machine protocol with a single group and concurrency 1: the engine
+    /// hands out exactly one rule per round, so the join points where sampled
+    /// invariant checks may run fall after each rule. Invariants run in full on
+    /// the machine's initial and final state; in between, each invariant runs at
+    /// a join point only when the engine's sampling draw (probability
+    /// `1 / step_count`) says to, keeping an invariant's expected cost
+    /// per test case constant as the step count grows — except always-run
+    /// invariants (`#[invariant(always_run)]`), which run at every join point.
+    /// One consequence of the
+    /// join-point timing: a sampled check can land after a rule that stopped on
+    /// a violated assumption (rules are expected to reject before mutating the
+    /// model, and nothing restores model state on rejection anyway).
+    ///
+    /// Each test case runs at least one rule and at most this machine's step
+    /// count ([`Self::steps`]).
+    pub fn run(self, tc: TestCase) {
+        run_sequential(self.model, tc, self.step_count)
+    }
+}
+
+impl<M: ConcurrentStateMachine + Sync> Machine<M> {
+    /// Set the minimum number of worker threads [`Self::run_concurrent`]
+    /// uses (default 1). The level is drawn per test case in
+    /// `[min_concurrency, max_concurrency]`, weighted toward the maximum
+    /// (concurrency bugs need concurrency); set both bounds equal for a
+    /// fixed level. The bounds must satisfy
+    /// `1 <= min_concurrency <= max_concurrency`, or the run fails with a
+    /// usage error. Only concurrent models have concurrency bounds: this
+    /// method exists when `M: ConcurrentStateMachine`, so a sequential
+    /// machine cannot be given bounds it would ignore.
+    pub fn min_concurrency(mut self, min_concurrency: i64) -> Self {
+        self.min_concurrency = min_concurrency;
+        self
+    }
+
+    /// Set the maximum number of worker threads [`Self::run_concurrent`]
+    /// uses (default 1); see [`Self::min_concurrency`].
+    pub fn max_concurrency(mut self, max_concurrency: i64) -> Self {
+        self.max_concurrency = max_concurrency;
+        self
+    }
+
+    /// Execute a concurrent stateful test. Execution proceeds in *rounds*. For
+    /// each round, the engine picks a random concurrency group; every worker
+    /// thread then runs a short (possibly empty) random sequence of rules from
+    /// that group — and only that group — concurrently with the other workers. Rules in the same
+    /// group may overlap each other, and rules in different groups never
+    /// overlap. Once every worker has finished its rules for the round, the
+    /// main thread runs the invariants the engine's sampling draws select
+    /// (probability `1 / step_count` each, and always-run invariants
+    /// unconditionally); every invariant runs in full on the machine's initial
+    /// and final state. Each test case runs at most this machine's step count
+    /// ([`Self::steps`]) rounds.
+    ///
+    /// The number of worker threads is drawn per test case, when the state
+    /// machine is created, within this machine's concurrency bounds
+    /// ([`Self::min_concurrency`] and [`Self::max_concurrency`], both 1 by
+    /// default) and weighted toward the maximum (concurrency bugs need
+    /// concurrency); set equal bounds for a fixed level.
+    ///
+    /// # Nondeterminism
+    ///
+    /// Concurrency bugs are nondeterministic — thread scheduling is outside
+    /// Hegel's control — so running with a maximum concurrency above 1 makes
+    /// the whole run nondeterministic. Failures are reported from the
+    /// discovering execution, with no replay, shrinking, database persistence,
+    /// or reproduce blob, with at most one failure per run.
+    ///
+    /// # Abandoned rules and lock poisoning
+    ///
+    /// A rule abandoned mid-execution by a rejected assumption or a failed draw
+    /// can poison any lock `std::sync::Mutex` it was holding. To avoid this,
+    /// perform all draws upfront within each rule.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use std::sync::Mutex;
+    /// use hegel::TestCase;
+    /// use hegel::stateful::machine;
+    ///
+    /// struct CounterTest {
+    ///     counter: Mutex<i64>,
+    /// }
+    ///
+    /// #[hegel::concurrent_state_machine]
+    /// impl CounterTest {
+    ///     #[rule(group = "write")]
+    ///     fn increment(&self, _: TestCase) {
+    ///         *self.counter.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+    ///     }
+    ///
+    ///     #[rule(group = "read")]
+    ///     fn read(&self, _: TestCase) {
+    ///         let _ = *self.counter.lock().unwrap_or_else(|e| e.into_inner());
+    ///     }
+    ///
+    ///     #[invariant]
+    ///     fn non_negative(&self, _: TestCase) {
+    ///         assert!(*self.counter.lock().unwrap_or_else(|e| e.into_inner()) >= 0);
+    ///     }
+    /// }
+    ///
+    /// #[hegel::test]
+    /// fn test_counter(tc: TestCase) {
+    ///     let m = CounterTest { counter: Mutex::new(0) };
+    ///     machine(m).max_concurrency(3).run_concurrent(tc);
+    /// }
+    /// ```
+    pub fn run_concurrent(self, tc: TestCase) {
+        run_concurrent_machine(
+            self.model,
+            tc,
+            self.min_concurrency,
+            self.max_concurrency,
+            self.step_count,
+        )
+    }
+}
+
+fn run_sequential<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let rule_groups = vec![0i64; rules.len()];
@@ -660,6 +832,7 @@ pub fn run<M: StateMachine>(mut m: M, tc: TestCase) {
             &invariant_always_check,
             1,
             1,
+            step_count,
         )
     }) {
         Ok((handle, _)) => handle,
@@ -790,7 +963,7 @@ impl<M> ConcurrentInvariant<M> {
 /// assignments, and the invariants of a model whose rules may run
 /// *concurrently* against the system under test. Use
 /// `#[hegel::concurrent_state_machine]` for a more ergonomic way to define
-/// concurrent state machines, and [`run_concurrent`] to run one.
+/// concurrent state machines, and [`Machine::run_concurrent`] to run one.
 ///
 /// # Groups
 ///
@@ -815,7 +988,7 @@ pub trait ConcurrentStateMachine {
     /// Invariants, run on the main thread while the worker threads are
     /// parked: checked on the machine's initial and final state, and
     /// sampled at the join points in between with probability
-    /// `1 / stateful_step_count` each — except invariants whose
+    /// `1 / step_count` each — except invariants whose
     /// [`always_run`](ConcurrentInvariant::always_run) flag is set, which
     /// run at every join point.
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>>;
@@ -969,7 +1142,8 @@ fn run_worker_round<M: ConcurrentStateMachine + ?Sized>(
 /// round lands — is anchored under the header that labels the round.
 /// Cloning once per worker up front would instead pool a worker's output
 /// across all rounds at its single anchor, detaching the headers from the
-/// rounds they label.
+/// rounds they label. The clone is attributed to this worker, so the engine
+/// stamps each of its lines `[worker N +X.XXXms] `.
 ///
 /// The closed channel is what terminates workers: the main thread holds
 /// the senders as locals of its `thread::scope` body, so *any* exit from
@@ -986,7 +1160,6 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     rounds: mpsc::Receiver<TestCase>,
     events: mpsc::Sender<WorkerEvent>,
 ) {
-    WORKER_INDEX.with(|cell| cell.set(Some(worker)));
     run_lifecycle::set_backtrace_capture(capture_backtraces);
     with_test_context(|| {
         while let Ok(tc) = rounds.recv() {
@@ -998,76 +1171,12 @@ fn worker_loop<M: ConcurrentStateMachine + ?Sized>(
     });
 }
 
-/// Execute a concurrent stateful test. Execution proceeds in *rounds*. For
-/// each round, the engine picks a random concurrency group; every worker
-/// thread then runs a short (possibly empty) random sequence of rules from
-/// that group — and only that group — concurrently with the other workers. Rules in the same
-/// group may overlap each other, and rules in different groups never
-/// overlap. Once every worker has finished its rules for the round, the
-/// main thread runs the invariants the engine's sampling draws select
-/// (probability `1 / stateful_step_count` each, and always-run invariants
-/// unconditionally); every invariant runs in full on the machine's initial
-/// and final state.
-///
-/// The number of worker threads is drawn per test case, when the state
-/// machine is created, in `[min_concurrency, max_concurrency]` and weighted
-/// toward `max_concurrency` (concurrency bugs need concurrency); pass
-/// `min_concurrency == max_concurrency` for a fixed level.
-///
-/// # Nondeterminism
-///
-/// Concurrency bugs are nondeterministic — thread scheduling is outside
-/// Hegel's control — so calling `run_concurrent` with `max_concurrency > 1`
-/// makes the whole run nondeterministic. Failures are reported from the
-/// discovering execution, with no replay, shrinking, database persistence,
-/// or reproduce blob, with at most one failure per run.
-///
-/// # Abandoned rules and lock poisoning
-///
-/// A rule abandoned mid-execution by a rejected assumption or a failed draw
-/// can poison any lock `std::sync::Mutex` it was holding. To avoid this,
-/// perform all draws upfront within each rule.
-///
-/// # Example
-///
-/// ```no_run
-/// use std::sync::Mutex;
-/// use hegel::TestCase;
-/// use hegel::generators as gs;
-///
-/// struct CounterTest {
-///     counter: Mutex<i64>,
-/// }
-///
-/// #[hegel::concurrent_state_machine]
-/// impl CounterTest {
-///     #[rule(group = "write")]
-///     fn increment(&self, _: TestCase) {
-///         *self.counter.lock().unwrap_or_else(|e| e.into_inner()) += 1;
-///     }
-///
-///     #[rule(group = "read")]
-///     fn read(&self, _: TestCase) {
-///         let _ = *self.counter.lock().unwrap_or_else(|e| e.into_inner());
-///     }
-///
-///     #[invariant]
-///     fn non_negative(&self, _: TestCase) {
-///         assert!(*self.counter.lock().unwrap_or_else(|e| e.into_inner()) >= 0);
-///     }
-/// }
-///
-/// #[hegel::test]
-/// fn test_counter(tc: TestCase) {
-///     let m = CounterTest { counter: Mutex::new(0) };
-///     hegel::stateful::run_concurrent(m, tc, 1, 3);
-/// }
-/// ```
-pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
+fn run_concurrent_machine<M: ConcurrentStateMachine + Sync>(
     m: M,
     tc: TestCase,
     min_concurrency: i64,
     max_concurrency: i64,
+    step_count: i64,
 ) {
     let rules = m.rules();
     let invariants = m.invariants();
@@ -1095,6 +1204,7 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
             &invariant_always_check,
             min_concurrency,
             max_concurrency,
+            step_count,
         )
     }) {
         Ok(created) => created,
@@ -1146,8 +1256,10 @@ pub fn run_concurrent<M: ConcurrentStateMachine + Sync>(
                 group_names[group]
             ));
 
-            for tx in &round_txs {
-                let _ = tx.send(tc.clone());
+            for (worker, tx) in round_txs.iter().enumerate() {
+                let worker_tc = tc.clone();
+                worker_tc.with_ctc(|ctc| ctc.set_worker(worker as i64));
+                let _ = tx.send(worker_tc);
             }
             let events: Vec<WorkerEvent> = event_rxs
                 .iter()

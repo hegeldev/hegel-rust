@@ -1,4 +1,5 @@
 use crate::backend::RunError;
+#[cfg(not(target_family = "wasm"))]
 use alloc::format;
 use alloc::string::String;
 
@@ -14,6 +15,10 @@ pub(crate) fn antithesis_env_var_set() -> bool {
 }
 
 pub(crate) fn is_running_in_antithesis() -> Result<bool, RunError> {
+    #[cfg(target_family = "wasm")]
+    return Ok(false);
+
+    #[cfg(not(target_family = "wasm"))]
     is_running_in_antithesis_from(crate::sys::env_var)
 }
 
@@ -27,6 +32,7 @@ fn antithesis_output_dir_from(env: impl Fn(&str) -> Option<String>) -> Option<St
 /// [`is_running_in_antithesis`] with the environment read injected, so the
 /// inside-Antithesis path can be unit-tested without mutating the process
 /// environment.
+#[cfg(not(target_family = "wasm"))]
 fn is_running_in_antithesis_from(env: impl Fn(&str) -> Option<String>) -> Result<bool, RunError> {
     match antithesis_output_dir_from(env) {
         Some(output_dir) => check_antithesis_output_dir(&output_dir),
@@ -37,7 +43,9 @@ fn is_running_in_antithesis_from(env: impl Fn(&str) -> Option<String>) -> Result
 /// Validate the directory `ANTITHESIS_OUTPUT_DIR` points at. A missing
 /// directory is a configuration error in how the process was launched —
 /// reported as a run-level [`RunError::UsageError`], not an internal
-/// invariant.
+/// invariant. Split from the env read so it can be unit-tested without
+/// mutating the process environment.
+#[cfg(not(target_family = "wasm"))]
 fn check_antithesis_output_dir(output_dir: &str) -> Result<bool, RunError> {
     if !crate::sys::fs::exists(output_dir) {
         return Err(RunError::UsageError(format!(
@@ -47,6 +55,6 @@ fn check_antithesis_output_dir(output_dir: &str) -> Result<bool, RunError> {
     Ok(true)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../tests/embedded/antithesis_detect_tests.rs"]
 mod tests;

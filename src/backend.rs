@@ -5,10 +5,11 @@
 //! to the engine crate. What remains is the small currency the lifecycle
 //! itself speaks: the result of running one test case, and the failure it
 //! carries. `crate::run_lifecycle::run_test_case` builds these from a caught
-//! panic; `crate::test_case::TestCase::mark_complete` translates them into a
-//! `hegel_mark_complete` status (plus, for a failure, its bug origin), and the
-//! richer failure data (panic message, reproduce blob) is read back out of the
-//! run result afterward as a `crate::ffi::Failure`.
+//! panic and its `report_outcome` translates them into a `hegel_mark_complete`
+//! status (plus, for a failure, its bug origin). Nothing here outlives the
+//! test case it classifies: what the engine made of the report — the origin
+//! it grouped the bug under, the reproduce blob — is read back out of the run
+//! result afterward as a `crate::ffi::Failure`.
 
 /// A single failing test case the lifecycle has classified.
 ///

@@ -11,7 +11,7 @@
 
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::{ConcurrentPool, concurrent_pool, run_concurrent};
+use hegel::stateful::{ConcurrentPool, concurrent_pool, machine};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -108,12 +108,12 @@ impl KvTest {
 
 #[hegel::test]
 fn test_concurrent_kv_store(tc: TestCase) {
-    let test = KvTest {
+    let m = KvTest {
         store: KvStore::new(),
         keys: concurrent_pool(&tc),
         increments: AtomicI64::new(0),
     };
-    run_concurrent(test, tc, 1, 4);
+    machine(m).max_concurrency(4).run_concurrent(tc);
 }
 
 fn main() {}

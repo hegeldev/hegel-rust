@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use once_cell::race::OnceBox;
 
@@ -1359,11 +1359,6 @@ pub struct FamilyCore {
     /// the label plus the numeric observation for `event_value`. Family-wide
     /// so clone-stream events land on the same test case.
     pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
-    /// Target number of rounds a stateful test case runs. Bounds the
-    /// per-round stop decision in [`NativeStateMachine::next_group`].
-    /// Defaults to 50, overridden per run from the `stateful_step_count`
-    /// setting.
-    stateful_step_count: AtomicI64,
     /// Set when a state machine with `max_concurrency > 1` was requested on
     /// any stream of this family: the test asked for real concurrency, so
     /// its behaviour depends on thread scheduling and the run driving this
@@ -1402,7 +1397,6 @@ impl FamilyCore {
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
             events: Mutex::new(Vec::new()),
-            stateful_step_count: AtomicI64::new(50),
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(BTreeSet::new()),
@@ -1450,16 +1444,6 @@ impl FamilyCore {
             .get()
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Set the target number of steps a stateful test case runs.
-    pub(crate) fn set_stateful_step_count(&self, count: i64) {
-        self.stateful_step_count.store(count, Ordering::Relaxed);
-    }
-
-    /// The target number of steps a stateful test case runs.
-    pub(crate) fn stateful_step_count(&self) -> i64 {
-        self.stateful_step_count.load(Ordering::Relaxed)
     }
 
     /// The family's concluded status, or `None` while still running.
