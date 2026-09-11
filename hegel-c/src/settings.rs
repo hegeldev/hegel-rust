@@ -13,7 +13,8 @@ pub enum HealthCheck {
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
+    /// Generated test cases are too large. Suppressing this check also
+    /// removes the per-test-case choice limit (see [`Settings::max_choices`]).
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -214,18 +215,24 @@ impl Settings {
     /// A test case that reaches the limit is concluded as an overrun: the
     /// draw that would exceed it fails, the case is discarded, and enough
     /// overruns trip the [`HealthCheck::TestCasesTooLarge`] and
-    /// [`HealthCheck::LargeInitialTestCase`] health checks. Removing the
-    /// limit lets a long-running test case — a concurrent state machine
-    /// exercised for hours, say — keep drawing indefinitely, at the cost of
-    /// the memory to record every choice it makes.
+    /// [`HealthCheck::LargeInitialTestCase`] health checks. The limit is
+    /// therefore tied to `TestCasesTooLarge`: suppressing that check removes
+    /// the limit whatever this is set to, letting a long-running test case —
+    /// a concurrent state machine exercised for hours, say — keep drawing
+    /// indefinitely, at the cost of the memory to record every choice it
+    /// makes.
     pub fn max_choices(mut self, max_choices: usize) -> Self {
         self.max_choices = max_choices;
         self
     }
 
-    /// The effective per-test-case choice bound: [`Settings::max_choices`],
-    /// with 0 as `usize::MAX`.
+    /// The effective per-test-case choice bound: `usize::MAX` when
+    /// [`HealthCheck::TestCasesTooLarge`] is suppressed or
+    /// [`Settings::max_choices`] is 0, and `max_choices` otherwise.
     pub(crate) fn choice_bound(&self) -> usize {
+        if self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
+            return usize::MAX;
+        }
         match self.max_choices {
             0 => usize::MAX,
             n => n,

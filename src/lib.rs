@@ -735,11 +735,11 @@ pub use hegel_macros::test_helper;
 /// suppressed: both judge how a run accumulates valid test cases, which a
 /// run of exactly one cannot be judged on. `FilterTooMuch` applies as usual.
 ///
-/// The one test case has no choice limit by default — a binary's test case
-/// is often meant to run for a long time, as when it drives a concurrent
-/// state machine — so it is never stopped as an overrun. Pass
-/// `unlimited_choices = false` as an attribute arg to restore the limit; see
-/// [`Settings::unlimited_choices`].
+/// Because `TestCasesTooLarge` is suppressed, the one test case also has no
+/// limit on the number of choices it may make — a binary's test case is
+/// often meant to run for a long time, as when it drives a concurrent state
+/// machine — so it is never stopped as an overrun. See
+/// [`Settings::suppress_health_check`].
 ///
 /// Supported CLI flags (with defaults taken from the attribute args):
 /// `--seed`, `--verbosity`, `--derandomize`, `--database`,

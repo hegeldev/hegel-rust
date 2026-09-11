@@ -270,48 +270,9 @@ fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
 }
 
 #[test]
-fn test_settings_for_single_test_case_removes_the_choice_limit_unless_set() {
-    assert_eq!(Settings::new().choice_limit, ChoiceLimit::Unset);
-    assert_eq!(
-        Settings::new().for_single_test_case().choice_limit,
-        ChoiceLimit::Unlimited
-    );
-    assert_eq!(
-        Settings::new()
-            .unlimited_choices(false)
-            .for_single_test_case()
-            .choice_limit,
-        ChoiceLimit::EngineDefault
-    );
-    assert_eq!(
-        Settings::new()
-            .unlimited_choices(true)
-            .for_single_test_case()
-            .choice_limit,
-        ChoiceLimit::Unlimited
-    );
-    assert_eq!(
-        Settings::new()
-            .__max_choices(10)
-            .for_single_test_case()
-            .choice_limit,
-        ChoiceLimit::Explicit(10)
-    );
-}
-
-#[test]
-fn hegel_run_accepts_the_engine_default_choice_limit_explicitly() {
-    use crate::generators as gs;
-    Hegel::new(|tc: TestCase| {
-        tc.draw(gs::booleans());
-    })
-    .settings(
-        Settings::new()
-            .test_cases(3)
-            .unlimited_choices(false)
-            .verbosity(Verbosity::Quiet),
-    )
-    .run();
+fn test_settings_max_choices_is_unset_until_asked_for() {
+    assert_eq!(Settings::new().max_choices, None);
+    assert_eq!(Settings::new().__max_choices(10).max_choices, Some(10));
 }
 
 #[test]

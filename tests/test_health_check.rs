@@ -223,13 +223,23 @@ mod size_checks {
         );
     }
 
-    /// `unlimited_choices = true` is accepted as an attribute arg and
-    /// forwarded to the engine; the run completes as usual.
-    #[hegel::test(test_cases = 5, database = None, unlimited_choices = true)]
-    fn unlimited_choices_is_accepted(tc: hegel::TestCase) {
-        for _ in 0..2000 {
-            tc.draw_silent(gs::booleans());
-        }
+    /// Suppressing TestCasesTooLarge removes the choice limit outright: a
+    /// case drawing far past an explicit limit of 10 completes.
+    #[test]
+    fn suppressing_test_cases_too_large_removes_the_limit() {
+        Hegel::new(|tc: hegel::TestCase| {
+            for _ in 0..2000 {
+                tc.draw_silent(gs::booleans());
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(5)
+                .database(None)
+                .__max_choices(10)
+                .suppress_health_check([HealthCheck::TestCasesTooLarge]),
+        )
+        .run();
     }
 
     /// With LargeInitialTestCase suppressed, the generation loop keeps

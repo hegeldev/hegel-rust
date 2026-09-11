@@ -154,3 +154,17 @@ fn max_choices_defaults_to_buffer_size_and_can_be_removed() {
     assert_eq!(s.max_choices, 0);
     assert_eq!(s.choice_bound(), usize::MAX);
 }
+
+#[test]
+fn suppressing_test_cases_too_large_removes_the_choice_bound() {
+    let s = Settings::new()
+        .max_choices(7)
+        .suppress_health_check([HealthCheck::TestCasesTooLarge]);
+    assert_eq!(s.choice_bound(), usize::MAX);
+    let s = Settings::for_env(false, true).max_choices(7);
+    assert_eq!(s.choice_bound(), usize::MAX);
+    let s = Settings::new()
+        .max_choices(7)
+        .suppress_health_check([HealthCheck::TooSlow]);
+    assert_eq!(s.choice_bound(), 7);
+}

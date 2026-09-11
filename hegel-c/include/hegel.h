@@ -977,10 +977,12 @@ hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
    and clone steps) one test case may make before it is concluded as an
    overrun: the draw that would exceed the bound returns
    `HEGEL_E_STOP_TEST`, and the frontend reports the case with
-   `HEGEL_STATUS_OVERRUN`. Defaults to 2^20. 0 removes the limit: test
-   cases are then unbounded, which a long-running test case — a
-   concurrent state machine driven for hours, say — needs; the cost is
-   the memory to record every choice it makes.
+   `HEGEL_STATUS_OVERRUN`. Defaults to 2^20. 0 removes the limit, as
+   does suppressing the `TestCasesTooLarge` health check (see
+   `hegel_settings_set_suppress_health_check`): test cases are then
+   unbounded, which a long-running test case — a concurrent state
+   machine driven for hours, say — needs; the cost is the memory to
+   record every choice it makes.
 
  Returns `HEGEL_OK`.
  */
