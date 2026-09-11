@@ -308,3 +308,93 @@ fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
     let _first = run.next_test_case().unwrap();
     run.next_test_case();
 }
+
+#[test]
+fn ffi_settings_round_trip_every_field_through_registration() {
+    use crate::runner::{Database, HealthCheck, Phase, Verbosity};
+    let original = Settings::from_profile("base")
+        .test_cases(7)
+        .verbosity(Verbosity::Debug)
+        .seed(Some(11))
+        .derandomize(true)
+        .database(Some("some/db".to_string()))
+        .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch])
+        .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
+        .show_statistics(true)
+        .print_blob(true)
+        .backend(Backend::Urandom);
+    register_profile("ffi_tests_round_trip", &original).unwrap();
+    let restored = settings_from_profile(Some("ffi_tests_round_trip")).unwrap();
+    assert_eq!(restored.test_cases, 7);
+    assert_eq!(restored.verbosity, crate::runner::Verbosity::Debug);
+    assert_eq!(restored.seed, Some(11));
+    assert!(restored.derandomize);
+    assert_eq!(restored.database, Database::Path("some/db".to_string()));
+    assert_eq!(
+        restored.suppress_health_check,
+        vec![HealthCheck::FilterTooMuch, HealthCheck::TooSlow],
+        "the bitmask reads back in canonical order"
+    );
+    assert_eq!(restored.phases, vec![Phase::Reuse, Phase::Shrink]);
+    assert!(restored.report_multiple_failures);
+    assert!(restored.show_statistics);
+    assert!(restored.print_blob);
+    assert_eq!(restored.backend, Backend::Urandom);
+}
+
+#[test]
+fn ffi_settings_round_trip_the_remaining_enum_values() {
+    use crate::runner::Verbosity;
+    for verbosity in [Verbosity::Quiet, Verbosity::Verbose] {
+        let original = Settings::from_profile("base")
+            .verbosity(verbosity)
+            .backend(Backend::Default);
+        register_profile("ffi_tests_enum_values", &original).unwrap();
+        let restored = settings_from_profile(Some("ffi_tests_enum_values")).unwrap();
+        assert_eq!(restored.verbosity, verbosity);
+        assert_eq!(restored.backend, Backend::Default);
+    }
+}
+
+#[test]
+fn ffi_settings_build_preserves_an_unset_database() {
+    use crate::runner::Database;
+    let unset = Settings::from_profile("base");
+    assert_eq!(unset.database, Database::Unset);
+    register_profile("ffi_tests_unset_database", &unset).unwrap();
+    let restored = settings_from_profile(Some("ffi_tests_unset_database")).unwrap();
+    assert_eq!(
+        restored.database,
+        Database::Unset,
+        "build() must forward Unset rather than inheriting the ambient profile's database"
+    );
+}
+
+#[test]
+fn ffi_settings_from_profile_reports_engine_errors() {
+    let e = settings_from_profile(Some("ffi_tests_no_such_profile")).unwrap_err();
+    assert!(
+        e.contains("unknown settings profile \"ffi_tests_no_such_profile\""),
+        "got: {e}"
+    );
+}
+
+#[test]
+fn ffi_register_profile_reports_engine_errors() {
+    let e = register_profile("bad name", &Settings::from_profile("base")).unwrap_err();
+    assert!(e.contains("invalid profile name"), "got: {e}");
+}
+
+#[test]
+fn ffi_set_default_profile_reports_engine_errors() {
+    let e = set_default_profile(Some("bad name")).unwrap_err();
+    assert!(e.contains("invalid profile name"), "got: {e}");
+}
+
+/// Clearing when no override is set is a no-op, so this cannot disturb
+/// tests running in parallel; setting a real override in-process could.
+#[test]
+fn ffi_set_default_profile_accepts_a_clear() {
+    set_default_profile(None).unwrap();
+}

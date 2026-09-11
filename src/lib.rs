@@ -192,6 +192,41 @@
 //! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
 //! ```
 //!
+//! ## Settings profiles
+//!
+//! Suite-wide settings live in named *profiles*. Hegel ships three:
+//! `development` (what local runs get), `ci` (selected automatically on CI
+//! servers), and `workload` (selected automatically inside
+//! [Antithesis](https://antithesis.com/)). Modify them or define your own
+//! in a `hegel.toml` at your package or workspace root:
+//!
+//! ```toml
+//! [profiles.development]
+//! test_cases = 200
+//!
+//! [profiles.nightly]
+//! test_cases = 10000
+//! ```
+//!
+//! A profile layers over whichever profile the environment selects, so on
+//! CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` →
+//! `development`, unless it pins a parent with `extends`. Select one for a
+//! test with
+//! `#[hegel::test(profile = "nightly")]`, or as the suite-wide default with
+//! a `default = "nightly"` entry at the top of `hegel.toml` or the
+//! `HEGEL_DEFAULT_PROFILE` environment variable:
+//!
+//! ```bash
+//! HEGEL_DEFAULT_PROFILE=nightly cargo test
+//! ```
+//!
+//! The [`docs::settings`] page covers the whole settings system: every
+//! setting, the layers it can be set in and how they combine, what each
+//! shipped profile sets, the reserved `base` and `default` names, profile
+//! inheritance, every `hegel.toml` key, the `HEGEL_CONFIG` variable for
+//! naming the config file directly, and the programmatic
+//! [`Settings::register_profile`] and [`Settings::set_default_profile`].
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
@@ -271,6 +306,7 @@ pub(crate) mod antithesis;
 pub mod backend;
 pub(crate) mod cli;
 pub(crate) mod control;
+pub mod docs;
 #[doc(hidden)]
 pub mod explicit_test_case;
 pub mod extras;
@@ -673,6 +709,11 @@ pub use hegel_macros::concurrent_state_machine;
 /// }
 /// ```
 ///
+/// `profile = "<name>"` is special: it makes the remaining attribute args
+/// build on [`Settings::from_profile`] instead of [`Settings::new`]. It
+/// cannot be combined with a positional settings expression, which is
+/// already a complete starting point.
+///
 /// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
 ///
 /// ```no_run
@@ -736,8 +777,11 @@ pub use hegel_macros::test_helper;
 /// run of exactly one cannot be judged on. `FilterTooMuch` applies as usual.
 ///
 /// Supported CLI flags (with defaults taken from the attribute args):
-/// `--seed`, `--verbosity`, `--derandomize`, `--database`,
-/// `--suppress-health-check`, `--backend`, `-h` / `--help`.
+/// `--profile`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `--backend`, `-h` / `--help`. `--profile`
+/// sets the process's default settings profile before the attribute args
+/// are evaluated, exactly like the `HEGEL_DEFAULT_PROFILE` environment
+/// variable, so compiled-in settings apply on top of the named profile.
 ///
 /// ```no_run
 /// use hegel::TestCase;
@@ -782,4 +826,4 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{Backend, HealthCheck, Hegel, Phase, Settings, Verbosity};
+pub use runner::{Backend, HealthCheck, Hegel, Phase, ProfileError, Settings, Verbosity};

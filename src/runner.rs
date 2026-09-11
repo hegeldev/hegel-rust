@@ -82,8 +82,8 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. When running inside Antithesis this
-    /// backend is selected automatically unless you set one explicitly.
+    /// and reproduce generation directly. The shipped `workload` settings
+    /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
     /// source differs. On platforms without `/dev/urandom` (Windows) it falls
@@ -111,16 +111,23 @@ pub enum Verbosity {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled,
-/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
-/// default.
+/// # Profiles
 ///
-/// Inside [Antithesis](https://antithesis.com/) (detected via
-/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
-/// by default: Antithesis owns reproduction, and its thread pausing would
-/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. The
-/// database can still be enabled explicitly with [`Settings::database`];
-/// health checks stay off.
+/// The values a `Settings` starts from come from a named *profile*,
+/// resolved by the engine. Two names are reserved: `base` is the immutable
+/// base settings, and `default` is the default profile — the one in effect
+/// when nothing names a profile, chosen by [`Settings::set_default_profile`],
+/// `HEGEL_DEFAULT_PROFILE`, or the `default` entry in `hegel.toml`, else by
+/// the environment (`workload` inside Antithesis, `ci` on a CI server,
+/// `development` locally). [`Settings::new`] resolves `default`;
+/// [`Settings::from_profile`] resolves a profile by name. Profiles are
+/// modified and defined in a `hegel.toml` at the package or workspace root,
+/// or registered with [`Settings::register_profile`].
+///
+/// The [`docs::settings`](crate::docs::settings) page covers the whole
+/// system: every setting and the layers it can be set in, the shipped
+/// profiles, inheritance, the `hegel.toml` format, and the programmatic
+/// API.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
@@ -133,56 +140,91 @@ pub struct Settings {
     pub(crate) report_multiple_failures: bool,
     pub(crate) show_statistics: bool,
     pub(crate) print_blob: bool,
-    /// The randomness backend, or `None` to let it be chosen automatically
-    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
-    /// [`Settings::backend`] always wins over the automatic choice.
-    pub(crate) backend: Option<Backend>,
+    pub(crate) backend: Backend,
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically;
-    /// Antithesis detection happens in the engine.
+    /// Create settings from the `default` profile described in the
+    /// [profiles](Settings#profiles) section. Panics when profile
+    /// resolution fails: a default-profile setting names an unknown
+    /// profile, or a `hegel.toml` is malformed.
     pub fn new() -> Self {
-        Self::for_ci(is_in_ci())
+        Self::from_resolution(crate::ffi::settings_from_profile(None))
     }
 
-    fn for_ci(in_ci: bool) -> Self {
-        Self {
-            test_cases: 100,
-            verbosity: Verbosity::Normal,
-            seed: None,
-            derandomize: in_ci,
-            database: if in_ci {
-                Database::Disabled
-            } else {
-                Database::Unset
-            },
-            suppress_health_check: if in_ci {
-                vec![HealthCheck::TooSlow]
-            } else {
-                Vec::new()
-            },
-            phases: vec![
-                Phase::Explicit,
-                Phase::Reuse,
-                Phase::Generate,
-                Phase::Target,
-                Phase::Shrink,
-            ],
-            report_multiple_failures: false,
-            show_statistics: false,
-            print_blob: false,
-            backend: None,
+    /// Create settings from the named profile: reserved (`base`,
+    /// `default`), shipped (`development`, `ci`, `workload`), defined in
+    /// `hegel.toml`, or registered with [`Settings::register_profile`].
+    /// Selecting a profile does not change what the default profile is, and
+    /// the named profile still implicitly extends `default`, so it layers
+    /// over the environment's profile — except `base`, which is always the
+    /// plain base settings. Panics when the profile is unknown or a
+    /// `hegel.toml` is malformed; [`Settings::try_from_profile`] reports
+    /// the failure as an `Err` instead.
+    pub fn from_profile(name: &str) -> Self {
+        Self::from_resolution(Self::try_from_profile(name).map_err(|e| e.message))
+    }
+
+    /// [`Settings::from_profile`], reporting resolution failure as an `Err`
+    /// carrying the engine's diagnostic instead of panicking.
+    pub fn try_from_profile(name: &str) -> Result<Self, ProfileError> {
+        crate::ffi::settings_from_profile(Some(name)).map_err(|message| ProfileError { message })
+    }
+
+    fn from_resolution(resolution: Result<Self, String>) -> Self {
+        resolution.unwrap_or_else(|message| crate::test_case::invalid_argument!("{message}"))
+    }
+
+    /// Set the default profile for the whole process: the profile
+    /// [`Settings::new`] resolves and profiles without `extends` layer
+    /// over. Takes precedence over `HEGEL_DEFAULT_PROFILE` and the
+    /// `default` entry in `hegel.toml`; the `--profile` flag of a
+    /// `#[hegel::main]` binary calls this. The name is not required to
+    /// exist yet.
+    ///
+    /// Like [`Settings::register_profile`] this is not retroactive, so it
+    /// must run before the tests that should see it; under `cargo test`
+    /// prefer the `default` entry in `hegel.toml`.
+    ///
+    /// Panics when `name` is not a valid profile name.
+    pub fn set_default_profile(name: &str) {
+        if let Err(message) = crate::ffi::set_default_profile(Some(name)) {
+            crate::test_case::invalid_argument!("{message}");
         }
     }
 
-    /// Select the randomness backend.
+    /// Register a complete snapshot of `settings` as the profile `name`,
+    /// process-wide, replacing any earlier registration of the same name.
+    /// Registering a shipped profile's name replaces that profile; a
+    /// `hegel.toml` section for `name` still merges on top of the snapshot.
     ///
-    /// By default the backend is chosen automatically: [`Backend::Urandom`]
-    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
-    /// Calling this pins the choice, overriding the automatic detection.
+    /// Registration is not retroactive (settings values already created
+    /// keep their fields), so it must run before the tests that use the
+    /// profile. A `#[hegel::main]` binary or an embedding controls that
+    /// ordering. Under `cargo test` there is no reliable pre-test hook, so
+    /// prefer `hegel.toml` there.
+    ///
+    /// Panics when `name` is not a valid profile name (ASCII letters,
+    /// digits, `-` and `_`) or is one of the reserved names `base` and
+    /// `default`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::Settings;
+    ///
+    /// Settings::register_profile("nightly", Settings::from_profile("ci").test_cases(10_000));
+    /// ```
+    pub fn register_profile(name: &str, settings: Settings) {
+        if let Err(message) = crate::ffi::register_profile(name, &settings) {
+            crate::test_case::invalid_argument!("{message}");
+        }
+    }
+
+    /// Select the randomness backend (base value: [`Backend::Default`]; the
+    /// shipped `workload` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
-        self.backend = Some(backend);
+        self.backend = backend;
         self
     }
 
@@ -210,7 +252,8 @@ impl Settings {
         self
     }
 
-    /// When true, use a fixed seed derived from the test name. Enabled by default in CI.
+    /// When true, use a fixed seed derived from the test name. Enabled by
+    /// the shipped `ci` profile.
     pub fn derandomize(mut self, derandomize: bool) -> Self {
         self.derandomize = derandomize;
         self
@@ -248,7 +291,9 @@ impl Settings {
     }
 
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`.
+    /// counterexample when a test fails. Defaults to `false`; the shipped
+    /// `ci` profile turns it on, since with the database disabled the blob
+    /// is the way to reproduce a CI failure locally.
     ///
     /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
     /// the failure output. Has effect only on the native backend.
@@ -376,6 +421,22 @@ pub(crate) enum Database {
     Path(String),
 }
 
+/// Why [`Settings::try_from_profile`] could not resolve a profile: the name
+/// is unknown, or a `hegel.toml` is malformed. The `Display` impl carries
+/// the engine's diagnostic.
+#[derive(Debug, Clone)]
+pub struct ProfileError {
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProfileError {}
+
 #[doc(hidden)]
 pub fn hegel<F>(test_fn: F)
 where
@@ -386,31 +447,6 @@ where
 
 fn env_var(key: &str) -> Option<String> {
     std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
-}
-
-fn is_in_ci() -> bool {
-    is_in_ci_from(env_var)
-}
-
-fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
-    const CI_VARS: &[(&str, Option<&str>)] = &[
-        ("CI", None),
-        ("TF_BUILD", Some("true")),
-        ("BUILDKITE", Some("true")),
-        ("CIRCLECI", Some("true")),
-        ("CIRRUS_CI", Some("true")),
-        ("CODEBUILD_BUILD_ID", None),
-        ("GITHUB_ACTIONS", Some("true")),
-        ("GITLAB_CI", None),
-        ("HEROKU_TEST_RUN_ID", None),
-        ("TEAMCITY_VERSION", None),
-        ("bamboo.buildKey", None),
-    ];
-
-    CI_VARS.iter().any(|(key, value)| match value {
-        None => env(key).is_some(),
-        Some(expected) => env(key).as_deref() == Some(expected),
-    })
 }
 
 #[doc(hidden)]

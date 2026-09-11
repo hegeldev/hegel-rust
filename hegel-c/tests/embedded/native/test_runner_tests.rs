@@ -861,20 +861,14 @@ fn span_mutation_extends_diverged_proposals_with_random_draws() {
 #[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Prng(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Urandom(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
 }
 
 #[test]
@@ -1330,6 +1324,45 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
 }
 
 #[test]
+fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
+    );
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]).unwrap(),
+    );
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(10)
+            .report_multiple_failures(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(4242) => boom("primary bug"),
+            Ok(4243) => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].origin.contains("primary bug"),
+        "the secondary entry must not be replayed once a primary entry reproduces"
+    );
+}
+
+#[test]
 fn shrink_phase_drains_stale_secondary_corpus_entries() {
     use crate::native::bignum::BigInt;
     let dir = tempfile::TempDir::new().unwrap();
@@ -1688,12 +1721,42 @@ fn a_concurrent_machine_prints_the_nondeterminism_notice_once() {
 }
 
 #[test]
+fn debug_runs_log_the_loaded_config_path() {
+    use std::sync::{Arc, Mutex};
+    for (path, expected) in [
+        (Some("/a/hegel.toml"), "loaded config: /a/hegel.toml"),
+        (None, "no config file loaded"),
+    ] {
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&lines);
+        let mut settings = Settings::new()
+            .database(None)
+            .test_cases(2)
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            }));
+        settings.config_path = path.map(String::from);
+        reuse_run(settings, "k", |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        })
+        .unwrap();
+        assert!(
+            lines.lock().unwrap().iter().any(|l| l == expected),
+            "missing {expected:?}"
+        );
+    }
+}
+
+#[test]
 fn a_concurrent_machine_prints_no_nondeterminism_notice_in_antithesis() {
     use std::sync::{Arc, Mutex};
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&lines);
     let result = reuse_run(
-        Settings::for_env(false, true)
+        Settings::base(true)
+            .database(None)
             .test_cases(5)
             .output(Output::callback(move |line| {
                 sink.lock().unwrap().push(line.to_string());
@@ -2142,6 +2205,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     let settings = Settings::new()
         .database(Some(path))
         .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
         .verbosity(Verbosity::Quiet);
     let result = run_main_sync(
         &settings,

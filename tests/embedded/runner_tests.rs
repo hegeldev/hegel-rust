@@ -32,17 +32,17 @@ fn test_settings_report_multiple_failures_setter() {
 }
 
 #[test]
-fn test_settings_backend_default_unset() {
+fn test_settings_backend_defaults_to_the_prng() {
     let s = Settings::new();
-    assert_eq!(s.backend, None);
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
 fn test_settings_backend_setter() {
     let s = Settings::new().backend(Backend::Urandom);
-    assert_eq!(s.backend, Some(Backend::Urandom));
+    assert_eq!(s.backend, Backend::Urandom);
     let s = s.backend(Backend::Default);
-    assert_eq!(s.backend, Some(Backend::Default));
+    assert_eq!(s.backend, Backend::Default);
 }
 
 #[test]
@@ -137,18 +137,6 @@ fn test_env_override_statistics_zero_and_empty_are_ignored() {
 }
 
 #[test]
-fn test_is_in_ci_from_detects_presence_and_value_variables() {
-    assert!(!is_in_ci_from(|_| None));
-    assert!(is_in_ci_from(|key| (key == "CI").then(String::new)));
-    assert!(is_in_ci_from(
-        |key| (key == "TF_BUILD").then(|| "true".to_string())
-    ));
-    assert!(!is_in_ci_from(
-        |key| (key == "TF_BUILD").then(|| "false".to_string())
-    ));
-}
-
-#[test]
 fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::Hegel;
     use crate::generators as gs;
@@ -196,6 +184,9 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     for name in CI_VAR_NAMES {
         child.env_remove(name);
     }
+    child.env_remove("HEGEL_DEFAULT_PROFILE");
+    child.env_remove("HEGEL_CONFIG");
+    child.env_remove("ANTITHESIS_OUTPUT_DIR");
     let output = child.output().unwrap();
     assert!(
         output.status.success(),
@@ -206,24 +197,75 @@ fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
 }
 
 #[test]
-fn test_settings_for_ci_disables_database_derandomizes_and_suppresses_too_slow() {
+fn test_from_profile_ci_disables_database_derandomizes_and_prints_blobs() {
     use crate::runner::Database;
-    let settings = Settings::for_ci(true);
+    let settings = Settings::from_profile("ci");
     assert_eq!(settings.database, Database::Disabled);
     assert!(settings.derandomize);
-    assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
-
-    let settings = settings.suppress_health_check([]);
-    assert!(settings.suppress_health_check.is_empty());
+    assert!(settings.print_blob);
 }
 
 #[test]
-fn test_settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
+fn test_from_profile_base_is_environment_independent() {
     use crate::runner::Database;
-    let settings = Settings::for_ci(false);
+    let settings = Settings::from_profile("base");
     assert_eq!(settings.database, Database::Unset);
     assert!(!settings.derandomize);
+    assert!(!settings.print_blob);
+    assert_eq!(settings.test_cases, 100);
+    assert_eq!(settings.seed, None);
+    assert_eq!(settings.backend, crate::runner::Backend::Default);
     assert!(settings.suppress_health_check.is_empty());
+    assert_eq!(settings.phases.len(), 5);
+    assert!(!settings.report_multiple_failures);
+    assert!(!settings.show_statistics);
+}
+
+#[test]
+#[should_panic(expected = "unknown settings profile \"no_such_profile\"")]
+fn test_from_profile_unknown_name_is_a_usage_error() {
+    Settings::from_profile("no_such_profile");
+}
+
+#[test]
+fn test_register_profile_round_trips() {
+    Settings::register_profile(
+        "runner_tests_registered",
+        Settings::from_profile("base").test_cases(17),
+    );
+    let settings = Settings::from_profile("runner_tests_registered");
+    assert_eq!(settings.test_cases, 17);
+}
+
+#[test]
+#[should_panic(expected = "invalid profile name \"bad name\"")]
+fn test_register_profile_rejects_invalid_names() {
+    Settings::register_profile("bad name", Settings::from_profile("base"));
+}
+
+#[test]
+#[should_panic(expected = "reserved profile name \"base\"")]
+fn test_register_profile_rejects_reserved_names() {
+    Settings::register_profile("base", Settings::from_profile("base"));
+}
+
+#[test]
+fn test_try_from_profile_reports_failure_without_panicking() {
+    assert!(Settings::try_from_profile("base").is_ok());
+    let e = Settings::try_from_profile("no_such_profile").unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("unknown settings profile \"no_such_profile\""),
+        "got: {e}"
+    );
+    let dyn_err: &dyn std::error::Error = &e;
+    assert!(dyn_err.source().is_none());
+}
+
+#[test]
+#[should_panic(expected = "invalid profile name \"bad name\"")]
+fn test_set_default_profile_rejects_invalid_names() {
+    Settings::set_default_profile("bad name");
 }
 
 #[test]

@@ -10,15 +10,13 @@ fn default_is_new() {
 }
 
 #[test]
-fn resolved_backend_picks_urandom_under_antithesis() {
-    assert_eq!(
-        Settings::new()
-            .backend(Backend::Default)
-            .resolved_backend(true),
-        Backend::Default
-    );
-    assert_eq!(Settings::new().resolved_backend(true), Backend::Urandom);
-    assert_eq!(Settings::new().resolved_backend(false), Backend::Default);
+fn backend_defaults_to_the_prng_and_is_settable() {
+    for in_antithesis in [false, true] {
+        assert_eq!(Settings::base(in_antithesis).backend, Backend::Default);
+    }
+    let s = Settings::new().backend(Backend::Urandom);
+    assert_eq!(s.backend, Backend::Urandom);
+    assert_eq!(s.backend(Backend::Default).backend, Backend::Default);
 }
 
 #[test]
@@ -32,22 +30,12 @@ fn suppress_health_check_replaces() {
 }
 
 #[test]
-fn settings_in_ci_disable_database_derandomize_and_suppress_too_slow() {
-    let settings = Settings::for_env(true, false);
-    assert!(matches!(settings.database, Database::Disabled));
-    assert!(settings.derandomize);
-    assert_eq!(settings.suppress_health_check, vec![HealthCheck::TooSlow]);
-
-    let settings = settings.suppress_health_check([]);
-    assert!(settings.suppress_health_check.is_empty());
-}
-
-#[test]
-fn settings_outside_ci_leave_database_unset_randomized_and_health_checks_enabled() {
-    let settings = Settings::for_env(false, false);
+fn base_settings_are_environment_independent_except_for_antithesis() {
+    let settings = Settings::base(false);
     assert!(matches!(settings.database, Database::Unset));
     assert!(!settings.derandomize);
-    assert!(settings.suppress_health_check.is_empty());
+    assert!(!settings.print_blob);
+    assert!(!settings.report_multiple_failures);
 }
 
 const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
@@ -58,38 +46,23 @@ const ALL_HEALTH_CHECKS: [HealthCheck; 4] = [
 ];
 
 #[test]
-fn settings_in_antithesis_disable_the_database_and_every_health_check() {
-    let settings = Settings::for_env(false, true);
-    assert!(matches!(settings.database, Database::Disabled));
-    assert!(
-        !settings.derandomize,
-        "Antithesis controls randomness itself"
-    );
-    for check in ALL_HEALTH_CHECKS {
-        assert!(settings.health_check_suppressed(check), "{check:?}");
+fn health_checks_run_unless_suppressed_explicitly() {
+    for in_antithesis in [false, true] {
+        let settings = Settings::base(in_antithesis);
+        for check in ALL_HEALTH_CHECKS {
+            assert!(!settings.health_check_suppressed(check), "{check:?}");
+        }
     }
-    // An explicit (even empty) suppression list does not re-enable them.
-    let settings = settings.suppress_health_check([]);
-    for check in ALL_HEALTH_CHECKS {
-        assert!(settings.health_check_suppressed(check), "{check:?}");
-    }
-}
-
-#[test]
-fn settings_in_antithesis_still_honour_an_explicit_database() {
-    let settings = Settings::for_env(false, true).database(Some("db".into()));
-    assert!(matches!(settings.database, Database::Path(_)));
-}
-
-#[test]
-fn health_checks_run_outside_antithesis_unless_suppressed_explicitly() {
-    let settings = Settings::for_env(false, false);
-    for check in ALL_HEALTH_CHECKS {
-        assert!(!settings.health_check_suppressed(check), "{check:?}");
-    }
+    let settings = Settings::base(false);
     let settings = settings.suppress_health_check([HealthCheck::TooSlow]);
     assert!(settings.health_check_suppressed(HealthCheck::TooSlow));
     assert!(!settings.health_check_suppressed(HealthCheck::FilterTooMuch));
+}
+
+#[test]
+fn print_blob_defaults_off_and_is_settable() {
+    assert!(!Settings::base(false).print_blob);
+    assert!(Settings::base(false).print_blob(true).print_blob);
 }
 
 #[test]

@@ -348,3 +348,10 @@ fn pid_is_nonzero_and_stable() {
     assert_ne!(pid(), 0);
     assert_eq!(pid(), pid());
 }
+
+#[test]
+fn cwd_reports_an_absolute_directory() {
+    let dir = cwd().unwrap();
+    assert!(!dir.is_empty());
+    assert!(fs::exists(&dir));
+}

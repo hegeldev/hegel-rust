@@ -4,7 +4,7 @@ use alloc::string::ToString;
 #[test]
 fn existing_output_dir_is_accepted() {
     let dir = tempfile::TempDir::new().unwrap();
-    assert!(check_antithesis_output_dir(dir.path().to_str().unwrap()).unwrap());
+    check_antithesis_output_dir(dir.path().to_str().unwrap()).unwrap();
 }
 
 #[test]
@@ -24,7 +24,8 @@ fn env_with_output_dir(dir: &str) -> impl Fn(&str) -> Option<String> {
 
 #[test]
 fn not_in_antithesis_when_the_variable_is_unset() {
-    assert!(!is_running_in_antithesis_from(|_| None).unwrap());
+    check_environment_from(|_| None).unwrap();
+    assert!(!antithesis_env_var_set_from(|_| None));
     assert!(antithesis_output_dir_from(|_| None).is_none());
 }
 
@@ -32,20 +33,22 @@ fn not_in_antithesis_when_the_variable_is_unset() {
 fn in_antithesis_when_the_variable_names_an_existing_directory() {
     let dir = tempfile::TempDir::new().unwrap();
     let env = env_with_output_dir(dir.path().to_str().unwrap());
-    assert_eq!(is_running_in_antithesis_from(&env).unwrap(), !cfg!(windows));
+    check_environment_from(&env).unwrap();
+    assert_eq!(antithesis_env_var_set_from(&env), !cfg!(windows));
     assert_eq!(antithesis_output_dir_from(&env).is_some(), !cfg!(windows));
 }
 
 #[test]
 fn other_variables_do_not_count() {
     let env = |key: &str| (key == "ANTITHESIS_OUTPUT").then(|| "/tmp".to_string());
-    assert!(!is_running_in_antithesis_from(env).unwrap());
+    check_environment_from(env).unwrap();
+    assert!(!antithesis_env_var_set_from(env));
 }
 
 #[cfg(not(windows))]
 #[test]
 fn a_missing_directory_is_a_usage_error_via_the_environment() {
     let env = env_with_output_dir("/no/such/antithesis/output/dir/for/hegel/tests");
-    let err = is_running_in_antithesis_from(env).unwrap_err();
+    let err = check_environment_from(env).unwrap_err();
     assert!(matches!(err, crate::backend::RunError::UsageError(_)));
 }

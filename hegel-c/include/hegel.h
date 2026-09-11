@@ -183,6 +183,50 @@ typedef enum {
 } hegel_result_t;
 
 /*
+ Verbosity of engine-emitted output (logs, per-case traces). Set via
+ `hegel_settings_set_verbosity`.
+ */
+typedef enum {
+    /*
+     Nothing besides the final result.
+     */
+    HEGEL_VERBOSITY_QUIET = 0,
+    /*
+     A short summary line per run. The default.
+     */
+    HEGEL_VERBOSITY_NORMAL = 1,
+    /*
+     Per-test-case progress and drawn values, plus panic diagnostics as
+     they happen.
+     */
+    HEGEL_VERBOSITY_VERBOSE = 2,
+    /*
+     As verbose, plus shrinker trace output.
+     */
+    HEGEL_VERBOSITY_DEBUG = 3,
+} hegel_verbosity_t;
+
+/*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_set_backend`.
+ */
+typedef enum {
+    /*
+     Expand a single seeded PRNG (the base setting). Runs are
+     reproducible from the seed and shrinking / replay work as usual.
+     */
+    HEGEL_BACKEND_DEFAULT = 1,
+    /*
+     Read fresh entropy from `/dev/urandom` on every draw, falling back to
+     an OS-seeded PRNG on platforms without it. Intended for running under
+     Antithesis, whose fuzzer controls `/dev/urandom`, and selected by the
+     shipped `workload` profile; you almost certainly don't want it
+     otherwise.
+     */
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
+
+/*
  Aggregate outcome of a finished run, read via `hegel_run_result_status`.
  */
 typedef enum {
@@ -275,54 +319,6 @@ typedef enum {
      */
     HEGEL_HC_LARGE_INITIAL_TEST_CASE = (1 << 3),
 } hegel_health_check_t;
-
-/*
- Which source of randomness the engine draws from. Set via
- `hegel_settings_set_backend`.
- */
-typedef enum {
-    /*
-     Choose automatically (the default): urandom when running inside
-     Antithesis, otherwise the default backend.
-     */
-    HEGEL_BACKEND_AUTO = 0,
-    /*
-     Expand a single seeded PRNG. Runs are reproducible from the seed and
-     shrinking / replay work as usual.
-     */
-    HEGEL_BACKEND_DEFAULT = 1,
-    /*
-     Read fresh entropy from `/dev/urandom` on every draw, falling back to
-     an OS-seeded PRNG on platforms without it. Intended for running under
-     Antithesis, whose fuzzer controls `/dev/urandom`; you almost
-     certainly don't want it otherwise.
-     */
-    HEGEL_BACKEND_URANDOM = 2,
-} hegel_backend_t;
-
-/*
- Verbosity of engine-emitted output (logs, per-case traces). Set via
- `hegel_settings_set_verbosity`.
- */
-typedef enum {
-    /*
-     Nothing besides the final result.
-     */
-    HEGEL_VERBOSITY_QUIET = 0,
-    /*
-     A short summary line per run. The default.
-     */
-    HEGEL_VERBOSITY_NORMAL = 1,
-    /*
-     Per-test-case progress and drawn values, plus panic diagnostics as
-     they happen.
-     */
-    HEGEL_VERBOSITY_VERBOSE = 2,
-    /*
-     As verbose, plus shrinker trace output.
-     */
-    HEGEL_VERBOSITY_DEBUG = 3,
-} hegel_verbosity_t;
 
 /*
  Outcome of a single test case. Passed to `hegel_mark_complete`.
@@ -527,7 +523,8 @@ typedef struct hegel_run_result_t hegel_run_result_t;
  and then freed. Settings can be reused across runs.
 
  A configured handle may be shared across threads, but do not call setters
- concurrently on the same handle.
+ concurrently on the same handle, or concurrently with
+ `hegel_settings_get_database` reads of it.
  */
 typedef struct hegel_settings_t hegel_settings_t;
 
@@ -687,23 +684,62 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
 
 /*
  Parameters:
- `out_settings`: Receives a handle initialized with libhegel's
-   defaults: 100 test cases, all phases enabled, normal verbosity, no
-   seed, and the default disk database under `.hegel/`.
+ `out_settings`: Receives a handle initialized from the default settings
+   profile.
 
- Returns `HEGEL_OK`.
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when profile resolution
+ fails: a default-profile setting names an unknown profile, or a
+ `hegel.toml` is malformed. Read the message with
+ `hegel_context_last_error`.
 
- When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
- similar variables) the defaults change: the database is disabled and
- derandomization is enabled. Override either with the explicit setters.
+ A profile is a named settings delta. Two names are reserved: `base` is
+ the immutable base settings (100 test cases, all phases enabled, normal
+ verbosity, no seed, the disk database under `.hegel/`), and `default`
+ is the default profile, the one in effect when nothing names a profile:
+ the strongest set of `hegel_set_default_profile`, the
+ `HEGEL_DEFAULT_PROFILE` environment variable, and the top-level
+ `default = "<profile>"` entry in `hegel.toml`, else the detected
+ environment (`workload` inside Antithesis, detected via
+ `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI server, detected via `CI`,
+ `GITHUB_ACTIONS`, and similar variables), else `development`. This
+ function resolves `default`.
 
- When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
- the database is disabled and every health check is skipped. The database
- can still be enabled with `hegel_settings_set_database`; the health
- checks cannot be re-enabled, since Antithesis's thread pausing would trip
- wall-clock checks such as `TooSlow` spuriously.
+ Three ordinary profiles ship with libhegel: `development` (the base
+ settings, unchanged — what local runs get), `ci` (derandomization on,
+ database disabled, the `too_slow` health check suppressed, reproduction
+ lines printed), and `workload` (database disabled, every health check
+ suppressed). A custom profile without an explicit `extends` extends
+ `default`, skipping any candidate already in its chain, so it sits on
+ `ci` when resolved on a CI server and on `development` locally. The
+ shipped profiles themselves extend `base` and never layer over one
+ another. Extending or selecting `base` pins the plain base settings.
+
+ Profiles are modified and defined in a `hegel.toml` found in the current
+ directory or the nearest ancestor, and registered programmatically with
+ `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
+ to resolve one by name.
  */
 hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
+
+/*
+ Parameters:
+ `name`: The profile to resolve: reserved (`base`, `default`), shipped
+   (`development`, `ci`, `workload`), defined in `hegel.toml`, or
+   registered with `hegel_settings_register_profile`.
+ `out_settings`: Receives a handle initialized from that profile.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
+ or a `hegel.toml` is malformed. Read the message with
+ `hegel_context_last_error`.
+
+ Selecting a profile by name does not change what the default profile is:
+ the named profile still implicitly extends `default` (see
+ `hegel_settings_new`), so it layers over the environment's profile —
+ except `base`, which is always the plain base settings.
+ */
+hegel_result_t hegel_settings_new_for_profile(hegel_context_t *ctx,
+                                              const char *name,
+                                              hegel_settings_t **out_settings);
 
 /*
  Parameters:
@@ -722,9 +758,6 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
  The enum-valued setters take `uint32_t` rather than the enum type so
  that an out-of-range value is an error instead of undefined behavior.
-
- Once an explicit backend has been set on a handle there is no way to
- change it within a run.
  */
 hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
                                           hegel_settings_t *s,
@@ -805,10 +838,11 @@ hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
 
 /*
  Parameters:
- `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
-   disables the database entirely. Discovered failures will not be
-   stored. Anything else is used as the database root directory. The
-   directory will be created if it does not already exist.
+ `database`: NULL sets it to the default: `./.hegel/examples/`, including
+   resetting a value the handle already carries. `""` disables the
+   database entirely. Discovered failures will not be stored. Anything
+   else is used as the database root directory. The directory will be
+   created if it does not already exist.
 
  Returns `HEGEL_OK`.
  */
@@ -848,6 +882,183 @@ hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
                                                         hegel_settings_t *s,
                                                         uint32_t checks);
+
+/*
+ Parameters:
+ `yes`: When `true`, a failure should be reported with a copy-pasteable
+   reproduction line for its counterexample. Defaults to `false`; the
+   shipped `ci` profile turns it on. libhegel itself never acts on this
+   value — the reproduce blob is always attached to the failure and
+   printing it is the caller's decision — but carrying it in the settings
+   lets profiles configure it for every Hegel library.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_print_blob(hegel_context_t *ctx, hegel_settings_t *s, bool yes);
+
+/*
+ Parameters:
+ `name`: The profile name to register: ASCII letters, digits, `-` and
+   `_` only. The reserved names `base` and `default` are rejected.
+ `settings`: The settings to snapshot. The caller keeps ownership; the
+   handle's database key is not part of the snapshot.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid or reserved
+ name.
+
+ Registers a complete snapshot of `settings` as the profile `name`,
+ process-wide, replacing any earlier registration of the same name.
+ Registering a shipped name replaces that profile wholesale. A
+ `hegel.toml` section for `name` still merges over the snapshot, and may
+ not set `extends` on it. Registration is not retroactive: settings
+ handles already created keep their values.
+ */
+hegel_result_t hegel_settings_register_profile(hegel_context_t *ctx,
+                                               const char *name,
+                                               const hegel_settings_t *settings);
+
+/*
+ Parameters:
+ `name`: The profile the `default` alias should resolve to, or NULL to
+   clear an earlier call. The name is not required to exist yet; naming
+   the `default` alias itself is rejected.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
+
+ Sets the default settings profile for the whole process, taking
+ precedence over `HEGEL_DEFAULT_PROFILE`, the `default` entry in
+ `hegel.toml`, and environment detection (see `hegel_settings_new`). Like
+ registration it is not retroactive: settings handles already created
+ keep their values.
+ */
+hegel_result_t hegel_set_default_profile(hegel_context_t *ctx, const char *name);
+
+/*
+ Parameters:
+ `out`: Receives the configured number of test cases.
+
+ Returns `HEGEL_OK`.
+
+ The `hegel_settings_get_*` functions read a settings handle back — for
+ example one resolved from a profile by `hegel_settings_new` — so a
+ Hegel library can present the effective configuration. Each takes a
+ `const` handle and one out parameter, and fails with
+ `HEGEL_E_INVALID_HANDLE` / `HEGEL_E_INVALID_ARG` on a null handle or out
+ pointer.
+ */
+hegel_result_t hegel_settings_get_test_cases(hegel_context_t *ctx,
+                                             const hegel_settings_t *s,
+                                             uint64_t *out);
+
+/*
+ Parameters:
+ `out`: Receives the configured verbosity.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_verbosity(hegel_context_t *ctx,
+                                            const hegel_settings_t *s,
+                                            hegel_verbosity_t *out);
+
+/*
+ Parameters:
+ `out_seed`: Receives the configured seed when one is set, else 0.
+ `out_has_seed`: Receives whether a seed is set.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_seed(hegel_context_t *ctx,
+                                       const hegel_settings_t *s,
+                                       uint64_t *out_seed,
+                                       bool *out_has_seed);
+
+/*
+ Parameters:
+ `out`: Receives whether derandomization is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_derandomize(hegel_context_t *ctx,
+                                              const hegel_settings_t *s,
+                                              bool *out);
+
+/*
+ Parameters:
+ `out_database`: Receives the database value, mirroring the setter's
+   convention: NULL for the default, `""` for disabled, else the root
+   directory path. The pointer borrows the handle and stays valid until
+   the next `hegel_settings_set_database` call on it or
+   `hegel_settings_free`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_database(hegel_context_t *ctx,
+                                           const hegel_settings_t *s,
+                                           const char **out_database);
+
+/*
+ Parameters:
+ `out`: Receives the enabled phases as a bitwise OR of `hegel_phase_t`
+   values.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_phases(hegel_context_t *ctx,
+                                         const hegel_settings_t *s,
+                                         uint32_t *out);
+
+/*
+ Parameters:
+ `out`: Receives the suppressed health checks as a bitwise OR of
+   `hegel_health_check_t` values, as resolved from the profile and any
+   `hegel_settings_set_suppress_health_check` call.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_suppress_health_check(hegel_context_t *ctx,
+                                                        const hegel_settings_t *s,
+                                                        uint32_t *out);
+
+/*
+ Parameters:
+ `out`: Receives whether multi-bug reporting is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_report_multiple_failures(hegel_context_t *ctx,
+                                                           const hegel_settings_t *s,
+                                                           bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether the statistics block is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_show_statistics(hegel_context_t *ctx,
+                                                  const hegel_settings_t *s,
+                                                  bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether reproduction lines should be printed. See
+   `hegel_settings_set_print_blob`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_print_blob(hegel_context_t *ctx,
+                                             const hegel_settings_t *s,
+                                             bool *out);
+
+/*
+ Parameters:
+ `out`: Receives the configured backend.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_backend(hegel_context_t *ctx,
+                                          const hegel_settings_t *s,
+                                          hegel_backend_t *out);
 
 /*
  Parameters:

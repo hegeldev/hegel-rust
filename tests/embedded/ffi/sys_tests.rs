@@ -157,7 +157,6 @@ mod drift {
             HEGEL_STATUS_INTERESTING,
         }
         hegel_backend_t {
-            HEGEL_BACKEND_AUTO,
             HEGEL_BACKEND_DEFAULT,
             HEGEL_BACKEND_URANDOM,
         }

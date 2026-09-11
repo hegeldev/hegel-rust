@@ -171,7 +171,7 @@ fn null_handles_are_rejected_without_crashing() {
             hegel_settings_set_backend(
                 ctx,
                 ptr::null_mut(),
-                hegel_backend_t::HEGEL_BACKEND_AUTO as u32
+                hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32
             ),
             HEGEL_E_INVALID_HANDLE
         );
@@ -732,6 +732,11 @@ fn out_of_range_enum_values_are_invalid_arguments() {
         let s = make_settings(ctx);
         assert_eq!(hegel_settings_set_backend(ctx, s, 999), HEGEL_E_INVALID_ARG);
         assert!(last_error(ctx).contains("unknown backend"));
+        assert_eq!(
+            hegel_settings_set_backend(ctx, s, 0),
+            HEGEL_E_INVALID_ARG,
+            "0 was the removed HEGEL_BACKEND_AUTO"
+        );
         assert_eq!(
             hegel_c::hegel_settings_set_verbosity(ctx, s, 999),
             HEGEL_E_INVALID_ARG
@@ -2413,6 +2418,7 @@ fn output_callback_receives_engine_output() {
             s,
             hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
         ));
+        ok(hegel_settings_set_report_multiple_failures(ctx, s, true));
         let run = start_with_output(
             ctx,
             s,
@@ -2810,5 +2816,532 @@ fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
             ok(hegel_settings_free(ctx, s));
             ok(hegel_context_free(ctx));
         }
+    }
+}
+
+/// Every field of a settings handle read back through the
+/// `hegel_settings_get_*` functions. `database` mirrors the setter
+/// convention: `None` unset, `Some("")` disabled, else the path.
+struct SettingsView {
+    test_cases: u64,
+    verbosity: u32,
+    seed: (u64, bool),
+    derandomize: bool,
+    database: Option<String>,
+    phases: u32,
+    suppress_health_check: u32,
+    report_multiple_failures: bool,
+    show_statistics: bool,
+    print_blob: bool,
+    backend: u32,
+}
+
+unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings) -> SettingsView {
+    unsafe {
+        let mut test_cases = 0u64;
+        ok(hegel_c::hegel_settings_get_test_cases(
+            ctx,
+            s,
+            &mut test_cases,
+        ));
+        let mut verbosity = hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET;
+        ok(hegel_c::hegel_settings_get_verbosity(
+            ctx,
+            s,
+            &mut verbosity,
+        ));
+        let mut seed = 0u64;
+        let mut has_seed = false;
+        ok(hegel_c::hegel_settings_get_seed(
+            ctx,
+            s,
+            &mut seed,
+            &mut has_seed,
+        ));
+        let mut derandomize = false;
+        ok(hegel_c::hegel_settings_get_derandomize(
+            ctx,
+            s,
+            &mut derandomize,
+        ));
+        let mut database: *const c_char = ptr::null();
+        ok(hegel_c::hegel_settings_get_database(ctx, s, &mut database));
+        let database = if database.is_null() {
+            None
+        } else {
+            Some(
+                std::ffi::CStr::from_ptr(database)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        let mut phases = 0u32;
+        ok(hegel_c::hegel_settings_get_phases(ctx, s, &mut phases));
+        let mut checks = 0u32;
+        ok(hegel_c::hegel_settings_get_suppress_health_check(
+            ctx,
+            s,
+            &mut checks,
+        ));
+        let mut report_multiple_failures = false;
+        ok(hegel_c::hegel_settings_get_report_multiple_failures(
+            ctx,
+            s,
+            &mut report_multiple_failures,
+        ));
+        let mut show_statistics = false;
+        ok(hegel_c::hegel_settings_get_show_statistics(
+            ctx,
+            s,
+            &mut show_statistics,
+        ));
+        let mut print_blob = false;
+        ok(hegel_c::hegel_settings_get_print_blob(
+            ctx,
+            s,
+            &mut print_blob,
+        ));
+        let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;
+        ok(hegel_c::hegel_settings_get_backend(ctx, s, &mut backend));
+        SettingsView {
+            test_cases,
+            verbosity: verbosity as u32,
+            seed: (seed, has_seed),
+            derandomize,
+            database,
+            phases,
+            suppress_health_check: checks,
+            report_multiple_failures,
+            show_statistics,
+            print_blob,
+            backend: backend as u32,
+        }
+    }
+}
+
+unsafe fn settings_for_profile(ctx: *mut HegelContext, name: &str) -> *mut hegel_c::HegelSettings {
+    let name = CString::new(name).unwrap();
+    let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+    ok(unsafe { hegel_c::hegel_settings_new_for_profile(ctx, name.as_ptr(), &mut s) });
+    assert!(!s.is_null());
+    s
+}
+
+#[test]
+fn settings_getters_read_back_every_setter() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 7));
+        ok(hegel_c::hegel_settings_set_verbosity(
+            ctx,
+            s,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32,
+        ));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 11, true));
+        ok(hegel_c::hegel_settings_set_derandomize(ctx, s, true));
+        let db = CString::new("some/db").unwrap();
+        ok(hegel_settings_set_database(ctx, s, db.as_ptr()));
+        ok(hegel_settings_set_phases(
+            ctx,
+            s,
+            hegel_c::hegel_phase_t::HEGEL_PHASE_REUSE as u32
+                | hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK as u32,
+        ));
+        ok(hegel_settings_set_suppress_health_check(
+            ctx,
+            s,
+            hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW as u32,
+        ));
+        ok(hegel_settings_set_report_multiple_failures(ctx, s, true));
+        ok(hegel_c::hegel_settings_set_show_statistics(ctx, s, true));
+        ok(hegel_c::hegel_settings_set_print_blob(ctx, s, true));
+        ok(hegel_settings_set_backend(
+            ctx,
+            s,
+            hegel_backend_t::HEGEL_BACKEND_URANDOM as u32,
+        ));
+
+        let view = read_settings(ctx, s);
+        assert_eq!(view.test_cases, 7);
+        assert_eq!(
+            view.verbosity,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_DEBUG as u32
+        );
+        assert_eq!(view.seed, (11, true));
+        assert!(view.derandomize);
+        assert_eq!(view.database.as_deref(), Some("some/db"));
+        assert_eq!(
+            view.phases,
+            hegel_c::hegel_phase_t::HEGEL_PHASE_REUSE as u32
+                | hegel_c::hegel_phase_t::HEGEL_PHASE_SHRINK as u32
+        );
+        assert_eq!(
+            view.suppress_health_check,
+            hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW as u32
+        );
+        assert!(view.report_multiple_failures);
+        assert!(view.show_statistics);
+        assert!(view.print_blob);
+        assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_URANDOM as u32);
+
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn settings_getters_read_back_the_remaining_enum_values() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        for verbosity in [
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_VERBOSE,
+        ] {
+            ok(hegel_c::hegel_settings_set_verbosity(
+                ctx,
+                s,
+                verbosity as u32,
+            ));
+            assert_eq!(read_settings(ctx, s).verbosity, verbosity as u32);
+        }
+        let checks = hegel_c::hegel_health_check_t::HEGEL_HC_TEST_CASES_TOO_LARGE as u32
+            | hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32;
+        ok(hegel_settings_set_suppress_health_check(ctx, s, checks));
+        ok(hegel_settings_set_backend(
+            ctx,
+            s,
+            hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32,
+        ));
+        let view = read_settings(ctx, s);
+        assert_eq!(view.suppress_health_check, checks);
+        assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn the_base_profile_reads_back_the_base_settings() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        let view = read_settings(ctx, s);
+        assert_eq!(view.test_cases, 100);
+        assert_eq!(
+            view.verbosity,
+            hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_NORMAL as u32
+        );
+        assert_eq!(view.seed, (0, false));
+        assert!(!view.derandomize);
+        assert_eq!(view.database, None);
+        assert_eq!(view.phases, hegel_c::hegel_phase_t::HEGEL_PHASE_ALL as u32);
+        assert_eq!(view.suppress_health_check, 0);
+        assert!(!view.report_multiple_failures);
+        assert!(!view.show_statistics);
+        assert!(!view.print_blob);
+        assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn the_ci_profile_reads_back_its_delta() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "ci");
+        let view = read_settings(ctx, s);
+        assert!(view.derandomize);
+        assert_eq!(view.database.as_deref(), Some(""));
+        assert!(view.print_blob);
+        assert_eq!(view.test_cases, 100);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn unknown_profiles_are_invalid_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let name = CString::new("no_such_profile").unwrap();
+        let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+        assert_eq!(
+            hegel_c::hegel_settings_new_for_profile(ctx, name.as_ptr(), &mut s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("unknown settings profile \"no_such_profile\""));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn new_for_profile_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+        assert_eq!(
+            hegel_c::hegel_settings_new_for_profile(ctx, ptr::null(), &mut s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("name is null"));
+        let bad = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
+        assert_eq!(
+            hegel_c::hegel_settings_new_for_profile(ctx, bad.as_ptr(), &mut s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        let name = CString::new("base").unwrap();
+        assert_eq!(
+            hegel_c::hegel_settings_new_for_profile(ctx, name.as_ptr(), ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn registered_profiles_round_trip() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 23));
+        ok(hegel_c::hegel_settings_set_print_blob(ctx, s, true));
+        let name = CString::new("c_abi_registered_roundtrip").unwrap();
+        ok(hegel_c::hegel_settings_register_profile(
+            ctx,
+            name.as_ptr(),
+            s,
+        ));
+        ok(hegel_settings_free(ctx, s));
+
+        let s = settings_for_profile(ctx, "c_abi_registered_roundtrip");
+        let view = read_settings(ctx, s);
+        assert_eq!(view.test_cases, 23);
+        assert!(view.print_blob);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn register_profile_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        assert_eq!(
+            hegel_c::hegel_settings_register_profile(ctx, ptr::null(), s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("name is null"));
+        let bad_utf8 = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
+        assert_eq!(
+            hegel_c::hegel_settings_register_profile(ctx, bad_utf8.as_ptr(), s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        let bad_name = CString::new("bad name").unwrap();
+        assert_eq!(
+            hegel_c::hegel_settings_register_profile(ctx, bad_name.as_ptr(), s),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invalid profile name"));
+        for reserved in ["base", "default"] {
+            let name = CString::new(reserved).unwrap();
+            assert_eq!(
+                hegel_c::hegel_settings_register_profile(ctx, name.as_ptr(), s),
+                HEGEL_E_INVALID_ARG
+            );
+            assert!(last_error(ctx).contains("reserved profile name"));
+        }
+        let name = CString::new("c_abi_register_null_settings").unwrap();
+        assert_eq!(
+            hegel_c::hegel_settings_register_profile(ctx, name.as_ptr(), ptr::null()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn set_default_profile_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let bad_utf8 = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, bad_utf8.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        let bad_name = CString::new("bad name").unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, bad_name.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("invalid profile name"));
+        let alias = CString::new("default").unwrap();
+        assert_eq!(
+            hegel_c::hegel_set_default_profile(ctx, alias.as_ptr()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("cannot name the \"default\" alias"));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// The override target must be `base`: it resolves to settings
+/// no concurrently running test can distinguish from the ones it already
+/// sees, whatever the ambient environment, so tests running in parallel
+/// with the override briefly set cannot observe it.
+#[test]
+fn set_default_profile_overrides_the_default_profile() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let name = CString::new("base").unwrap();
+        ok(hegel_c::hegel_set_default_profile(ctx, name.as_ptr()));
+        let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
+        ok(hegel_settings_new(ctx, &mut s));
+        let view = read_settings(ctx, s);
+        assert!(!view.derandomize, "the override displaces CI detection");
+        assert!(!view.print_blob);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_c::hegel_set_default_profile(ctx, ptr::null()));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn set_database_null_resets_to_the_default() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "ci");
+        let view = read_settings(ctx, s);
+        assert_eq!(view.database.as_deref(), Some(""));
+        ok(hegel_settings_set_database(ctx, s, ptr::null()));
+        let view = read_settings(ctx, s);
+        assert_eq!(view.database, None);
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn settings_getters_reject_null_handles_and_null_outs() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = settings_for_profile(ctx, "base");
+        let null_s: *const hegel_c::HegelSettings = ptr::null();
+
+        let mut u = 0u64;
+        assert_eq!(
+            hegel_c::hegel_settings_get_test_cases(ctx, null_s, &mut u),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_test_cases(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut v = hegel_c::hegel_verbosity_t::HEGEL_VERBOSITY_QUIET;
+        assert_eq!(
+            hegel_c::hegel_settings_get_verbosity(ctx, null_s, &mut v),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_verbosity(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut seed = 0u64;
+        let mut has_seed = false;
+        assert_eq!(
+            hegel_c::hegel_settings_get_seed(ctx, null_s, &mut seed, &mut has_seed),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_seed(ctx, s, ptr::null_mut(), &mut has_seed),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_seed(ctx, s, &mut seed, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut b = false;
+        assert_eq!(
+            hegel_c::hegel_settings_get_derandomize(ctx, null_s, &mut b),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_derandomize(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut db: *const c_char = ptr::null();
+        assert_eq!(
+            hegel_c::hegel_settings_get_database(ctx, null_s, &mut db),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_database(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut bits = 0u32;
+        assert_eq!(
+            hegel_c::hegel_settings_get_phases(ctx, null_s, &mut bits),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_phases(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_suppress_health_check(ctx, null_s, &mut bits),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_suppress_health_check(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_report_multiple_failures(ctx, null_s, &mut b),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_report_multiple_failures(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_show_statistics(ctx, null_s, &mut b),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_show_statistics(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_print_blob(ctx, null_s, &mut b),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_print_blob(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;
+        assert_eq!(
+            hegel_c::hegel_settings_get_backend(ctx, null_s, &mut backend),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_backend(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_set_print_blob(ctx, ptr::null_mut(), true),
+            HEGEL_E_INVALID_HANDLE
+        );
+
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
     }
 }
