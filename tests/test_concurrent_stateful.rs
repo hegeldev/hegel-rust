@@ -1078,20 +1078,24 @@ fn test_weighted_grouped_machine_passes(tc: TestCase) {
 }
 
 #[test]
-fn concurrent_with_weight_replaces_the_default_weight() {
+fn concurrent_rule_new_takes_the_weight() {
     use hegel::stateful::ConcurrentRule;
-    let rule = ConcurrentRule::new("hit", "g", |_m: &Counter, _tc| {});
-    assert_eq!(rule.weight, 1.0);
-    let rule = rule.with_weight(3.0);
+    let rule = ConcurrentRule::new("hit", "g", 3.0, |_m: &Counter, _tc| {});
     assert_eq!(rule.weight, 3.0);
     assert_eq!(rule.group, "g");
+    assert_eq!(rule.name, "hit");
 }
 
 struct BadConcurrentWeight;
 
 impl hegel::stateful::ConcurrentStateMachine for BadConcurrentWeight {
     fn rules(&self) -> Vec<hegel::stateful::ConcurrentRule<Self>> {
-        vec![hegel::stateful::ConcurrentRule::new("bad", "g", |_m: &Self, _tc| {}).with_weight(0.0)]
+        vec![hegel::stateful::ConcurrentRule::new(
+            "bad",
+            "g",
+            0.0,
+            |_m: &Self, _tc| {},
+        )]
     }
     fn invariants(&self) -> Vec<hegel::stateful::ConcurrentInvariant<Self>> {
         vec![]

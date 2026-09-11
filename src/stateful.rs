@@ -3,11 +3,12 @@
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
 //! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
-//! and final state, and sampled in between — each invariant runs after any given rule with
-//! probability `1 / step_count`, so its expected cost per test case stays constant
-//! as the step count grows). `#[invariant(always_run)]` opts an invariant out of the
-//! sampling: it runs after every rule, for invariants that must observe every intermediate
-//! state or that mutate state when checked.
+//! and final state, and sampled in between. `#[invariant(always_run)]` opts an invariant out 
+//! of the sampling: it runs after every rule, for invariants that must observe every 
+//! intermediate state or that mutate state when checked. `#[rule(weight = w)]` also 
+//! hints how often a rule should be chosen compared to other rules in its group. 
+//! This is not a distributional guarantee.
+//! 
 //! Both take a [`TestCase`] parameter and borrow the state machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
@@ -169,16 +170,24 @@ const RULE_LABEL: u64 = label_from_name("hegel.stateful.rule");
 pub const ANONYMOUS_GROUP: &str = "<anonymous>";
 
 /// A rule that can be applied to the state machine during testing.
+///
+/// `weight` is a hint about how often to choose the rule relative to the
+/// machine's other rules. It is not a distributional guarantee. This feature
+/// is intended for advanced users. We otherwise discourage using it.
+/// Every weight must be finite and positive.
 pub struct Rule<M: ?Sized> {
     pub name: String,
+    pub weight: f64,
     pub apply: fn(&mut M, TestCase),
 }
 
 impl<M> Rule<M> {
-    /// Create a new rule with a name and an apply function.
-    pub fn new(name: &str, apply: fn(&mut M, TestCase)) -> Self {
+    /// Create a new rule with a name, a selection weight (1.0 for the
+    /// default), and an apply function.
+    pub fn new(name: &str, weight: f64, apply: fn(&mut M, TestCase)) -> Self {
         Rule {
             name: name.to_string(),
+            weight,
             apply,
         }
     }
@@ -826,6 +835,7 @@ fn run_sequential<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
     let rules = m.rules();
     let rule_names: Vec<&str> = rules.iter().map(|r| r.name.as_str()).collect();
     let rule_groups = vec![0i64; rules.len()];
+    let rule_weights: Vec<f64> = rules.iter().map(|r| r.weight).collect();
     let invariants = m.invariants();
     let invariant_names: Vec<&str> = invariants.iter().map(|r| r.name.as_str()).collect();
     let invariant_always_check: Vec<bool> = invariants.iter().map(|r| r.always_run).collect();
@@ -833,6 +843,7 @@ fn run_sequential<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
         ctc.new_state_machine(
             &rule_names,
             &rule_groups,
+            &rule_weights,
             &invariant_names,
             &invariant_always_check,
             1,
@@ -913,21 +924,26 @@ fn run_sequential<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
 /// shared by reference across the worker threads, so any mutable model
 /// state needs interior mutability. `group` names the concurrency group the
 /// rule belongs to; rules in the same group may run concurrently with each
-/// other, rules in different groups never overlap.
+/// other, rules in different groups never overlap. `weight` is a hint about how
+/// often to choose the rule relative to the machine's other rules. It is not a
+/// distributional guarantee. This feature is intended for advanced users. We
+/// otherwise discourage using it. Every weight must be finite and positive.
 pub struct ConcurrentRule<M: ?Sized> {
     pub name: String,
     pub group: String,
+    pub weight: f64,
     pub apply: fn(&M, TestCase),
 }
 
 impl<M> ConcurrentRule<M> {
-    /// Create a new rule with a name, a concurrency group, and an apply
-    /// function. Pass [`ANONYMOUS_GROUP`] as the group for a rule without a
-    /// group annotation.
-    pub fn new(name: &str, group: &str, apply: fn(&M, TestCase)) -> Self {
+    /// Create a new rule with a name, a concurrency group, a selection
+    /// weight, and an apply function. Pass [`ANONYMOUS_GROUP`] as the 
+    /// group for a rule without a group annotation.
+    pub fn new(name: &str, group: &str, weight: f64, apply: fn(&M, TestCase)) -> Self {
         ConcurrentRule {
             name: name.to_string(),
             group: group.to_string(),
+            weight,
             apply,
         }
     }
@@ -1200,11 +1216,13 @@ fn run_concurrent_machine<M: ConcurrentStateMachine + Sync>(
             });
         rule_groups.push(index as i64);
     }
+    let rule_weights: Vec<f64> = rules.iter().map(|r| r.weight).collect();
 
     let (machine, concurrency) = match tc.with_ctc(|ctc| {
         ctc.new_state_machine(
             &rule_names,
             &rule_groups,
+            &rule_weights,
             &invariant_names,
             &invariant_always_check,
             min_concurrency,

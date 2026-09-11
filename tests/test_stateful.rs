@@ -334,8 +334,8 @@ mod stateful {
     impl StateMachine for BumpMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![
-                Rule::new("bump", |m: &mut BumpMachine, _tc| m.count += 1),
-                Rule::new("noop", |_m: &mut BumpMachine, _tc| {}),
+                Rule::new("bump", 1.0, |m: &mut BumpMachine, _tc| m.count += 1),
+                Rule::new("noop", 1.0, |_m: &mut BumpMachine, _tc| {}),
             ]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
@@ -518,6 +518,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "do_something",
+                1.0,
                 |m: &mut CountStepsMachine, _tc: TestCase| {
                     *m.count.lock().unwrap() += 1;
                 },
@@ -537,6 +538,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "count_rule",
+                1.0,
                 |m: &mut SampledInvariantMachine, _tc: TestCase| {
                     *m.rules_run.lock().unwrap() += 1;
                 },
@@ -649,6 +651,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "count_rule",
+                1.0,
                 |m: &mut MixedInvariantMachine, _tc: TestCase| {
                     *m.rules_run.lock().unwrap() += 1;
                 },
@@ -866,9 +869,9 @@ mod stateful {
     impl StateMachine for SwarmRecorderMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![
-                Rule::new("rule_0", |m, _tc| m.record(0)),
-                Rule::new("rule_1", |m, _tc| m.record(1)),
-                Rule::new("rule_2", |m, _tc| m.record(2)),
+                Rule::new("rule_0", 1.0, |m, _tc| m.record(0)),
+                Rule::new("rule_1", 1.0, |m, _tc| m.record(1)),
+                Rule::new("rule_2", 1.0, |m, _tc| m.record(2)),
             ]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
@@ -938,7 +941,7 @@ mod stateful {
 
     impl StateMachine for StepRecorderMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("step", |m: &mut StepRecorderMachine, tc| {
+            vec![Rule::new("step", 1.0, |m: &mut StepRecorderMachine, tc| {
                 *m.counts.lock().unwrap().last_mut().unwrap() += 1;
                 tc.assume(!m.fail_assumption);
             })]
@@ -1028,10 +1031,14 @@ mod stateful {
 
     impl StateMachine for LongCounterMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("increment", |m: &mut LongCounterMachine, _tc| {
-                m.counter += 1;
-                assert!(m.counter <= 60, "counter exceeded threshold");
-            })]
+            vec![Rule::new(
+                "increment",
+                1.0,
+                |m: &mut LongCounterMachine, _tc| {
+                    m.counter += 1;
+                    assert!(m.counter <= 60, "counter exceeded threshold");
+                },
+            )]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
@@ -1070,7 +1077,7 @@ mod stateful {
 
     impl StateMachine for AlternatingMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("step", |m: &mut AlternatingMachine, tc| {
+            vec![Rule::new("step", 1.0, |m: &mut AlternatingMachine, tc| {
                 m.attempts += 1;
                 tc.assume(m.attempts % 2 == 0);
                 *m.counts.lock().unwrap().last_mut().unwrap() += 1;
@@ -1165,10 +1172,8 @@ mod weights {
     }
 
     #[test]
-    fn test_with_weight_replaces_the_default_weight() {
-        let rule = Rule::new("bump", |m: &mut Weighted, _tc| m.steps += 1);
-        assert_eq!(rule.weight, 1.0);
-        let rule = rule.with_weight(0.25);
+    fn test_rule_new_takes_the_weight() {
+        let rule = Rule::new("bump", 0.25, |m: &mut Weighted, _tc| m.steps += 1);
         assert_eq!(rule.weight, 0.25);
         assert_eq!(rule.name, "bump");
     }
@@ -1180,8 +1185,8 @@ mod weights {
     impl StateMachine for BadWeight {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![
-                Rule::new("fine", |_m: &mut BadWeight, _tc| {}),
-                Rule::new("bad", |_m: &mut BadWeight, _tc| {}).with_weight(self.weight),
+                Rule::new("fine", 1.0, |_m: &mut BadWeight, _tc| {}),
+                Rule::new("bad", self.weight, |_m: &mut BadWeight, _tc| {}),
             ]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {

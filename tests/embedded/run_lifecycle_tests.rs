@@ -283,7 +283,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
     struct Hungry;
     impl StateMachine for Hungry {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("chomp", |_m, tc| {
+            vec![Rule::new("chomp", 1.0, |_m, tc| {
                 loop {
                     let _: i64 = tc.draw(gs::integers());
                 }
