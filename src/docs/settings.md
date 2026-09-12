@@ -130,9 +130,7 @@ they are siblings, and none layers over another.
 | `workload` | `backend = "urandom"`, `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis's fuzzer controls `/dev/urandom`, so the `urandom` backend hands it every choice; and Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
 
 `print_blob` is on in the base settings, so a failing test prints a
-`#[hegel::reproduce_failure("…")]` line everywhere. On CI, with the database
-disabled, that blob is the only way to reproduce the failure locally. Set
-`print_blob = false` in a profile to turn it off.
+`#[hegel::reproduce_failure("…")]` line.
 
 ## Custom profiles and inheritance
 

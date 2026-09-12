@@ -509,7 +509,7 @@ where
     ///
     /// A failure blob encodes the choice sequence of a counterexample.
     /// A native failure prints one while [`print_blob`](Settings::print_blob)
-    /// is on, as it is by default. When set, [`run`](Self::run) decodes it and runs exactly
+    /// is true. When set, [`run`](Self::run) decodes it and runs exactly
     /// that one example — bypassing generation and shrinking — so you can
     /// reproduce a CI failure locally and deterministically.
     ///
