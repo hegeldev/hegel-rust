@@ -291,9 +291,8 @@ impl Settings {
     }
 
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`; the shipped
-    /// `ci` profile turns it on, since with the database disabled the blob
-    /// is the way to reproduce a CI failure locally.
+    /// counterexample when a test fails. Defaults to `true`: on CI, with the
+    /// database disabled, the blob is the way to reproduce a failure locally.
     ///
     /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
     /// the failure output. Has effect only on the native backend.
@@ -509,8 +508,8 @@ where
     /// generating fresh test cases.
     ///
     /// A failure blob encodes the choice sequence of a counterexample.
-    /// Enable [`print_blob`](Settings::print_blob) to have a native failure
-    /// print one. When set, [`run`](Self::run) decodes it and runs exactly
+    /// A native failure prints one while [`print_blob`](Settings::print_blob)
+    /// is on, as it is by default. When set, [`run`](Self::run) decodes it and runs exactly
     /// that one example — bypassing generation and shrinking — so you can
     /// reproduce a CI failure locally and deterministically.
     ///

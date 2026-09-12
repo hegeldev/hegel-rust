@@ -15,7 +15,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `phases` | list of `explicit`, `reuse`, `generate`, `target`, `shrink` | all five | Which parts of the run happen ([`Phase`](crate::Phase)); leaving out `shrink`, say, reports the first counterexample found. |
 | `report_multiple_failures` | boolean | `false` | Report every distinct failure a run finds rather than collapsing to one. |
 | `show_statistics` | boolean | `false` | Print the end-of-run statistics report for events recorded with [`TestCase::event`](crate::TestCase::event) and [`TestCase::event_value`](crate::TestCase::event_value). |
-| `print_blob` | boolean | `false` | On failure, print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. |
+| `print_blob` | boolean | `true` | On failure, print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. |
 | `backend` | `default`, `urandom` | `default` | The source of randomness ([`Backend`](crate::Backend)): a seeded PRNG, or fresh bytes from `/dev/urandom` on every draw for Antithesis's fuzzer to control. |
 
 The "Values" column is the vocabulary `hegel.toml` and the command-line
@@ -92,7 +92,7 @@ test_cases = 1000
 
 a test declared `#[hegel::test(test_cases = 200)]` and run on a CI server
 with `HEGEL_TEST_CASES=5000` resolves the `ci` profile (1000 test cases,
-derandomized, database disabled, `print_blob` on), the attribute overrides
+derandomized, database disabled), the attribute overrides
 `test_cases` to 200, and the environment variable overrides it again to
 5000. Locally, without the variable, the same test runs 200 cases with the
 `development` profile's settings for everything else.
@@ -126,13 +126,13 @@ they are siblings, and none layers over another.
 | Profile | Overrides | When it is the environment's profile |
 |---|---|---|
 | `development` | nothing | Locally: whenever neither of the others applies. |
-| `ci` | `derandomize = true`, `database = "disabled"`, `suppress_health_check = ["too_slow"]`, `print_blob = true` | On a CI server, detected from `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, and the variables other common services set. |
+| `ci` | `derandomize = true`, `database = "disabled"`, `suppress_health_check = ["too_slow"]` | On a CI server, detected from `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`, and the variables other common services set. |
 | `workload` | `backend = "urandom"`, `database = "disabled"`, `suppress_health_check = ["all"]` | Inside [Antithesis](https://antithesis.com/), detected from `ANTITHESIS_OUTPUT_DIR`. Antithesis's fuzzer controls `/dev/urandom`, so the `urandom` backend hands it every choice; and Antithesis pauses threads, which would trip wall-clock health checks such as `too_slow` spuriously. |
 
-The `ci` profile's `print_blob = true` is why a failing test on CI prints a
-`#[hegel::reproduce_failure("…")]` line: with the database disabled, the
-blob is the only way to reproduce that failure locally. Set
-`print_blob = false` under `[profiles.ci]` to turn it off.
+`print_blob` is on in the base settings, so a failing test prints a
+`#[hegel::reproduce_failure("…")]` line everywhere. On CI, with the database
+disabled, that blob is the only way to reproduce the failure locally. Set
+`print_blob = false` in a profile to turn it off.
 
 ## Custom profiles and inheritance
 

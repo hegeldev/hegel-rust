@@ -58,7 +58,7 @@ fn base_is_the_base_settings() {
     assert_eq!(s.phases.len(), 5);
     assert!(!s.report_multiple_failures);
     assert!(!s.show_statistics);
-    assert!(!s.print_blob);
+    assert!(s.print_blob);
     assert_eq!(s.backend, Backend::Default);
 }
 
@@ -111,7 +111,7 @@ fn the_workload_profile_selects_urandom_and_disables_the_database_and_every_heal
         assert!(s.health_check_suppressed(check), "{check:?}");
     }
     assert!(!s.derandomize, "Antithesis controls randomness itself");
-    assert!(!s.print_blob);
+    assert!(s.print_blob);
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn extending_base_pins_the_base_settings() {
     .unwrap();
     assert_eq!(s.test_cases, 7);
     assert!(!s.derandomize, "extends = \"base\" opts out of ci");
-    assert!(!s.print_blob);
+    assert!(s.print_blob);
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn config_profiles_extend_a_named_parent() {
     let s = resolve_named("nightly", &config);
     assert_eq!(s.test_cases, 10000);
     assert!(s.derandomize, "inherited from shipped ci");
-    assert!(s.print_blob, "inherited from shipped ci");
+    assert_eq!(s.database, Database::Disabled, "inherited from shipped ci");
     let s = resolve_named("ci", &config);
     assert_eq!(s.test_cases, 1000);
 }
@@ -705,7 +705,11 @@ fn the_default_profile_variable_prefers_over_detection() {
     let s = settings_for_from(None, &config, &[], None, env).unwrap();
     assert_eq!(s.test_cases, 7);
     assert!(!s.derandomize, "nightly's delta wins over the inherited ci");
-    assert!(s.print_blob, "ci still sits under nightly");
+    assert_eq!(
+        s.database,
+        Database::Disabled,
+        "ci still sits under nightly"
+    );
 }
 
 #[test]
