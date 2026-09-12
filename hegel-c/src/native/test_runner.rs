@@ -1687,11 +1687,8 @@ impl<'a> Engine<'a> {
         for _ in 0..CENSUS_RUNS {
             let replay = self.nd_replay_set(set, Some(origin)).await?;
             if replay.failed {
-                match replay.run.live.iter().position(|live| *live) {
-                    Some(k) => served[k] = true,
-                    None => {
-                        self.origins.entry(origin).capture(replay.realized);
-                    }
+                if let Some(k) = replay.run.live.iter().position(|live| *live) {
+                    served[k] = true;
                 }
             }
         }
@@ -1728,19 +1725,11 @@ impl<'a> Engine<'a> {
                 return Ok(());
             }
             let served = self.nd_census(origin, &set).await?;
-            let captured: Vec<Vec<ChoiceValue>> = self
-                .origins
-                .entry(origin)
-                .timelines()
-                .into_iter()
-                .filter(|timeline| !set.contains(timeline))
-                .collect();
             let kept: Vec<Vec<ChoiceValue>> = set
                 .iter()
                 .enumerate()
                 .filter(|(k, _)| *k == 0 || served[*k])
                 .map(|(_, timeline)| timeline.clone())
-                .chain(captured)
                 .collect();
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
@@ -2054,7 +2043,6 @@ impl<'a> Engine<'a> {
                 self.origins.entry(&origin).timelines().len()
             ));
         }
-        let anchored_pool = self.origins.get(&origin).map_or(0, |c| c.pool().len());
         let (shrunk, timed_out) = {
             let probe = EngineShrinkProbe {
                 engine: &mut *self,
@@ -2068,7 +2056,6 @@ impl<'a> Engine<'a> {
                 raised: crate::native::HashSet::default(),
                 pending_accept: None,
                 incumbent_bounces,
-                anchored_pool,
             };
             let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
             shrinker.deadline = shrink_deadline;
@@ -3455,11 +3442,6 @@ struct EngineShrinkProbe<'e, 'a> {
     /// derived (decision 75). Starts from the confirmation batch and
     /// follows each adopted candidate's ledger.
     incumbent_bounces: (u64, u64),
-    /// The pool's size when the anchor was last measured on the whole set
-    /// (decision 75): a pool that has grown since — a capture during a
-    /// rerun — makes the set reproduce more than the anchor says, and the
-    /// anchor is re-measured before the next candidate is judged.
-    anchored_pool: usize,
 }
 
 /// See [`EngineShrinkProbe::pending_accept`].
@@ -3547,26 +3529,6 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             let matched = self.matches(&run);
             if !self.gauntlet {
                 return Ok((matched, run.nodes, Spans::from(run.spans)));
-            }
-            let pool_len = self
-                .engine
-                .origins
-                .get(&self.target_origin)
-                .map_or(0, |c| c.pool().len());
-            if pool_len > self.anchored_pool {
-                self.anchored_pool = pool_len;
-                let set = self.engine.origins.entry(&self.target_origin).timelines();
-                let measured = self
-                    .engine
-                    .nd_measure_set(&self.target_origin, &set)
-                    .await?;
-                if measured.lower_bound() > self.anchor {
-                    self.anchor = measured.lower_bound();
-                    self.engine
-                        .origins
-                        .entry(&self.target_origin)
-                        .raise_anchor(self.anchor);
-                }
             }
             let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
             let key = crate::control::hegel_internal_unwrap!(
@@ -3657,12 +3619,6 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                     .engine
                     .nd_replay_set(&set, Some(self.target_origin.as_str()))
                     .await?;
-                if rerun.failed && !rerun.run.live.iter().any(|live| *live) {
-                    self.engine
-                        .origins
-                        .entry(&self.target_origin)
-                        .capture(rerun.realized);
-                }
                 let ledger = self.ledger.get_mut(&key).unwrap();
                 ledger.set_evidence.record(rerun.failed);
                 if rerun.on_timeline {

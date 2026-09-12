@@ -4181,7 +4181,6 @@ fn nd_gauntlet_probe_rejects_a_candidate_that_stops_reproducing() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -4349,7 +4348,6 @@ fn nd_gauntlet_accept_tops_the_ledger_up_to_the_reference_batch() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -4401,7 +4399,6 @@ fn an_exhausted_alpha_budget_pins_new_candidates_at_the_ceiling() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -4452,7 +4449,6 @@ fn a_rejected_candidate_latches_its_verdict() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -5409,7 +5405,6 @@ fn gauntlet_reruns_are_measurement_runs_and_a_reaccept_never_raises_the_anchor_a
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let nodes = vec![bool_node(true)];
             let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -5652,7 +5647,6 @@ fn the_gauntlet_abandons_a_candidate_whose_rerun_leaves_it_when_the_incumbent_ne
             sweep: SweepMode::Fast,
             pending_accept: None,
             incumbent_bounces: (0, 20),
-            anchored_pool: 0,
         };
         let nodes = branch_s_nodes();
         let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -5698,7 +5692,6 @@ fn the_gauntlet_counts_only_on_timeline_reruns_within_the_bounce_budget() {
             sweep: SweepMode::Fast,
             pending_accept: None,
             incumbent_bounces: (10, 20),
-            anchored_pool: 0,
         };
         let nodes = branch_s_nodes();
         let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -6324,7 +6317,6 @@ fn gauntlet_depth_charges_the_deadline_not_the_logical_counters() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let mut shrinker =
                 Shrinker::with_probe(Box::new(probe), vec![int_node(47)], Spans::new());
@@ -6967,7 +6959,6 @@ fn gauntlet_accept_without_adoption_moves_nothing() {
                     raised: crate::native::HashSet::default(),
                     pending_accept: None,
                     incumbent_bounces: (0, 0),
-                    anchored_pool: 0,
                 };
                 let nodes = vec![bool_node(true)];
                 let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -7023,7 +7014,6 @@ fn anchor_raises_only_on_adoption_and_once_per_timeline() {
                     raised: crate::native::HashSet::default(),
                     pending_accept: None,
                     incumbent_bounces: (0, 0),
-                    anchored_pool: 0,
                 };
                 let nodes = vec![bool_node(true)];
                 let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
@@ -8161,7 +8151,6 @@ fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
                 raised: crate::native::HashSet::default(),
                 pending_accept: None,
                 incumbent_bounces: (0, 0),
-                anchored_pool: 0,
             };
             let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]).unwrap();
             let mut evidence = nd::Evidence::default();
@@ -8544,7 +8533,7 @@ fn the_shrink_anchor_starts_from_the_whole_counterexample_when_a_pool_exists() {
 }
 
 #[test]
-fn a_failing_rerun_on_no_stored_timeline_is_captured_into_the_pool() {
+fn a_failing_rerun_on_no_stored_timeline_does_not_join_the_pool() {
     let mut executions = 0usize;
     with_engine(
         nd_settings(),
@@ -8580,11 +8569,12 @@ fn a_failing_rerun_on_no_stored_timeline_is_captured_into_the_pool() {
                 sweep: SweepMode::Fast,
                 pending_accept: None,
                 incumbent_bounces: (10, 20),
-                anchored_pool: 0,
             };
             let nodes = branch_s_nodes();
-            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
-            assert!(matched);
+            for _ in 0..2 {
+                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+                assert!(matched);
+            }
             let pool = probe
                 .engine
                 .origins
@@ -8593,43 +8583,23 @@ fn a_failing_rerun_on_no_stored_timeline_is_captured_into_the_pool() {
                 .pool()
                 .to_vec();
             assert!(
-                pool.iter()
-                    .any(|t| t.len() == 2 && t[0] == ChoiceValue::Boolean(true)),
+                pool.is_empty(),
                 "the always-failing second branch, reached only through the rescue tier, \
-                 is captured as a new timeline: {pool:?}"
+                 is set evidence and a bounce, not a new timeline: {pool:?}"
             );
-            let before = pool.len();
             assert_eq!(
                 probe.anchor, 0.3,
-                "the anchor is re-measured before the next candidate, not mid-loop"
+                "no pool grew, so nothing re-measured the anchor"
             );
-            probe.run(ShrinkRun::Full(&nodes)).await.unwrap();
+            let ledger = probe.ledger.values().next().unwrap();
             assert!(
-                probe.anchor > 0.3,
-                "the pool grew by capture, so the set was re-measured and the anchor rose: {}",
-                probe.anchor
+                ledger.bounces > 0,
+                "the rescue-tier runs left the candidate"
             );
-            assert_eq!(probe.anchored_pool, before);
-            let mut c = Counterexample::default();
-            c.adopt(vec![bool_node(true)]);
             assert!(
-                !c.capture(vec![ChoiceValue::Boolean(true)]),
-                "the incumbent itself"
+                ledger.set_evidence.runs() > ledger.evidence.runs(),
+                "they still count as trials of the set"
             );
-            assert!(c.capture(vec![ChoiceValue::Boolean(false)]));
-            assert!(
-                !c.capture(vec![ChoiceValue::Boolean(false)]),
-                "already pooled"
-            );
-            for i in 0..nd::POOL_CAP {
-                c.capture(vec![ChoiceValue::Integer(BigInt::from(i))]);
-            }
-            assert_eq!(
-                c.timelines().len(),
-                nd::POOL_CAP,
-                "bounded with the incumbent"
-            );
-            assert!(before < nd::POOL_CAP);
         },
     );
 }

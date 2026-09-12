@@ -214,3 +214,23 @@ cost one execution; `branch` discovery 5306 → 2013 executions and reuse unifor
 fast mode (median 2, from a 13/7 split with a slow mode in the thousands); `twobranch`
 pools covering all four failing paths in 20/20 episodes (from two in 15/20) and reuse
 uniformly fast (median 2, from 941); `racy` reuse 20/20 fast (from 15/5).
+
+## Campaign 7 — decision 76 (pool frozen during the shrink; `results-frozen.jsonl`)
+
+| body | median disc. execs | timelines (count: episodes) | reuse | median reuse execs | reuse caveats (stored / confirmed) | blob replay | median replay execs |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| branch | 2013 | 1: 7, 2: 13 | 20/20 | 2 | 20 / 0 | 60/60 | 1 |
+| twobranch | 2539 | 2: 4, 3: 10, 4: 6 | 20/20 | 2 | 16 / 4 | 60/60 | 1 |
+
+Mid-shrink capture removed (DRM: no new timelines once shrinking starts). `branch` is
+identical to campaign 4, as expected: its second branch is either in the confirmation
+batch or never found. `twobranch` loses path coverage — four paths stored in 6/20
+episodes instead of 20/20 — with reproduction unchanged and 4/20 reuses on the slow
+path. The cause is the size of the sample that finds paths: the confirmation batch is
+~20 replays of the raw incumbent keeping only the failing ones, and a raw `twobranch`
+integer path (`x >= 60` twice at p = 0.4 each) fails on ~16% of its runs, so any given
+path is missed about 40% of the time; the shrink's hundreds of set replays, whose
+divergent failures capture used to keep, were what completed the pools. Reproduction
+does not suffer because the rescue tier fails at the same rate the missing paths do, but
+the stored counterexample describes fewer of the failure's branches. Remedy proposed
+(not built): stash divergent failing runs during the shrink and append them after it.

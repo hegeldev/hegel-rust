@@ -950,3 +950,28 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     shrinker as a per-timeline shrinker, add ones that operate on whole multiverse
     representations", "distinguish worked / didn't work / no evidence"; the bounce
     budget and the order key are the implementation's choices.)
+
+76. **The pool is frozen for the duration of a shrink** (`test_runner.rs`,
+    `counterexample.rs`; DRM: "we should avoid introducing new timelines to the pool
+    once shrinking starts"). Decision 75's capture — a measurement replay during the
+    shrink that failed while live on no stored timeline was appended to the pool as a
+    branch the pool lacked, and the probe re-measured the set's anchor whenever the pool
+    had grown (`anchored_pool`) — is removed, from the gauntlet's reruns and from the
+    census. Such a run is still a trial of the set (set evidence) and, for a
+    per-timeline candidate, a bounce; it is no longer a new timeline. The reasons: the
+    shrink's estimand is the counterexample it started with — a set that grows under the
+    ledgers changes what every bound measured, and the anchor had to chase it — and the
+    parallel shrinker (decision 77, one shrinker per timeline over a fixed set of K
+    proposals) needs K fixed at its start. The pool therefore has two writers:
+    confirmation/trust sets it, and the multiverse passes only remove or reorder.
+    Measured cost (experiment 016, campaign 7): `branch` unchanged from campaign 4
+    (2013 executions, 1: 7 / 2: 13, reuse 20/20 at a median of 2); `twobranch` pools
+    fall from four paths in 20/20 episodes to 4: 6 / 3: 10 / 2: 4, reproduction still
+    20/20 and 60/60 but 4/20 reuses take the slow re-confirmation path. The mechanism
+    is sample size, not a rule: the confirmation batch is ~20 replays of the raw
+    incumbent and stores only the *failing* ones, and a raw integer path of `twobranch`
+    fails on ~16% of its runs, so a given path is missed at confirmation about 40% of
+    the time; the shrink's hundreds of set replays were the sample that found the rest.
+    Freezing forgoes that sample. Candidate remedy, not built pending DRM: stash the
+    divergent failing runs during the shrink and append the stash (deduped, capped,
+    census-filtered) *after* it — the shrink stays over a fixed set, the sample is kept.

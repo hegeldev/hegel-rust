@@ -297,8 +297,9 @@ candidate (a bounce: the test took another stored branch, or diverged) is charge
 against a per-candidate bounce budget derived from the incumbent's own bounce rate
 (`bounce_budget`; zero when the incumbent never bounced); past it the candidate is
 abandoned and latched as a reject for the shrink. When a pool exists at the start of a
-shrink the anchor starts from a measurement of the whole set (`nd_measure_set`); a
-measurement replay that fails on no stored timeline is captured into the pool. After
+shrink the anchor starts from a measurement of the whole set (`nd_measure_set`). The
+pool is frozen for the shrink (decision 76): a measurement replay that fails on no stored
+timeline is set evidence (and a bounce for the candidate), never a new timeline. After
 the per-timeline shrink, `nd_multiverse_shrink` shrinks
 the set under `set_order` (fewer timelines, then `timeline_order` lexicographically).
 A census — `CENSUS_RUNS` replays of the set, recording which timeline each failing run
