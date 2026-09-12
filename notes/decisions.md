@@ -975,3 +975,99 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     Freezing forgoes that sample. Candidate remedy, not built pending DRM: stash the
     divergent failing runs during the shrink and append the stash (deduped, capped,
     census-filtered) *after* it — the shrink stays over a fixed set, the sample is kept.
+
+77. **One shrinker per timeline, run in parallel over a fixed set** (`test_runner.rs`:
+    `nd_parallel_shrink`, `nd_drive_lanes`, `Lane`, `SlotProbe`; `replay.rs`:
+    `Replay::shrink_set`; `state.rs`: `NativeTestCase::for_shrink_set`). DRM's design:
+    "running one shrinker per timeline in parallel, with the shrinkers essentially in a
+    suspended state waiting for a response. Our candidate timeline during shrinking
+    contains a shrunk candidate for each timeline. Whatever we happen to pick as the
+    timeline during an execution feeds back a pass/fail response to the relevant
+    shrinker (under the usual nondeterminism rules)". It replaces decision 75's shrink
+    of the incumbent alone, and campaign 6's reverted sequential shrink of every served
+    timeline, whose recruiting run could not tell "my edit misfits" from "the test took
+    another branch" (20× cost). Mechanics: a census (`CENSUS_RUNS` set replays) keeps
+    the timelines that served a failing run — the incumbent included, so an incumbent
+    the failure no longer reaches is dropped and the first serving timeline promoted
+    from its witness; when nothing served, the incumbent stands alone. One shrinker per
+    kept timeline runs as a suspended future posting its request (a full run or a
+    prefix probe) to a slot; each execution replays a set composed, lane by lane, of
+    the lane's candidate and then its current timeline, led by a lane rotating over
+    the lanes that have a request. The leading lane's proposal is the run's leading
+    component (`Replay::shrink_set`): a run that draws past the proposal's end draws
+    the rest at random rather than from the timeline it shortened (a shortened
+    proposal must be tried as itself — completing it from its own timeline regressed
+    `clone` from 2388 to 3271 executions), and a misfit against the proposal is at
+    first put down to the test's own nondeterminism — its timeline serves and the
+    proposal is deferred, `MISFIT_DEFERRALS` = 6 led runs — and then, when the proposal
+    insists, taken for the edit and punned. Without the deferral every value edit
+    before a hidden branch point was punned into a hybrid and the mutation pass spent
+    its 38-probe divergence budget on each (campaign 8 before the rule:
+    `mutate_and_shrink` 15k of 24k executions on a `twobranch` episode); without the
+    insisting a proposal whose kind never fits (`[Integer(0)]` against a bool-int
+    timeline) was served past forever by its own timeline and never realized. An edit
+    that truly changes the path misfits on every run and is realized after six; a
+    branch the test takes with probability q slips through as a hybrid with
+    probability q^6, so a punned proposal whose realized shape is another lane's
+    timeline is answered as a miss with the proposal itself, never entered as a
+    candidate. A full proposal that runs out — at the top level or inside a clone
+    stream — and passes is a miss at once, answered with what ran: a test that drew
+    past the proposal was not running it, so the pass is not a flaky miss for the
+    confirm sweep to confirm (found on `clone`: an empty child-stream proposal was
+    deferred six times as a misfit, realized as a random-tail hybrid and gauntleted to
+    a reject under the confirm sweep — 29 runs for HEAD's one overrun; the episode fell
+    from 4126 executions to 1861 against HEAD's 2917). One that fails is a candidate
+    with its random tail, as a prefix probe's is: the tail is a free observation the
+    shrinker adopts when it is smaller. Attribution: a proposal is realized by a run that stayed live on it to
+    the end or was punned from it; a realized candidate takes on-timeline evidence
+    from every run live on it, whoever led, and set evidence only from the led runs
+    that stayed live on it or were punned from it — a led run the test's coin sent to
+    another lane's timeline is a trial of that timeline, not of the set the candidate
+    would join. Built first as "every led run except those on another lane's distinct
+    candidate", the set evidence rejected `[T,T,60]` on a `twobranch` pool missing one
+    of its four shapes from a single off-timeline pass (set 0/1, UCB 0.79 under the
+    0.839 anchor), latched the reject and left `[T,T,63]` unshrunk. A led run that
+    left the candidate is counted (a bounce) and costs nothing: decision 75's bounce
+    budget is removed — its guard role is the set evidence's, its cost-cap role the
+    caps below — after the two-lane probe showed candidates at 41/41 on-timeline
+    abandoned by it before the high-anchor gauntlet could accept. A realized failing
+    candidate larger than the lane's timeline under `sort_key` is answered as a miss
+    with what ran, without a gauntlet: the shrinker adopts strict improvements only,
+    yet its mutation pass and prefix probes run such candidates to observe the test's
+    shape, and each was costing a full gauntlet (one `twobranch` lane: 86 accepts for
+    17 improvements; the episode fell from 11.8k executions to 3.8k). Verdict:
+    latched; set UCB below the threshold rejects; the on-timeline gauntlet rejects;
+    accept needs a gauntlet accept, set LCB at or above the threshold and
+    `ANCHOR_SEED_RUNS` on-timeline runs; a candidate still undecided at
+    `SET_EVIDENCE_CAP` (60) set runs with a full on-timeline ledger is rejected. The
+    shrinker's adoption raises the anchor once per key to the set's LCB **capped at
+    `nd::anchor_ceiling()`** = LCB(20/20) = 0.839: raising to longer ledgers' bounds
+    ratcheted the anchor up on every accept (0.832 → 0.874 in the two-lane probe;
+    each accept needs LCB ≥ anchor and then becomes it) until candidates needed more
+    straight fails than any ledger holds. Starvation stops a lane, keeping its
+    timeline as it is (a stop is not a timeout): a realized candidate that has led
+    `SET_EVIDENCE_CAP × lanes` runs without `ANCHOR_SEED_RUNS` on-timeline runs is a
+    branch too rare to gauntlet. (A lane-level stop — 60 led runs in a row on neither
+    candidate nor current — was built when
+    `a_concurrent_run_shrinks_and_reports_a_caveated_blob` spun for 38 million
+    executions on a bool-shaped incumbent the body had switched away from, and removed
+    once the census dropped such incumbents and the insisting proposal made every
+    request answerable.) Measured (016, campaign 8): `branch` 2013 → 3301 executions
+    (two lanes in 13/20 episodes), `twobranch` 2539 → 4727 (three or four lanes in
+    15/20), against campaign 6's 49,368; `racy` 7414 → 1999 and `clone` 2388 → 2137
+    against the decision 76 state; reproduction unchanged (reuse 20/20 at a median of
+    2, blob 60/60 at 1); every kept pool timeline is now shrunk (the two-lane probe:
+    `[[T,T,77],[T,70,91]]` → `[[T,T,60],[T,60,60]]`). Where the cost now is: an
+    accept needs 20 runs on its branch, which arrive at the branch's share — a
+    quarter of the runs on `twobranch` — so an accepted improvement costs ~80
+    executions and a four-lane episode whose raw timelines need ~45 improvements
+    between them ~9.7k. Residuals: a pool missing shapes (decision 76's cost) makes
+    every run on a missing shape a divergence, so the deferral's q^6 leak is largest
+    exactly there — decision 76's stash-and-append remedy would also close it; a lone
+    lane whose branch the test stops taking is left in the shape the failure flips
+    to, as the single incumbent always was; a shared-prefix edit across lanes is not
+    built (leader rotation decides disagreements; DRM: "let's see how much of a
+    problem this is in practice"). Measurement replays are not shrinker calls. (DRM
+    directed the design; the leading-proposal replay, the attribution rules, the
+    ceiling, the deferral, the no-improvement and ran-out misses and the starvation
+    stop are the implementation's, each forced by a measured failure listed above.)

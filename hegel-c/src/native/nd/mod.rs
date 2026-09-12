@@ -153,6 +153,20 @@ pub(crate) const RETENTION_HIGH_WATER: f64 = 0.8;
 /// (experiment 008).
 pub(crate) const ANCHOR_SEED_RUNS: u64 = 20;
 
+/// The highest anchor an accept may raise an incumbent to (decision 77):
+/// the all-fail LCB at [`ANCHOR_SEED_RUNS`], the resolution the anchor was
+/// seeded at. An accept needs its LCB at or above the anchor and then
+/// becomes the anchor, so raising to the LCB of longer ledgers ratchets
+/// the anchor up a little on every accept until candidates need more
+/// straight fails than any ledger can hold.
+pub(crate) fn anchor_ceiling() -> f64 {
+    let mut evidence = Evidence::default();
+    for _ in 0..ANCHOR_SEED_RUNS {
+        evidence.record(true);
+    }
+    evidence.lower_bound()
+}
+
 pub(crate) enum GauntletVerdict {
     Accept,
     Reject,

@@ -286,17 +286,36 @@ successive halving over the incumbent, its pool, and prefix-mutant fills (up to
 `BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
 it never runs; each race logs one Debug line at entry; there is no public setting.
 
-### Shrinking the counterexample as a set (decision 75)
+### Shrinking the counterexample as a set (decisions 75 and 77)
 
-The gauntlet's reruns replay the candidate *set* — the candidate's realized values in
-front of the origin's pool. Reruns that stayed live on the candidate are evidence about
-the candidate; every rerun is evidence about the set, and an accept needs both bounds
-above the threshold (the timeline fails; the counterexample's reproduction is not
-lowered — decision 2), with the set's bound raising the anchor. A rerun that left the
-candidate (a bounce: the test took another stored branch, or diverged) is charged
-against a per-candidate bounce budget derived from the incumbent's own bounce rate
-(`bounce_budget`; zero when the incumbent never bounced); past it the candidate is
-abandoned and latched as a reject for the shrink. When a pool exists at the start of a
+The shrink of a nondeterministic origin runs one shrinker per stored timeline, in
+parallel over one fixed set (decision 77; `nd_parallel_shrink`, `nd_drive_lanes`). A
+census first keeps the timelines that served a failing replay (an incumbent the failure
+no longer reaches is dropped; the first serving timeline is promoted from its witness).
+Each kept timeline gets a `Lane`: the existing shrinker, suspended as a future on a
+`SlotProbe` that posts its request and waits. Every execution replays a set composed lane
+by lane of the lane's candidate and then its current timeline, led by a rotating lane
+whose proposal is the run's leading component (`Replay::shrink_set`): a run that draws
+past the proposal's end draws the rest at random, not from the timeline it shortened (a
+full proposal so overrun that passes is a miss at once, answered with what ran; one
+that fails is a candidate with its random tail, as a probe's is); a misfit against the proposal is put down to the test's nondeterminism `MISFIT_DEFERRALS`
+times — its timeline serves, the proposal is deferred — and then the proposal insists and
+is punned. Whatever timeline a run stays on gets the result: a proposal is realized by a
+run live on it to the end or punned from it (a pun realized in another lane's shape is a
+miss, not a candidate); a realized candidate takes on-timeline evidence from every run
+live on it, and set evidence from the led runs live on it or punned from it — a led run
+that took another lane's branch is a trial of that timeline, not of this set. A realized
+failing candidate that is no improvement on the lane's timeline under `sort_key` is
+answered as a miss with what ran, without a gauntlet (the shrinker adopts strict
+improvements only; its mutation pass and probes run such candidates to observe shape). An
+accept needs both bounds above the threshold (the timeline fails; the counterexample's
+reproduction is not lowered — decision 2) and `ANCHOR_SEED_RUNS` on-timeline runs; a led
+run that left the candidate is a bounce, counted and free. A candidate undecided at
+`SET_EVIDENCE_CAP` set runs with a full on-timeline ledger is rejected; a realized
+candidate past `SET_EVIDENCE_CAP × lanes` led runs without its seed is a branch too rare
+to gauntlet and its lane is stopped with its timeline as it is. Adoption raises the
+anchor to the set's bound capped at `nd::anchor_ceiling()` (LCB(20/20)), installs the
+set and persists it. When a pool exists at the start of a
 shrink the anchor starts from a measurement of the whole set (`nd_measure_set`). The
 pool is frozen for the shrink (decision 76): a measurement replay that fails on no stored
 timeline is set evidence (and a bounce for the candidate), never a new timeline. After
@@ -312,12 +331,12 @@ splice is smaller. Each candidate set faces `nd_evaluate_set` — the gauntlet d
 a bound with every replay as evidence, since the set is the estimand — and a set whose
 first timeline changed is installed only from a failing run that stayed live on it.
 Every accept is strictly smaller, so the rounds end on their own; the shrink deadline
-bounds them. Built and reverted on measurement (016, campaign 6: 20× discovery cost on a
-four-path body): shrinking every served pool timeline with the per-timeline shrinker —
-pool timelines stay as captured until the recruiting run can be made set-aware. Not
-built: a shared-prefix edit
-across components (capture at confirmation plus the delete pass covers most of it), and
-nodes for pool members (a promoted component's nodes come from its witness run).
+bounds them. Measured (016, campaign 8): `branch` 2013 → 3301 executions with two lanes,
+`twobranch` 2539 → 4727 with three or four, `racy` 7414 → 1999, `clone` 2388 → 2137,
+reproduction unchanged, every kept timeline shrunk; the sequential alternative (campaign
+6) cost 49k. An accepted improvement costs ~20 runs on its branch at the branch's share. Not built: a shared-prefix
+edit across lanes (leader rotation decides disagreements), and nodes for pool members
+(a promoted component's nodes come from its witness run).
 
 ### Targeting under ND handling
 

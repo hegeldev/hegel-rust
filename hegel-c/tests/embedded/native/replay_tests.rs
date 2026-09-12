@@ -251,3 +251,175 @@ fn a_pool_member_serves_the_branch_the_incumbent_cannot() {
     assert_eq!(draw_int(&mut tc), 68);
     assert_eq!(tc.divergence(), None);
 }
+
+fn shrink_set(timelines: Vec<Vec<ChoiceValue>>, puns: Vec<bool>) -> NativeTestCase {
+    let insist = vec![false; timelines.len()];
+    shrink_set_insisting(timelines, puns, insist)
+}
+
+fn shrink_set_insisting(
+    timelines: Vec<Vec<ChoiceValue>>,
+    puns: Vec<bool>,
+    insist: Vec<bool>,
+) -> NativeTestCase {
+    let nodes = timelines.iter().map(|_| None).collect();
+    NativeTestCase::for_shrink_set(&timelines, nodes, puns, insist, EngineRng::seeded(5), 64)
+        .unwrap()
+}
+
+#[test]
+fn a_proposals_misfit_lets_its_timeline_serve_until_it_insists_and_is_punned() {
+    let mut tc = shrink_set(
+        vec![vec![int(0)], vec![boolean(true), int(0)]],
+        vec![true, false],
+    );
+    assert!(
+        draw_bool(&mut tc),
+        "the shadow serves the boolean the proposal has not got"
+    );
+    assert_eq!(tc.live_timelines(), vec![false, true]);
+    assert_eq!(tc.divergence(), None);
+    assert_eq!(tc.realized_timelines(), vec![false, true]);
+    let mut tc = shrink_set_insisting(
+        vec![vec![int(0)], vec![boolean(true), int(0)]],
+        vec![true, false],
+        vec![true, false],
+    );
+    draw_bool(&mut tc);
+    assert_eq!(
+        tc.divergence(),
+        Some(Divergence {
+            stream: vec![],
+            position: 0
+        }),
+        "the insisting proposal's misfit leaves the set to be punned"
+    );
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+    assert_eq!(
+        tc.realized_timelines(),
+        vec![true, false],
+        "the proposal alone is realized; its timeline merely agreed so far"
+    );
+    draw_int(&mut tc);
+    draw_int(&mut tc);
+    assert_eq!(
+        tc.live_timelines(),
+        vec![false, false],
+        "the tail is random past its end"
+    );
+}
+
+#[test]
+fn an_insisting_proposal_without_a_clone_at_a_clone_position_leaves_the_child_random() {
+    let mut tc = shrink_set_insisting(
+        vec![
+            vec![boolean(true), int(4)],
+            vec![boolean(true), clone_of(vec![int(5)])],
+        ],
+        vec![true, false],
+        vec![true, false],
+    );
+    assert!(draw_bool(&mut tc));
+    let child = tc.clone_stream().unwrap();
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+    assert_eq!(tc.realized_timelines(), vec![true, false]);
+    draw_int(&mut child.lock());
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+}
+
+#[test]
+fn a_proposal_that_runs_out_draws_its_tail_at_random_not_from_the_timeline_it_shortened() {
+    let mut tc = shrink_set(
+        vec![
+            vec![boolean(true), int(60)],
+            vec![boolean(true), int(60), int(60)],
+        ],
+        vec![true, false],
+    );
+    assert!(draw_bool(&mut tc));
+    assert_eq!(draw_int(&mut tc), 60);
+    assert_eq!(tc.live_timelines(), vec![true, true]);
+    draw_int(&mut tc);
+    assert_eq!(
+        tc.divergence(),
+        Some(Divergence {
+            stream: vec![],
+            position: 2
+        }),
+        "the proposal's end is where the run left the set, not a point the shadow served"
+    );
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+    assert_eq!(
+        tc.realized_timelines(),
+        vec![true, false],
+        "the proposal was executed as itself, edits and end included; the timeline it \
+         shortened was not"
+    );
+    draw_int(&mut tc);
+    assert_eq!(
+        tc.live_timelines(),
+        vec![false, false],
+        "the tail stays random"
+    );
+}
+
+#[test]
+fn the_leading_proposals_end_is_the_runs_end_whatever_another_proposal_holds() {
+    let mut tc = shrink_set(
+        vec![
+            vec![boolean(true), int(60)],
+            vec![boolean(true), int(60), int(61)],
+        ],
+        vec![true, true],
+    );
+    assert!(draw_bool(&mut tc));
+    assert_eq!(draw_int(&mut tc), 60);
+    draw_int(&mut tc);
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+    assert_eq!(
+        tc.realized_timelines(),
+        vec![true, false],
+        "the other proposal agreed so far but was not executed as itself"
+    );
+}
+
+#[test]
+fn a_shorter_proposal_that_is_not_leading_is_pruned_when_the_leader_serves() {
+    let mut tc = shrink_set(
+        vec![
+            vec![boolean(true), int(60), int(61)],
+            vec![boolean(true), int(60)],
+        ],
+        vec![true, true],
+    );
+    assert!(draw_bool(&mut tc));
+    assert_eq!(draw_int(&mut tc), 60);
+    assert_eq!(draw_int(&mut tc), 61);
+    assert_eq!(tc.live_timelines(), vec![true, false]);
+    assert_eq!(tc.realized_timelines(), vec![true, false]);
+    assert_eq!(tc.divergence(), None);
+}
+
+#[test]
+fn a_proposal_that_runs_out_at_a_clone_leaves_the_child_stream_random() {
+    let mut tc = shrink_set(
+        vec![
+            vec![boolean(true)],
+            vec![boolean(true), clone_of(vec![int(5)])],
+        ],
+        vec![true, false],
+    );
+    assert!(draw_bool(&mut tc));
+    let child = tc.clone_stream().unwrap();
+    assert_eq!(
+        tc.divergence(),
+        Some(Divergence {
+            stream: vec![],
+            position: 1
+        })
+    );
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+    assert_eq!(tc.realized_timelines(), vec![true, false]);
+    draw_int(&mut child.lock());
+    assert_eq!(tc.live_timelines(), vec![false, false]);
+}

@@ -36,6 +36,7 @@
 //! has begun (decision 76). [`Counterexample::timelines`] composes the pool
 //! with the current incumbent.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
@@ -76,7 +77,7 @@ pub(crate) enum Standing {
         /// (decision 19).
         anchor: f64,
         /// The confirmation run the shrinker starts from; taken once.
-        witness: Option<RunResult>,
+        witness: Option<Box<RunResult>>,
     },
 }
 
@@ -192,11 +193,6 @@ pub(crate) struct Counterexample {
     /// on the shrink probe so a re-shrink's rebuilt probe keeps spending
     /// from the same budget.
     pub(crate) gauntlet_spend: GauntletSpend,
-    /// How often the incumbent's own measurement replays left it — did not
-    /// stay live on the first timeline — out of how many (decision 75): the
-    /// rate a shrink candidate's bounce budget is derived from.
-    bounces: u64,
-    bounce_runs: u64,
 }
 
 /// The order of two timelines within a counterexample (decision 74): the
@@ -238,18 +234,6 @@ impl Counterexample {
             Standing::Confirmed { anchor, .. } => Some(anchor),
             _ => None,
         }
-    }
-
-    /// Fold an incumbent measurement batch's bounces — replays that did not
-    /// stay live on the incumbent — into the origin's record.
-    pub(crate) fn record_bounces(&mut self, bounces: u64, runs: u64) {
-        self.bounces += bounces;
-        self.bounce_runs += runs;
-    }
-
-    /// The incumbent's (bounces, runs) so far.
-    pub(crate) fn bounce_stats(&self) -> (u64, u64) {
-        (self.bounces, self.bounce_runs)
     }
 
     /// Install a structurally shrunk counterexample (decision 74's
@@ -415,7 +399,10 @@ impl Counterexample {
             );
         }
         pool.truncate(nd::POOL_CAP);
-        self.standing = Standing::Confirmed { anchor, witness };
+        self.standing = Standing::Confirmed {
+            anchor,
+            witness: witness.map(Box::new),
+        };
         self.pool = pool;
         self.fails += evidence.0;
         self.replays += evidence.1;
@@ -439,7 +426,7 @@ impl Counterexample {
     /// starting point. Yields once per confirmation.
     pub(crate) fn take_witness(&mut self) -> Option<(RunResult, f64)> {
         match &mut self.standing {
-            Standing::Confirmed { anchor, witness } => witness.take().map(|w| (w, *anchor)),
+            Standing::Confirmed { anchor, witness } => witness.take().map(|w| (*w, *anchor)),
             _ => None,
         }
     }

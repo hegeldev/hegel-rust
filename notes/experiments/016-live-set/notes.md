@@ -234,3 +234,52 @@ divergent failures capture used to keep, were what completed the pools. Reproduc
 does not suffer because the rescue tier fails at the same rate the missing paths do, but
 the stored counterexample describes fewer of the failure's branches. Remedy proposed
 (not built): stash divergent failing runs during the shrink and append them after it.
+
+## Campaign 8 — decision 77 (one shrinker per timeline, in parallel; `results-parallel.jsonl`)
+
+| body | median disc. execs | timelines (count: episodes) | reuse | median reuse execs | reuse caveats (stored / confirmed) | blob replay | median replay execs |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| branch | 3301 | 1: 7, 2: 13 | 20/20 | 2 | 20 / 0 | 60/60 | 1 |
+| twobranch | 4727 | 1: 2, 2: 3, 3: 10, 4: 5 | 20/20 | 2 | 16 / 4 | 60/60 | 1 |
+| racy | 1999 | 1: 20 | 20/20 | 2 | 4 / 0 | 60/60 | 1 |
+| clone | 2137 | 1: 20 | 20/20 | 4 | 20 / 0 | 60/60 | 1 |
+
+(`racy` and `clone` rows come from side runs not checked in; their decision 76 baselines,
+measured this turn on a HEAD worktree with the same harness and seeds, are 7414 and
+2387.5 — both bodies are cheaper now: `racy` because a run that draws past a shortened
+proposal no longer completes it from the timeline it shortened, `clone` because a
+too-short child-stream proposal that passes is a miss at once.)
+Every kept pool timeline is now shrunk (campaigns 4–7 shrank the incumbent alone); the
+cost against campaign 7 is 1.6× on `branch` (two lanes in 13/20 episodes) and 1.8× on
+`twobranch` (three or four lanes in 15/20), against campaign 6's 49,368 for the same
+outcome; `racy` (one timeline, a threaded body) is cheaper than before. Reproduction is unchanged. The trajectory of the `twobranch` median while
+building, each step forced by a measured failure:
+
+| state of the driver | twobranch median | what the debug run showed |
+| --- | --- | --- |
+| bounce budget kept | — | two-lane probe: candidates at 41/41 on-timeline abandoned by the budget before the 0.857 anchor's gauntlet could accept |
+| budget removed; anchor raised to the accept's set LCB | — | anchor ratchets 0.832 → 0.874; a 56/60 set can no longer clear it (`[T,63,60]` left unshrunk) |
+| anchor ceiling; set evidence excludes runs on other lanes' candidates | 14,229 | perfect candidates (17/17 on-timeline, 60/60 set) rejected at the 60-led-run cap: on-timeline runs arrive at the branch's share |
+| undecidable cap needs a full on-timeline ledger; starvation allowance × lanes | 14,832 | abandonments 59 → 2, but `mutate_and_shrink` is 15k of 24k executions: every value edit before the hidden coin is punned into a hybrid, and the pass spends its 38-probe divergence budget on each |
+| mid-proposal misfits deferred 8× when another lane's timeline has the requested kind | 5,776 | the outlier (23k) is a pool missing two of four shapes: its divergences have no stored kind to match |
+| deferral of every mid-proposal misfit, 6× | 4,915 | max 9,818 (from 23,021); but `clone` 2388 → 3271: a shortened child-stream proposal was completed from the timeline it shortened (the shadow) and never tried as itself |
+| leading-proposal replay: a proposal that runs out draws its tail at random; a misfit against it is deferred 6× then punned when it insists; a pun realized in another lane's shape is a miss | 6,380 | the first cut (any live proposal's exhaustion) hung the suite: `[Integer(0)]` against `[T, 0]` was served past forever, never realized; seed 3015 at 11.8k: one lane's gauntlet accepted 86 candidates for 17 improvements |
+| a realized failing candidate that is no improvement is a miss, no gauntlet | 5,179 | seed 3015 11.8k → 3.8k, but `[T,T,63]` left unshrunk: `[T,T,60]` rejected on one off-timeline pass (set 0/1) and latched |
+| set evidence only from led runs on or punned from the candidate | 4,550 | seed 3015 fully shrunk at 4.2k; `branch` 3900 → 3284 (final campaign 3301); but `clone` 4344 against HEAD's 2388: an empty child-stream proposal deferred 6× as a misfit, realized as a random-tail hybrid and gauntleted under the confirm sweep — 29 runs for HEAD's one overrun |
+| a full proposal that runs out (top level or clone stream) and passes is a miss at once; one that fails keeps its random tail as a candidate | 4,727 | `clone` seed 3000: 4126 → 1861 (HEAD 2917); making every ran-out full proposal a miss (2890 on the episode) cost `twobranch` its random-tail shortcuts (median 4,550 → 4,929) |
+
+Also found on the way: `a_concurrent_run_shrinks_and_reports_a_caveated_blob` spun for
+38 million executions — the census kept a bool-shaped incumbent the body had switched
+away from, and its lane's proposals could never be realized; the census now treats the
+incumbent like any timeline. (A lane-level starvation stop built for it was removed once
+the insisting proposal made every request answerable.)
+
+Per-episode debug runs (`LIVESET_DEBUG=1 livesets discover-twobranch <db> <seed>`): seed
+3000 (the campaign's costliest, 9.7k) starts from a seven-timeline pool the census cuts to
+four lanes whose shrinkers make 110 / 490 / 515 / 1032 calls with 0 / 10 / 7 / 26
+improvements, 43 adoptions, 1 abandonment; seed 3015 (4.6k) three lanes at 148 / 598 /
+556 calls, 19 adoptions. The cost is now the gauntlet's by construction: an accept needs
+20 runs on the candidate's branch, which arrive at the branch's share (a quarter on
+`twobranch`), so each accepted improvement costs ~80 executions. Traced on seed 3015
+before the last two rules, one lane's 9.4k led runs were 6.3k gauntlet runs (4.6k of them
+off the candidate), 2.0k deferrals and 1.1k realizations.

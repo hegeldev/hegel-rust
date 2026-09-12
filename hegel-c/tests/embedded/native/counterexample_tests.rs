@@ -17,6 +17,8 @@ fn witness(origin: &str) -> RunResult {
         events: Vec::new(),
         divergence: None,
         live: Vec::new(),
+        realized: Vec::new(),
+        ran_out: false,
     }
 }
 
@@ -476,8 +478,4 @@ fn install_set_replaces_the_pool_and_optionally_the_incumbent() {
     c.install_set(&[values(&[int_node(3)])], Some(vec![int_node(3)]));
     assert_eq!(c.incumbent().unwrap(), &[int_node(3)]);
     assert!(c.pool().is_empty());
-    assert_eq!(c.bounce_stats(), (0, 0));
-    c.record_bounces(2, 10);
-    c.record_bounces(1, 5);
-    assert_eq!(c.bounce_stats(), (3, 15));
 }

@@ -473,3 +473,24 @@ fn the_failure_minimum_binds_the_accept_not_the_reject() {
         GauntletVerdict::Accept
     ));
 }
+
+#[test]
+fn the_anchor_ceiling_is_the_all_fail_lcb_at_the_seed_size() {
+    let mut seed = Evidence::default();
+    for _ in 0..ANCHOR_SEED_RUNS {
+        seed.record(true);
+    }
+    assert_eq!(anchor_ceiling(), seed.lower_bound());
+    assert!((anchor_ceiling() - 0.839).abs() < 0.001);
+    assert_eq!(
+        gauntlet_threshold(anchor_ceiling()),
+        anchor_ceiling(),
+        "at the ceiling a candidate must match the seed's own all-fail bound"
+    );
+    let mut longer = seed;
+    longer.record(true);
+    assert!(
+        longer.lower_bound() > anchor_ceiling(),
+        "a longer all-fail ledger bounds higher, which the ceiling stops from ratcheting the anchor"
+    );
+}

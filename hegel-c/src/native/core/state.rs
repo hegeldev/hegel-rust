@@ -1599,6 +1599,34 @@ impl NativeTestCase {
         .with_random(rng)
     }
 
+    /// Replay a shrink's candidate set as one test case (decision 77): the
+    /// live-set semantics of [`Self::for_counterexample`], with the
+    /// timelines flagged in `puns` — unrealized proposals, with their
+    /// realized `nodes` where the proposal came from a full run — punning
+    /// their own misfits once they have left the set by them.
+    pub fn for_shrink_set(
+        timelines: &[Vec<ChoiceValue>],
+        nodes: Vec<Option<Vec<ChoiceNode>>>,
+        puns: Vec<bool>,
+        insist: Vec<bool>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        let replay = Replay::shrink_set(timelines.to_vec(), nodes, puns, insist);
+        let max_size = max_size.max(replay.longest());
+        Self::new_stream(
+            replay,
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
     fn new_stream(
@@ -1709,6 +1737,18 @@ impl NativeTestCase {
     /// for fresh generation.
     pub fn live_timelines(&self) -> Vec<bool> {
         self.replay.live()
+    }
+
+    /// Which of the replayed counterexample's timelines this run realized
+    /// (decision 77), in counterexample order: see [`Replay::realized`].
+    pub fn realized_timelines(&self) -> Vec<bool> {
+        self.replay.realized()
+    }
+
+    /// Whether the replayed proposal ran out and the run's tail was drawn at
+    /// random: see [`Replay::ran_out`].
+    pub fn ran_out(&self) -> bool {
+        self.replay.ran_out()
     }
 
     /// Stamp this test case for capture.
@@ -2373,8 +2413,8 @@ impl NativeTestCase {
 
         match self.replay.resolve(&self.clone_id, idx, from_prefix) {
             Resolved::Served(v) => return Ok((v, false)),
-            Resolved::Misfit(stored) => {
-                let is_simplest = match self.replay.proposal_node(idx) {
+            Resolved::Misfit(stored, timeline) => {
+                let is_simplest = match self.replay.proposal_node(timeline, idx) {
                     Some(pn) => *stored == pn.data.simplest_value()?,
                     None => false,
                 };

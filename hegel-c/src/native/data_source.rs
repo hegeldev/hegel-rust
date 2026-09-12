@@ -84,6 +84,16 @@ impl NativeDataSource {
         handle.lock().live_timelines()
     }
 
+    /// Which stored timelines the run realized (decision 77).
+    pub fn take_realized(handle: &NativeTestCaseHandle) -> Vec<bool> {
+        handle.lock().realized_timelines()
+    }
+
+    /// Whether the replayed proposal ran out and the tail was drawn at random.
+    pub fn take_ran_out(handle: &NativeTestCaseHandle) -> bool {
+        handle.lock().ran_out()
+    }
+
     /// The test case's outcome, reconstructed from its family's write-once
     /// conclusion. Whoever concluded the family first — a draw that overran
     /// or hit a terminal assume, or the body via `mark_complete` — set the
