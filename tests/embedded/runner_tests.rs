@@ -211,7 +211,7 @@ fn test_from_profile_base_is_environment_independent() {
     let settings = Settings::from_profile("base");
     assert_eq!(settings.database, Database::Unset);
     assert!(!settings.derandomize);
-    assert!(!settings.print_blob);
+    assert!(settings.print_blob);
     assert_eq!(settings.test_cases, 100);
     assert_eq!(settings.seed, None);
     assert_eq!(settings.backend, crate::runner::Backend::Default);

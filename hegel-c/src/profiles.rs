@@ -25,8 +25,8 @@
 //! `hegel.toml` or replaced by registration like any other:
 //!
 //! - `development`: an empty delta, the environment profile of local runs.
-//! - `ci`: `derandomize = true`, the database disabled, the `too_slow`
-//!   health check suppressed, and `print_blob = true`.
+//! - `ci`: `derandomize = true`, the database disabled, and the `too_slow`
+//!   health check suppressed.
 //! - `workload`: the urandom backend, the database disabled, and every
 //!   health check suppressed, since Antithesis's thread pausing would trip
 //!   wall-clock checks such as `too_slow` spuriously. Like any profile
@@ -258,7 +258,6 @@ static SHIPPED: Lazy<[(&'static str, ProfileDelta); 3]> = Lazy::new(|| {
                 derandomize: Some(true),
                 database: Some(Database::Disabled),
                 suppress_health_check: Some(alloc::vec![HealthCheck::TooSlow]),
-                print_blob: Some(true),
                 ..ProfileDelta::default()
             },
         ),

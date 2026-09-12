@@ -706,9 +706,8 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
 
  Three ordinary profiles ship with libhegel: `development` (the base
  settings, unchanged — what local runs get), `ci` (derandomization on,
- database disabled, the `too_slow` health check suppressed, reproduction
- lines printed), and `workload` (database disabled, every health check
- suppressed). A custom profile without an explicit `extends` extends
+ database disabled, the `too_slow` health check suppressed), and
+ `workload` (database disabled, every health check suppressed). A custom profile without an explicit `extends` extends
  `default`, skipping any candidate already in its chain, so it sits on
  `ci` when resolved on a CI server and on `development` locally. The
  shipped profiles themselves extend `base` and never layer over one
@@ -719,7 +718,8 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
  to resolve one by name.
  */
-hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
+hegel_result_t hegel_settings_new(hegel_context_t *ctx,
+                                  hegel_settings_t **out_settings);
 
 /*
  Parameters:
@@ -886,8 +886,8 @@ hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
 /*
  Parameters:
  `yes`: When `true`, a failure should be reported with a copy-pasteable
-   reproduction line for its counterexample. Defaults to `false`; the
-   shipped `ci` profile turns it on. libhegel itself never acts on this
+   reproduction line for its counterexample. Defaults to `true`. libhegel
+   itself never acts on this
    value — the reproduce blob is always attached to the failure and
    printing it is the caller's decision — but carrying it in the settings
    lets profiles configure it for every Hegel library.

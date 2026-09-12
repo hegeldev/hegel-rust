@@ -202,7 +202,7 @@ impl Settings {
             ],
             report_multiple_failures: false,
             show_statistics: false,
-            print_blob: false,
+            print_blob: true,
             backend: Backend::Default,
             config_path: None,
         }

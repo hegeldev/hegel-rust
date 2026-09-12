@@ -34,7 +34,7 @@ fn base_settings_are_environment_independent_except_for_antithesis() {
     let settings = Settings::base(false);
     assert!(matches!(settings.database, Database::Unset));
     assert!(!settings.derandomize);
-    assert!(!settings.print_blob);
+    assert!(settings.print_blob);
     assert!(!settings.report_multiple_failures);
 }
 
@@ -60,9 +60,9 @@ fn health_checks_run_unless_suppressed_explicitly() {
 }
 
 #[test]
-fn print_blob_defaults_off_and_is_settable() {
-    assert!(!Settings::base(false).print_blob);
-    assert!(Settings::base(false).print_blob(true).print_blob);
+fn print_blob_defaults_on_and_is_settable() {
+    assert!(Settings::base(false).print_blob);
+    assert!(!Settings::base(false).print_blob(false).print_blob);
 }
 
 #[test]

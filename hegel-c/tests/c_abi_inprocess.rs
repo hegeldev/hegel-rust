@@ -3040,7 +3040,7 @@ fn the_base_profile_reads_back_the_base_settings() {
         assert_eq!(view.suppress_health_check, 0);
         assert!(!view.report_multiple_failures);
         assert!(!view.show_statistics);
-        assert!(!view.print_blob);
+        assert!(view.print_blob);
         assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_DEFAULT as u32);
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
@@ -3207,7 +3207,7 @@ fn set_default_profile_overrides_the_default_profile() {
         ok(hegel_settings_new(ctx, &mut s));
         let view = read_settings(ctx, s);
         assert!(!view.derandomize, "the override displaces CI detection");
-        assert!(!view.print_blob);
+        assert!(view.print_blob);
         ok(hegel_settings_free(ctx, s));
         ok(hegel_c::hegel_set_default_profile(ctx, ptr::null()));
         ok(hegel_context_free(ctx));
