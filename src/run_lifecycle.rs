@@ -7,23 +7,22 @@
 //!
 //! The engine lives behind libhegel's C ABI; `drive` owns everything around
 //! it — installing the panic hook, wrapping each test body with
-//! `catch_unwind` plus `mark_complete`, the antithesis integration, the final
-//! replay of each discovered counterexample (with its report printed around
-//! it), and the closing re-raise of the failing test's own panic.
+//! `catch_unwind` plus `mark_complete`, the final replay of each discovered
+//! counterexample (with its report printed around it), and the closing
+//! re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Once};
 
-use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
     hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
-use crate::runner::{Settings, Verbosity};
+use crate::runner::{Settings, TestLocation, Verbosity};
 use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -518,7 +517,7 @@ pub(crate) fn drive<F>(
     let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
 
-    let c_settings = SettingsHandle::build(settings, database_key);
+    let c_settings = SettingsHandle::build(settings, database_key, test_location);
     let run = match RunHandle::start(&c_settings, output.sink()) {
         Ok(run) => run,
         Err(message) => panic!("{message}"), // nocov
@@ -557,10 +556,7 @@ pub(crate) fn drive<F>(
 
     let result = run.result();
     use crate::ffi::sys::hegel_run_status_t as RunStatus;
-    let status = result.status();
-    emit_antithesis_assertion(status != RunStatus::HEGEL_RUN_STATUS_PASSED, test_location);
-
-    match status {
+    match result.status() {
         RunStatus::HEGEL_RUN_STATUS_PASSED => {}
         RunStatus::HEGEL_RUN_STATUS_ERROR => {
             let message = result
@@ -648,7 +644,7 @@ pub(crate) fn drive_blob_replay<F>(
     init_panic_hook();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
-    let c_settings = SettingsHandle::build(settings, database_key);
+    let c_settings = SettingsHandle::build(settings, database_key, test_location);
     let c_tc = match CTestCase::from_blob(&c_settings, blob, output.sink()) {
         Ok(c_tc) => c_tc,
         Err(message) => panic!("{message}"),
@@ -659,32 +655,15 @@ pub(crate) fn drive_blob_replay<F>(
         output.block(&diagnostic);
     }
     match result {
-        TestCaseResult::Interesting(_) => {
-            emit_antithesis_assertion(true, test_location);
-            match payload {
-                Some(payload) => std::panic::resume_unwind(payload),
-                None => unreachable!(), // nocov
-            }
-        }
-        _ => {
-            emit_antithesis_assertion(false, test_location);
-            panic!(
-                "reproduce_failure: the supplied failure blob no longer reproduces a \
-                 failure. The failure may have been fixed, or the blob is stale."
-            );
-        }
+        TestCaseResult::Interesting(_) => match payload {
+            Some(payload) => std::panic::resume_unwind(payload),
+            None => unreachable!(), // nocov
+        },
+        _ => panic!(
+            "reproduce_failure: the supplied failure blob no longer reproduces a \
+             failure. The failure may have been fixed, or the blob is stale."
+        ),
     }
-}
-
-/// Report the run's verdict to Antithesis (when running under it).
-fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
-    // nocov start
-    if crate::antithesis::is_running_in_antithesis() {
-        if let Some(loc) = test_location {
-            crate::antithesis::emit_assertion(loc, !test_failed);
-        }
-    }
-    // nocov end
 }
 
 #[cfg(test)]

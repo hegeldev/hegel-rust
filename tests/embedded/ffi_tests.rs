@@ -14,7 +14,7 @@ use crate::runner::{Backend, Settings};
 #[test]
 fn ffi_settings_builds_with_each_explicit_backend() {
     for backend in [Backend::Default, Backend::Urandom] {
-        let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None);
+        let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None, None);
     }
 }
 
@@ -48,7 +48,7 @@ fn drive_run(run: &RunHandle, mut f: impl FnMut(&CTestCase) -> Result<(), hegel_
 #[test]
 fn ffi_drives_a_passing_run_exercising_every_primitive() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     let text = StringGenerator::text(0, 5, None, 0, None, None, None, None, None).unwrap();
 
@@ -128,7 +128,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
     const ALREADY_COMPLETE: hegel_c::hegel_result_t =
         hegel_c::hegel_result_t::HEGEL_E_ALREADY_COMPLETE;
     let settings = test_settings(2);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     while let Some(tc) = run.next_test_case() {
         tc.mark_complete(VALID, None).unwrap();
@@ -195,7 +195,7 @@ fn ffi_string_generator_constructors_cover_every_kind() {
 #[test]
 fn ffi_reports_failure_with_blob_then_replays_it() {
     let settings = test_settings(7);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
 
     let origin = "n != 0";
@@ -227,7 +227,7 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 
-    let sh2 = SettingsHandle::build(&settings, None);
+    let sh2 = SettingsHandle::build(&settings, None, None);
     let replay = CTestCase::from_blob(&sh2, &blob, None).unwrap();
     assert_eq!(
         replay.generate_integer(0, 100).unwrap(),
@@ -245,7 +245,7 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
 #[test]
 fn ffi_clone_handle_shares_the_test_case() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
 
     let tc = run.next_test_case().unwrap();
@@ -265,7 +265,7 @@ fn ffi_clone_handle_shares_the_test_case() {
 #[test]
 fn ffi_from_blob_rejects_undecodable_input() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!", None) {
         Err(e) => e,
         Ok(_) => panic!("expected an undecodable blob to be rejected"),
@@ -303,7 +303,7 @@ fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
 #[should_panic(expected = "was not marked complete")]
 fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     let _first = run.next_test_case().unwrap();
     run.next_test_case();

@@ -863,6 +863,36 @@ hegel_result_t hegel_settings_set_database_key(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `file`: The source file the test is defined in.
+ `begin_line`: The line in `file` where the test's definition begins.
+ `class_name`: The class, module or package enclosing the test function.
+ `function`: The name of the test function.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` if any string is NULL or
+ not valid UTF-8.
+
+ Records where the test under these settings lives. Inside
+ [Antithesis](https://antithesis.com/) (detected via
+ `ANTITHESIS_OUTPUT_DIR`), libhegel then reports the verdict of every run
+ started from these settings, and of every test case replayed from a blob
+ with them, as one `always` assertion in the SDK format Antithesis
+ collects — identified as `<class_name>::<function> passes properties` and
+ located at `file:begin_line` — so the property is listed alongside the
+ assertions in the system under test and flagged when it fails. Outside
+ Antithesis the location is unused. Without a location nothing is
+ reported. Like the database key, the location is per-test identity rather
+ than a setting: `hegel_settings_register_profile` does not snapshot it.
+ Each call replaces the previous location.
+ */
+hegel_result_t hegel_settings_set_test_location(hegel_context_t *ctx,
+                                                hegel_settings_t *s,
+                                                const char *file,
+                                                uint32_t begin_line,
+                                                const char *class_name,
+                                                const char *function);
+
+/*
+ Parameters:
  `phases`: A bitwise OR of `hegel_phase_t` values to toggle phases. The
    default is `HEGEL_PHASE_ALL`.
 

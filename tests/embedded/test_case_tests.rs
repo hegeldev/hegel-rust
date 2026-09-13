@@ -15,7 +15,7 @@ use crate::runner::Settings;
 /// of each test; `hegel_run_free` tolerates the un-marked in-flight case.
 fn emitting_test_case() -> (RunHandle, TestCase) {
     let settings = Settings::new().database(None);
-    let c_settings = SettingsHandle::build(&settings, None);
+    let c_settings = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()

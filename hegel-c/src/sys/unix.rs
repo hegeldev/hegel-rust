@@ -123,6 +123,18 @@ pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
     write_all(data, |chunk| rustix::io::write(&fd, chunk))
 }
 
+/// Append `data` to the file at `path`, creating it if it does not exist.
+pub(super) fn append(path: &str, data: &[u8]) -> Result<(), Error> {
+    let fd = retry_intr(|| {
+        rustix::fs::open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
+        )
+    })?;
+    write_all(data, |chunk| rustix::io::write(&fd, chunk))
+}
+
 /// Create a single directory level at `path`.
 pub(super) fn mkdir(path: &str) -> Result<(), Error> {
     rustix::fs::mkdir(path, Mode::from_bits_truncate(0o777))?;

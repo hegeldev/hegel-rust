@@ -12,10 +12,11 @@ use windows_sys::Win32::Foundation::{
     SetLastError,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_ATTRIBUTE_NORMAL,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FindClose, FindFirstFileW, FindNextFileW,
-    GetFileAttributesW, INVALID_FILE_ATTRIBUTES, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
-    OPEN_EXISTING, ReadFile, RemoveDirectoryW, WIN32_FIND_DATAW, WriteFile,
+    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FindClose,
+    FindFirstFileW, FindNextFileW, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    MOVEFILE_REPLACE_EXISTING, MoveFileExW, OPEN_ALWAYS, OPEN_EXISTING, ReadFile, RemoveDirectoryW,
+    WIN32_FIND_DATAW, WriteFile,
 };
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 
@@ -123,6 +124,17 @@ pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
 /// Create (or truncate) the file at `path` and write `data` to it.
 pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
     let handle = open(path, GENERIC_WRITE, 0, CREATE_ALWAYS)?;
+    write_to(&handle, data)
+}
+
+/// Append `data` to the file at `path`, creating it if it does not exist.
+pub(super) fn append(path: &str, data: &[u8]) -> Result<(), Error> {
+    let handle = open(path, FILE_APPEND_DATA, FILE_SHARE_READ, OPEN_ALWAYS)?;
+    write_to(&handle, data)
+}
+
+/// Write all of `data` to the open file `handle`.
+fn write_to(handle: &OwnedHandle, data: &[u8]) -> Result<(), Error> {
     let mut remaining = data;
     while !remaining.is_empty() {
         let mut n: u32 = 0;
