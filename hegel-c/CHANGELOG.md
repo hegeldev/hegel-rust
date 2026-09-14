@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.42.0 - 2026-09-14
+
+This release changes the base value of `print_blob` from `false` to `true`, and removes `print_blob = true` from the `ci` profile. 
+`hegel_settings_get_print_blob` now returns `true` for a handle from `hegel_settings_new` under `development`, `base`, and `workload`. 
+The behavior of `ci` is unchanged.
+
 ## 0.41.1 - 2026-09-14
 
 This patch moves the [Antithesis](https://antithesis.com/) integration into libhegel, so every language binding gets it rather than each reimplementing it.

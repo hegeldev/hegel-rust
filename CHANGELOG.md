@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.0 - 2026-09-14
+
+This release turns `print_blob` on by default.
+
 ## 0.44.2 - 2026-09-14
 
 This patch moves the [Antithesis](https://antithesis.com/) integration into the engine: the test's location is now passed to libhegel, which writes the verdict to `sdk.jsonl` itself when running inside Antithesis. Nothing changes in what is reported.
