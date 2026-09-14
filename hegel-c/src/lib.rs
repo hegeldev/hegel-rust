@@ -26,7 +26,7 @@ use core::task::{Context, Poll, Waker};
 use crate::sys::sync::{Mutex, MutexGuard};
 
 /// cbindgen:ignore
-mod antithesis_detect;
+mod antithesis;
 /// cbindgen:ignore
 mod backend;
 /// cbindgen:ignore
@@ -81,6 +81,7 @@ pub mod __bench {
     }
 }
 
+use crate::antithesis::{Reporter, TestLocation};
 use crate::backend::{
     DataSource, DataSourceError, Failure, RunError, TestCaseResult, TestRunResult,
 };
@@ -437,6 +438,10 @@ pub struct HegelSettings {
     /// `hegel_settings_set_database` so the getter can hand out a borrowed
     /// pointer.
     database_c: Option<CString>,
+    /// Where the test under these settings lives, for reporting its verdict
+    /// to Antithesis. Like the database key, per-test identity rather than
+    /// a setting: not part of `Settings` and not snapshotted into profiles.
+    test_location: Option<TestLocation>,
 }
 
 impl HegelSettings {
@@ -450,7 +455,16 @@ impl HegelSettings {
             inner,
             database_key: None,
             database_c,
+            test_location: None,
         }
+    }
+
+    /// The reporter for a run or blob replay under these settings, writing
+    /// to `output`: `None` when no test location was set.
+    fn reporter(&self, output: &Output) -> Option<Reporter> {
+        self.test_location
+            .clone()
+            .map(|location| Reporter::new(location, output.clone()))
     }
 }
 
@@ -495,6 +509,11 @@ struct FamilyShared {
     /// the worker attribution `hegel_test_case_set_worker` turns on. `None`
     /// on a platform without a monotonic clock, where the offsets read 0.
     started: Option<crate::sys::Instant>,
+    /// Reports the outcome to Antithesis on completion. Only a standalone
+    /// (`hegel_test_case_from_blob`) family reports per case: the replay is
+    /// the whole test, and its outcome is the verdict. A run-owned family
+    /// carries `None`; the run reports once its result is known.
+    reporter: Option<Reporter>,
 }
 
 impl FamilyShared {
@@ -509,6 +528,9 @@ impl FamilyShared {
             .is_ok()
         {
             self.ds.mark_complete(outcome);
+            if let Some(reporter) = &self.reporter {
+                reporter.report(!matches!(outcome, TestCaseResult::Interesting(_)));
+            }
         }
     }
 }
@@ -620,6 +642,22 @@ pub struct HegelRun {
     // advances to the next case or is freed.
     current_family: Option<Arc<FamilyShared>>,
     result: Option<HegelRunResult>,
+    /// Reports the run's verdict to Antithesis when the result is known;
+    /// `None` when the settings carried no test location.
+    reporter: Option<Reporter>,
+}
+
+impl HegelRun {
+    /// Record the finished run's result, releasing the engine, and report the
+    /// verdict: passed only when the property held, so a run-level error
+    /// counts as a failure too.
+    fn finish(&mut self, result: HegelRunResult) {
+        if let Some(reporter) = &self.reporter {
+            reporter.report(result.status() == hegel_run_status_t::HEGEL_RUN_STATUS_PASSED);
+        }
+        self.result = Some(result);
+        self.engine = None;
+    }
 }
 
 /// A run result is the outcome of a finished run, returned as a
@@ -1139,6 +1177,60 @@ pub unsafe extern "C" fn hegel_settings_set_database_key(
             HEGEL_E_INVALID_ARG
         }
     }
+}
+
+/// Parameters:
+/// `file`: The source file the test is defined in.
+/// `begin_line`: The line in `file` where the test's definition begins.
+/// `class_name`: The class, module or package enclosing the test function.
+/// `function`: The name of the test function.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` if any string is NULL or
+/// not valid UTF-8.
+///
+/// Records where the test under these settings lives. Inside
+/// [Antithesis](https://antithesis.com/) (detected via
+/// `ANTITHESIS_OUTPUT_DIR`), libhegel then reports the verdict of every run
+/// started from these settings, and of every test case replayed from a blob
+/// with them, as one `always` assertion in the SDK format Antithesis
+/// collects — identified as `<class_name>::<function> passes properties` and
+/// located at `file:begin_line` — so the property is listed alongside the
+/// assertions in the system under test and flagged when it fails. Outside
+/// Antithesis the location is unused. Without a location nothing is
+/// reported. Like the database key, the location is per-test identity rather
+/// than a setting: `hegel_settings_register_profile` does not snapshot it.
+/// Each call replaces the previous location.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_test_location(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    file: *const c_char,
+    begin_line: u32,
+    class_name: *const c_char,
+    function: *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let hs = match unsafe { settings_mut(ctx, s, "hegel_settings_set_test_location") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    const FN: &str = "hegel_settings_set_test_location";
+    let read = |name: &str, p: *const c_char| unsafe { required_utf8_arg(ctx, FN, name, p) };
+    let (file, class, function) = match (
+        read("file", file),
+        read("class_name", class_name),
+        read("function", function),
+    ) {
+        (Ok(file), Ok(class), Ok(function)) => (file, class, function),
+        (Err(rc), _, _) | (_, Err(rc), _) | (_, _, Err(rc)) => return rc,
+    };
+    hs.test_location = Some(TestLocation {
+        function,
+        class,
+        file,
+        begin_line,
+    });
+    HEGEL_OK
 }
 
 /// Parameters:
@@ -1682,6 +1774,7 @@ pub unsafe extern "C" fn hegel_run_start(
         .clone()
         .output(output_from_callback(callback, user_data));
     let database_key = handle.database_key.clone();
+    let reporter = handle.reporter(&settings.output);
 
     let exchange = Arc::new(CaseExchange::new());
     let engine_exchange = Arc::clone(&exchange);
@@ -1694,6 +1787,7 @@ pub unsafe extern "C" fn hegel_run_start(
         exchange,
         current_family: None,
         result: None,
+        reporter,
     }));
     unsafe { *out_run = run };
     HEGEL_OK
@@ -1750,24 +1844,22 @@ pub unsafe extern "C" fn hegel_next_test_case(
     match poll_engine(engine) {
         Poll::Pending => match run.exchange.take() {
             Ok(ds) => {
-                let family = new_family(ds);
+                let family = new_family(ds, None);
                 let case = handle_from_family(Arc::clone(&family));
                 run.current_family = Some(family);
                 unsafe { *out_test_case = case };
                 HEGEL_OK
             }
             Err(e) => {
-                run.result = Some(HegelRunResult::from_error(&e.to_string()));
-                run.engine = None;
+                run.finish(HegelRunResult::from_error(&e.to_string()));
                 HEGEL_OK
             }
         },
         Poll::Ready(r) => {
-            run.result = Some(match r {
+            run.finish(match r {
                 Ok(r) => HegelRunResult::from(r),
                 Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
             });
-            run.engine = None;
             HEGEL_OK
         }
     }
@@ -1937,7 +2029,7 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         );
         return HEGEL_E_INVALID_ARG;
     };
-    let tc = handle_from_family(new_family(ds));
+    let tc = handle_from_family(new_family(ds, handle.reporter(&settings.output)));
     unsafe { *out_test_case = tc };
     HEGEL_OK
 }
@@ -2152,8 +2244,12 @@ pub unsafe extern "C" fn hegel_test_case_set_worker(
     HEGEL_OK
 }
 
-/// Allocate a fresh family from a data source.
-fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
+/// Allocate a fresh family from a data source, reporting its completion to
+/// Antithesis through `reporter` when given (see [`FamilyShared::reporter`]).
+fn new_family(
+    ds: Box<dyn DataSource + Send + Sync>,
+    reporter: Option<Reporter>,
+) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
         ds: Arc::from(ds),
         completed: AtomicBool::new(false),
@@ -2162,6 +2258,7 @@ fn new_family(ds: Box<dyn DataSource + Send + Sync>) -> Arc<FamilyShared> {
         )))),
         printer_width_configured: AtomicBool::new(false),
         started: crate::sys::Instant::now(),
+        reporter,
     })
 }
 
@@ -3951,6 +4048,25 @@ unsafe fn optional_utf8_arg(
             set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
             Err(HEGEL_E_INVALID_ARG)
         }
+    }
+}
+
+/// Read a required NUL-terminated UTF-8 string argument. `Err` carries the
+/// invalid-argument diagnostic already set on `ctx`, for a NULL pointer as
+/// well as for invalid UTF-8.
+unsafe fn required_utf8_arg(
+    ctx: *mut HegelContext,
+    fn_name: &str,
+    arg_name: &str,
+    p: *const c_char,
+) -> Result<String, hegel_result_t> {
+    match unsafe { optional_utf8_arg(ctx, fn_name, arg_name, p) } {
+        Ok(Some(s)) => Ok(s),
+        Ok(None) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
+            Err(HEGEL_E_INVALID_ARG)
+        }
+        Err(rc) => Err(rc),
     }
 }
 

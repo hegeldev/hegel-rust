@@ -312,5 +312,5 @@ run first.
 | `HEGEL_TEST_CASES` | each run | Overrides `test_cases`, after every other layer. |
 | `HEGEL_DATABASE` | each run | Overrides `database`, after every other layer. |
 | `HEGEL_STATISTICS` | each run | Turns `show_statistics` on, after every other layer. |
-| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile. Must name an existing directory. |
+| `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |

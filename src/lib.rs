@@ -301,7 +301,6 @@
 #![forbid(future_incompatible)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-pub(crate) mod antithesis;
 #[doc(hidden)]
 pub mod backend;
 pub(crate) mod cli;
@@ -354,7 +353,7 @@ pub mod prelude {
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
-pub use antithesis::TestLocation;
+pub use runner::TestLocation;
 
 /// Derive a generator for a struct or enum.
 ///

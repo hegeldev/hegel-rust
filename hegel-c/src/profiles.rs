@@ -368,7 +368,7 @@ impl Candidates {
             overridden,
             env: env(DEFAULT_PROFILE_VAR).filter(|v| !v.is_empty()),
             toml: config.default.clone(),
-            environment: if crate::antithesis_detect::antithesis_env_var_set_from(&env) {
+            environment: if crate::antithesis::antithesis_env_var_set_from(&env) {
                 "workload"
             } else if crate::settings::is_in_ci_from(&env) {
                 "ci"
@@ -581,7 +581,7 @@ fn settings_for_from(
 ) -> Result<Settings, ProfileError> {
     let candidates = Candidates::gather(config, overridden, &env);
     validate(config, registry, &candidates)?;
-    let base = Settings::base(crate::antithesis_detect::antithesis_env_var_set_from(&env));
+    let base = Settings::base(crate::antithesis::antithesis_env_var_set_from(&env));
     let mut settings = resolve(
         name.unwrap_or(DEFAULT),
         config,

@@ -19,7 +19,7 @@ pub(crate) mod sys;
 use self::sys as hegel_c;
 
 use crate::control::hegel_internal_error;
-use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
+use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, TestLocation, Verbosity};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString, c_void};
@@ -124,7 +124,8 @@ fn string_from_engine_bytes(bytes: Vec<u8>) -> String {
 }
 
 /// Owns a `*mut HegelSettings` and frees it on drop. Built from a frontend
-/// [`Settings`] plus its database key by [`SettingsHandle::build`].
+/// [`Settings`] plus the test's database key and location by
+/// [`SettingsHandle::build`].
 pub(crate) struct SettingsHandle {
     raw: *mut hegel_c::HegelSettings,
 }
@@ -136,7 +137,11 @@ impl SettingsHandle {
     /// rather than the default profile — every field is overwritten below,
     /// and `base` keeps a broken default-profile setting from failing runs
     /// whose settings were already resolved.
-    pub(crate) fn build(settings: &Settings, database_key: Option<&str>) -> Self {
+    pub(crate) fn build(
+        settings: &Settings,
+        database_key: Option<&str>,
+        test_location: Option<&TestLocation>,
+    ) -> Self {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
             let base_profile = CString::new("base").unwrap();
@@ -205,6 +210,19 @@ impl SettingsHandle {
                         ctx,
                         raw,
                         c.as_ptr(),
+                    ));
+                }
+                if let Some(location) = test_location {
+                    let file = cstring_lossy(&location.file);
+                    let class = cstring_lossy(&location.class);
+                    let function = cstring_lossy(&location.function);
+                    require_ok(hegel_c::hegel_settings_set_test_location(
+                        ctx,
+                        raw,
+                        file.as_ptr(),
+                        location.begin_line,
+                        class.as_ptr(),
+                        function.as_ptr(),
                     ));
                 }
                 require_ok(hegel_c::hegel_settings_set_phases(
@@ -377,7 +395,7 @@ pub(crate) fn set_default_profile(name: Option<&str>) -> Result<(), String> {
 /// engine's registry. The `Err` carries the engine's diagnostic (an invalid
 /// name).
 pub(crate) fn register_profile(name: &str, settings: &Settings) -> Result<(), String> {
-    let handle = SettingsHandle::build(settings, None);
+    let handle = SettingsHandle::build(settings, None, None);
     with_context(|ctx| {
         let c = cstring_lossy(name);
         // SAFETY: ctx is this thread's live context, and both pointers

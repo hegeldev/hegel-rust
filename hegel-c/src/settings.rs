@@ -178,7 +178,7 @@ impl Settings {
     /// silences the nondeterminism notice and is not settings policy. For
     /// profile-aware construction use the profile system.
     pub fn new() -> Self {
-        Self::base(crate::antithesis_detect::antithesis_env_var_set())
+        Self::base(crate::antithesis::antithesis_env_var_set())
     }
 
     /// The base defaults every profile resolution starts from, with
