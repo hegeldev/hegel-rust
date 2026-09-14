@@ -21,7 +21,21 @@ C_CHANGELOG = "hegel-c/CHANGELOG.md"
 # independent version numbers, because a change can be breaking for one without
 # being breaking for the other (a breaking C ABI change is a minor bump for
 # hegel-c but only a patch for hegel-rust). The root and hegel-macros manifests
-# share the hegel-rust version; hegel-c has its own.
+# share the hegel-rust version; hegel-c has its own. Each is tagged separately:
+# `v<version>` for hegel-rust and `libhegel-v<version>` for hegel-c, whose tag
+# also carries the GitHub release the libhegel binaries are uploaded to.
+
+
+def rust_tag(version: str) -> str:
+    return f"v{version}"
+
+
+def libhegel_tag(version: str) -> str:
+    return f"libhegel-v{version}"
+
+
+def libhegel_release_title(version: str) -> str:
+    return f"libhegel v{version}"
 
 # Files the release commit reads, rewrites, and stages. These are validated by
 # `check` on every PR so removing one (as the conformance-test removal did with
@@ -201,13 +215,6 @@ def plan_release(
     return rust_version, c_version, root_content, c_content
 
 
-def build_release_notes(root_content: str, c_content: str | None) -> str:
-    """Combine the changelog bodies into the GitHub release notes."""
-    if c_content is None:
-        return root_content
-    return f"{root_content}\n\n## libhegel C ABI\n\n{c_content}"
-
-
 def check(base_ref: str) -> None:
     missing = [rel for rel in RELEASE_PATHS if not (ROOT / rel).exists()]
     if missing:
@@ -349,28 +356,40 @@ def release() -> None:
         cwd=ROOT,
     )
 
-    # The GitHub release carries the libhegel binaries, so it is the
-    # hegel-c release: it is tagged with the hegel-c version and only cut when
-    # hegel-c changed. A hegel-rust-only release just publishes to crates.io and
-    # updates the changelog — no tag, no GitHub release.
+    # hegel-rust bumps on every release, so its tag is always pushed. The
+    # GitHub release carries the libhegel binaries, so it is the hegel-c
+    # release: it is tagged with the hegel-c version and only cut when hegel-c
+    # changed. A hegel-rust-only release publishes to crates.io, updates the
+    # changelog and pushes its tag — no GitHub release.
+    tags = release_tags(rust_version, c_version if c_release is not None else None)
+    for tag in tags:
+        git("tag", tag, cwd=ROOT)
+    git("push", "origin", *tags, cwd=ROOT)
     if c_release is not None:
-        git("tag", f"v{c_version}", cwd=ROOT)
-        git("push", "origin", f"v{c_version}", cwd=ROOT)
         subprocess.run(
             [
                 "gh",
                 "release",
                 "create",
-                f"v{c_version}",
+                libhegel_tag(c_version),
                 "--draft",
                 "--title",
-                f"v{c_version}",
+                libhegel_release_title(c_version),
                 "--notes",
-                build_release_notes(root_content, c_content),
+                c_content,
             ],
             check=True,
             cwd=ROOT,
         )
+
+
+def release_tags(rust_version: str, c_version: str | None) -> list[str]:
+    """The tags a release commit gets: hegel-rust's always, hegel-c's when it
+    released (`c_version` is None otherwise)."""
+    tags = [rust_tag(rust_version)]
+    if c_version is not None:
+        tags.append(libhegel_tag(c_version))
+    return tags
 
 
 def release_pr_details(version: str, tags: list[str]) -> tuple[str, str]:
@@ -378,22 +397,14 @@ def release_pr_details(version: str, tags: list[str]) -> tuple[str, str]:
     concurrent merge to main.
 
     `version` is the hegeltest version of the release commit, which names the
-    PR. `tags` is whatever release tags point at that commit: the hegel-c
-    version tag when hegel-c released, and nothing for a hegel-rust-only
-    release, which cuts no tag — so the body only claims a tag was pushed when
-    one actually was, and names it (the tag carries the hegel-c version, not
-    `version`).
+    PR. `tags` is whatever release tags point at that commit — hegel-rust's
+    `v<version>`, plus libhegel's `libhegel-v<version>` when hegel-c released —
+    all of which were pushed before the failed push to main.
     """
     title = f"Release v{version}"
-    if tags:
-        pushed = f"after tagging {' and '.join(tags)} "
-        succeeded = "The tag and crates.io publish succeeded."
-    else:
-        pushed = ""
-        succeeded = "The crates.io publish succeeded."
     body = (
-        f"The push to main {pushed}failed because main had diverged. "
-        f"{succeeded}\n\n"
+        f"The push to main after tagging {' and '.join(tags)} failed because "
+        f"main had diverged. The tags and crates.io publish succeeded.\n\n"
         f"This PR merges the release commit (version bump, changelog, "
         f"RELEASE.md removal) into main."
     )
