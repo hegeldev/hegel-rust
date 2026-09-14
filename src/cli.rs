@@ -185,13 +185,8 @@ fn parse_backend(s: &str) -> Result<Backend, CliError> {
 }
 
 fn parse_bool(s: &str, name: &str) -> Result<bool, CliError> {
-    match s {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        other => Err(CliError::Parse(format!(
-            "{name} expects true|false, got {other:?}"
-        ))),
-    }
+    crate::runner::parse_bool(s)
+        .ok_or_else(|| CliError::Parse(format!("{name} expects true|false, got {s:?}")))
 }
 
 fn parse_health_check(s: &str) -> Result<Vec<HealthCheck>, CliError> {

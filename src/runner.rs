@@ -249,13 +249,27 @@ impl Settings {
     }
 
     /// Set a fixed seed for reproducibility, or `None` for random.
+    ///
+    /// A fixed seed takes precedence over [`derandomize`](Self::derandomize).
+    ///
+    /// The `HEGEL_SEED` environment variable, when set and non-empty,
+    /// overrides this value at runtime — including a value set explicitly
+    /// here or via `#[hegel::test(seed = ...)]`: an integer is the seed to
+    /// use, and the literal value `none` clears a fixed seed (matching the
+    /// `--seed` CLI flag's vocabulary).
     pub fn seed(mut self, seed: Option<u64>) -> Self {
         self.seed = seed;
         self
     }
 
     /// When true, use a fixed seed derived from the test name. Enabled by
-    /// the shipped `ci` profile.
+    /// the shipped `ci` profile. Has no effect when a fixed
+    /// [`seed`](Self::seed) is set.
+    ///
+    /// The `HEGEL_DERANDOMIZE` environment variable, when set and
+    /// non-empty, overrides this value at runtime: `true`, `1` or `yes`
+    /// turns it on and `false`, `0` or `no` turns it off, whatever the
+    /// profile or the test's own settings say.
     pub fn derandomize(mut self, derandomize: bool) -> Self {
         self.derandomize = derandomize;
         self
@@ -298,6 +312,11 @@ impl Settings {
     ///
     /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
     /// the failure output. Has effect only on the native backend.
+    ///
+    /// The `HEGEL_PRINT_BLOB` environment variable, when set and non-empty,
+    /// overrides this value at runtime: `true`, `1` or `yes` turns it on
+    /// and `false`, `0` or `no` turns it off, so a failure can be turned
+    /// into a reproducer line for one run without editing the test.
     pub fn print_blob(mut self, print_blob: bool) -> Self {
         self.print_blob = print_blob;
         self
@@ -400,6 +419,24 @@ impl Settings {
                 self.show_statistics = true;
             }
         }
+        if let Some(value) = env("HEGEL_SEED") {
+            if !value.is_empty() {
+                self.seed = if value == "none" {
+                    None
+                } else {
+                    match value.parse::<u64>() {
+                        Ok(n) => Some(n),
+                        Err(_) => panic!("HEGEL_SEED must be an integer or 'none', got {value:?}"),
+                    }
+                };
+            }
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_DERANDOMIZE") {
+            self.derandomize = b;
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB") {
+            self.print_blob = b;
+        }
         self
     }
 
@@ -474,6 +511,24 @@ where
 
 fn env_var(key: &str) -> Option<String> {
     std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
+}
+
+/// The boolean vocabulary shared by the `--derandomize` flag and the
+/// boolean environment overrides.
+pub(crate) fn parse_bool(s: &str) -> Option<bool> {
+    match s {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn env_bool(env: impl Fn(&str) -> Option<String>, key: &str) -> Option<bool> {
+    let value = env(key).filter(|value| !value.is_empty())?;
+    match parse_bool(&value) {
+        Some(b) => Some(b),
+        None => panic!("{key} must be true or false, got {value:?}"),
+    }
 }
 
 /// Where a test is defined, as the `#[hegel::test]` and `#[hegel::main]`

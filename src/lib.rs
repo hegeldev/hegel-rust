@@ -192,6 +192,17 @@
 //! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
 //! ```
 //!
+//! Three more variables cover the settings a single `cargo test` invocation
+//! most often needs to change: `HEGEL_SEED` fixes the seed (or clears a
+//! compiled-in one with `none`), `HEGEL_DERANDOMIZE` turns the derived
+//! per-test seed on or off, and `HEGEL_PRINT_BLOB` turns the
+//! `#[hegel::reproduce_failure("…")]` line on or off, so a failure can be
+//! captured for replay without editing the test:
+//!
+//! ```bash
+//! HEGEL_SEED=7 HEGEL_PRINT_BLOB=true cargo test my_test
+//! ```
+//!
 //! ## Settings profiles
 //!
 //! Suite-wide settings live in named *profiles*. Hegel ships three:

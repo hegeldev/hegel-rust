@@ -136,6 +136,92 @@ fn test_env_override_statistics_zero_and_empty_are_ignored() {
     assert!(!s.show_statistics);
 }
 
+fn only(key: &'static str, value: &'static str) -> impl Fn(&str) -> Option<String> {
+    move |k| (k == key).then(|| value.to_string())
+}
+
+#[test]
+fn test_env_override_seed_replaces_a_fixed_seed() {
+    let s = Settings::new()
+        .seed(Some(4242))
+        .with_env_overrides_from(only("HEGEL_SEED", "7"));
+    assert_eq!(s.seed, Some(7));
+}
+
+#[test]
+fn test_env_override_seed_none_clears_a_fixed_seed() {
+    let s = Settings::new()
+        .seed(Some(4242))
+        .with_env_overrides_from(only("HEGEL_SEED", "none"));
+    assert_eq!(s.seed, None);
+}
+
+#[test]
+fn test_env_override_seed_empty_is_ignored() {
+    let s = Settings::new()
+        .seed(Some(4242))
+        .with_env_overrides_from(only("HEGEL_SEED", ""));
+    assert_eq!(s.seed, Some(4242));
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_SEED must be an integer or 'none', got \"-1\"")]
+fn test_env_override_seed_malformed_is_a_usage_error() {
+    Settings::new().with_env_overrides_from(only("HEGEL_SEED", "-1"));
+}
+
+#[test]
+fn test_env_override_derandomize_accepts_the_cli_vocabulary() {
+    for value in ["true", "1", "yes"] {
+        let s = Settings::from_profile("base")
+            .with_env_overrides_from(only("HEGEL_DERANDOMIZE", value));
+        assert!(s.derandomize, "{value:?}");
+    }
+    for value in ["false", "0", "no"] {
+        let s =
+            Settings::from_profile("ci").with_env_overrides_from(only("HEGEL_DERANDOMIZE", value));
+        assert!(!s.derandomize, "{value:?}");
+    }
+}
+
+#[test]
+fn test_env_override_derandomize_empty_is_ignored() {
+    let s = Settings::from_profile("ci").with_env_overrides_from(only("HEGEL_DERANDOMIZE", ""));
+    assert!(s.derandomize);
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_DERANDOMIZE must be true or false, got \"maybe\"")]
+fn test_env_override_derandomize_malformed_is_a_usage_error() {
+    Settings::new().with_env_overrides_from(only("HEGEL_DERANDOMIZE", "maybe"));
+}
+
+#[test]
+fn test_env_override_print_blob_replaces_an_explicit_setting() {
+    let s = Settings::new()
+        .print_blob(false)
+        .with_env_overrides_from(only("HEGEL_PRINT_BLOB", "true"));
+    assert!(s.print_blob);
+    let s = Settings::new()
+        .print_blob(true)
+        .with_env_overrides_from(only("HEGEL_PRINT_BLOB", "false"));
+    assert!(!s.print_blob);
+}
+
+#[test]
+fn test_env_override_print_blob_empty_is_ignored() {
+    let s = Settings::new()
+        .print_blob(true)
+        .with_env_overrides_from(only("HEGEL_PRINT_BLOB", ""));
+    assert!(s.print_blob);
+}
+
+#[test]
+#[should_panic(expected = "HEGEL_PRINT_BLOB must be true or false, got \"on\"")]
+fn test_env_override_print_blob_malformed_is_a_usage_error() {
+    Settings::new().with_env_overrides_from(only("HEGEL_PRINT_BLOB", "on"));
+}
+
 #[test]
 fn test_native_engine_creates_default_dot_hegel_when_database_unset() {
     use crate::Hegel;
