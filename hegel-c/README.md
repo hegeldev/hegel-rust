@@ -12,7 +12,10 @@ rather than building this crate yourself:
 
 > <https://github.com/hegeldev/hegel-rust/releases>
 
-Each release publishes shared and static
+libhegel releases are tagged `libhegel-v<version>` and titled
+`libhegel v<version>`; the repository's plain `v<version>` tags are the
+`hegeltest` crate's releases, which carry no binaries. Each libhegel release
+publishes shared and static
 `libhegel-<goos>-<goarch>.<ext>` libraries, `hegel.h`, and matching
 `.sha256` sidecars for `linux/amd64`, `linux/arm64`, `darwin/arm64`,
 `windows/amd64`, and `windows/arm64`. Intel macOS (`darwin/amd64`) is not

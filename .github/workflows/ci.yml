@@ -476,10 +476,12 @@ jobs:
     # Expose the hegel-c release to `release-binaries` (cross-platform library
     # builds). `c_released` lets those jobs run only when hegel-c changed — a
     # hegel-rust-only release ships no new binaries. `version` is the
-    # post-bump hegel-c version they tag / upload against.
+    # post-bump hegel-c version and `libhegel_tag` the `libhegel-v<version>`
+    # tag release.py cut for it, which they check out and upload against.
     outputs:
       c_released: ${{ steps.check.outputs.c_release == 'true' }}
       version: ${{ steps.released-version.outputs.version }}
+      libhegel_tag: ${{ steps.released-version.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -525,8 +527,15 @@ jobs:
         id: released-version
         if: steps.check.outputs.skip != 'true' && steps.check.outputs.c_release == 'true'
         run: |
+          set -euo pipefail
           VERSION=$(grep '^version' hegel-c/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAG=$(git tag --points-at HEAD --list 'libhegel-v*')
+          if [ -z "$TAG" ]; then
+            echo "release.py left no libhegel-v* tag on the release commit" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
         if: steps.check.outputs.skip != 'true'
@@ -643,6 +652,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ needs.release.outputs.libhegel_tag }}
     steps:
       - name: Checkout release commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -652,7 +662,7 @@ jobs:
           # tags so we can check out the new tag rather than gambling on
           # main's HEAD pointer.
           fetch-depth: 0
-          ref: refs/tags/v${{ needs.release.outputs.version }}
+          ref: refs/tags/${{ needs.release.outputs.libhegel_tag }}
 
       - name: Install Rust + target
         shell: bash
@@ -713,7 +723,7 @@ jobs:
           STATIC_ASSET: ${{ steps.stage.outputs.static_asset }}
         run: |
           set -euo pipefail
-          tag="v${VERSION}"
+          tag="$TAG"
           assets=(
             "$SHARED_ASSET"
             "$SHARED_ASSET.sha256"
@@ -735,8 +745,8 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
               --draft \
-              --title "$tag" \
-              --notes "libhegel binaries for $tag. See CHANGELOG.md for the full changelog." \
+              --title "libhegel v${VERSION}" \
+              --notes "libhegel ${VERSION} binaries. See hegel-c/CHANGELOG.md for the full changelog." \
               || true
           fi
           gh release upload "$tag" "${assets[@]}" --clobber
@@ -750,13 +760,14 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ needs.release.outputs.libhegel_tag }}
     steps:
       - name: Checkout release commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: refs/tags/v${{ needs.release.outputs.version }}
+          ref: refs/tags/${{ needs.release.outputs.libhegel_tag }}
 
       - name: Install Rust and WebAssembly target
         run: |
@@ -780,7 +791,7 @@ jobs:
       - name: Upload WebAssembly assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${VERSION}" libhegel-wasm32-unknown-unknown.wasm libhegel-wasm32-unknown-unknown.wasm.sha256 libhegel-wasm32-unknown-unknown.a libhegel-wasm32-unknown-unknown.a.sha256 --clobber
+        run: gh release upload "$TAG" libhegel-wasm32-unknown-unknown.wasm libhegel-wasm32-unknown-unknown.wasm.sha256 libhegel-wasm32-unknown-unknown.a libhegel-wasm32-unknown-unknown.a.sha256 --clobber
 
   # Independent post-condition check that every expected libhegel asset is
   # present on the Release. `release-binaries` uses `fail-fast: false` so
@@ -800,6 +811,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.release.outputs.version }}
+      TAG: ${{ needs.release.outputs.libhegel_tag }}
     steps:
       - name: Check that every expected asset uploaded
         env:
@@ -807,7 +819,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="v${VERSION}"
+          tag="$TAG"
           expected=(
             hegel.h
             libhegel-wasm32-unknown-unknown.wasm
@@ -842,7 +854,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="v${VERSION}"
+          tag="$TAG"
           # Un-draft the release now that every asset is verified present.
           # Publishing is what makes the release (and its assets) immutable,
           # so it must happen last. 
@@ -879,8 +891,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.libhegel_tag }}
           REPO: ${{ matrix.repo }}
         run: |
           gh api "repos/hegeldev/$REPO/dispatches" \
             -f event_type=hegel-rust-release \
-            -F "client_payload[version]=$VERSION"
+            -F "client_payload[version]=$VERSION" \
+            -F "client_payload[tag]=$TAG"
