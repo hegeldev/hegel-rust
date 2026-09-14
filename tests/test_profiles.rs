@@ -3,11 +3,12 @@
 //! selection, inheritance through the `default` alias, and programmatic
 //! registration feeding `#[hegel::test(profile = "...")]`.
 //!
-//! The observable is `print_blob`: it has no CLI flag of its own, so whether
-//! a failing run prints the reproducer line shows which profile was in
-//! effect. `fixture_main_failing` has no compiled-in settings (selection
-//! tests); `fixture_main_profile` compiles in `print_blob = true`
-//! (composition tests).
+//! The observable is `print_blob`: it has no CLI flag of its own and is on
+//! in the base settings, so a failing run that does not print the reproducer
+//! line shows that a profile turning it off was in effect.
+//! `fixture_main_failing` has no compiled-in settings (selection tests);
+//! `fixture_main_profile` compiles in `print_blob = false` (composition
+//! tests).
 
 mod common;
 
@@ -20,7 +21,8 @@ const MAIN_PROFILE: &str = env!("CARGO_BIN_EXE_fixture_main_profile");
 
 const REPRODUCER_MARKER: &str = "To reproduce this failure";
 
-const BLOBBY_TOML: &str = "[profiles.blobby]\nprint_blob = true\n";
+const NOBLOB_TOML: &str = "[profiles.noblob]\nprint_blob = false\n";
+const CI_NOBLOB_TOML: &str = "[profiles.ci]\nprint_blob = false\n";
 
 /// A failing fixture whose profile selection is fully under the test's
 /// control: ambient `HEGEL_DEFAULT_PROFILE` and Antithesis detection are
@@ -42,30 +44,31 @@ fn assert_no_marker(out: common::exec::RunOutput) {
 
 #[test]
 fn hegel_toml_profile_selected_via_profile_flag() {
-    failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
-        .args(&["--profile", "blobby"])
-        .expect_failure(REPRODUCER_MARKER)
+    let out = failing()
+        .with_file("hegel.toml", NOBLOB_TOML)
+        .args(&["--profile", "noblob"])
+        .expect_failure("got nonneg")
         .run();
+    assert_no_marker(out);
 }
 
 #[test]
 fn hegel_toml_profile_selected_via_default_profile_env() {
-    failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
-        .env("HEGEL_DEFAULT_PROFILE", "blobby")
-        .expect_failure(REPRODUCER_MARKER)
-        .run();
-}
-
-#[test]
-fn base_does_not_print_the_reproducer_line() {
     let out = failing()
-        .env("HEGEL_DEFAULT_PROFILE", "base")
-        .env("CI", "true")
+        .with_file("hegel.toml", NOBLOB_TOML)
+        .env("HEGEL_DEFAULT_PROFILE", "noblob")
         .expect_failure("got nonneg")
         .run();
     assert_no_marker(out);
+}
+
+#[test]
+fn base_prints_the_reproducer_line() {
+    failing()
+        .env("HEGEL_DEFAULT_PROFILE", "base")
+        .env("CI", "true")
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
 }
 
 #[test]
@@ -79,7 +82,7 @@ fn bogus_default_profile_env_fails_the_run() {
 #[test]
 fn hegel_toml_delta_applies_on_top_of_the_shipped_ci_profile() {
     let out = failing()
-        .with_file("hegel.toml", "[profiles.ci]\nprint_blob = false\n")
+        .with_file("hegel.toml", CI_NOBLOB_TOML)
         .env("CI", "true")
         .expect_failure("got nonneg")
         .run();
@@ -88,23 +91,29 @@ fn hegel_toml_delta_applies_on_top_of_the_shipped_ci_profile() {
 
 #[test]
 fn custom_profiles_inherit_the_ci_profile_on_ci() {
-    failing()
-        .with_file("hegel.toml", "[profiles.nightly]\ntest_cases = 5\n")
-        .env("HEGEL_DEFAULT_PROFILE", "nightly")
-        .env("CI", "true")
-        .expect_failure(REPRODUCER_MARKER)
-        .run();
-}
-
-#[test]
-fn extending_base_opts_out_of_ci() {
     let out = failing()
-        .with_file("hegel.toml", "[profiles.pinned]\nextends = \"base\"\n")
-        .env("HEGEL_DEFAULT_PROFILE", "pinned")
+        .with_file(
+            "hegel.toml",
+            "[profiles.ci]\nprint_blob = false\n[profiles.nightly]\ntest_cases = 5\n",
+        )
+        .env("HEGEL_DEFAULT_PROFILE", "nightly")
         .env("CI", "true")
         .expect_failure("got nonneg")
         .run();
     assert_no_marker(out);
+}
+
+#[test]
+fn extending_base_opts_out_of_ci() {
+    failing()
+        .with_file(
+            "hegel.toml",
+            "[profiles.ci]\nprint_blob = false\n[profiles.pinned]\nextends = \"base\"\n",
+        )
+        .env("HEGEL_DEFAULT_PROFILE", "pinned")
+        .env("CI", "true")
+        .expect_failure(REPRODUCER_MARKER)
+        .run();
 }
 
 #[test]
@@ -122,21 +131,22 @@ fn the_toml_default_entry_selects_the_default_profile() {
 
 #[test]
 fn development_deltas_apply_when_development_is_selected() {
-    failing()
-        .with_file("hegel.toml", "[profiles.development]\nprint_blob = true\n")
+    let out = failing()
+        .with_file("hegel.toml", "[profiles.development]\nprint_blob = false\n")
         .env("HEGEL_DEFAULT_PROFILE", "development")
-        .expect_failure(REPRODUCER_MARKER)
+        .expect_failure("got nonneg")
         .run();
+    assert_no_marker(out);
 }
 
 #[test]
 fn selecting_development_on_ci_escapes_the_ci_profile() {
-    let out = failing()
+    failing()
+        .with_file("hegel.toml", CI_NOBLOB_TOML)
         .env("HEGEL_DEFAULT_PROFILE", "development")
         .env("CI", "true")
-        .expect_failure("got nonneg")
+        .expect_failure(REPRODUCER_MARKER)
         .run();
-    assert_no_marker(out);
 }
 
 #[test]
@@ -149,12 +159,13 @@ fn malformed_hegel_toml_fails_with_file_and_line() {
 
 #[test]
 fn hegel_config_env_names_the_config_file_directly() {
-    failing()
-        .with_file("configs/alt.toml", BLOBBY_TOML)
+    let out = failing()
+        .with_file("configs/alt.toml", NOBLOB_TOML)
         .env("HEGEL_CONFIG", "configs/alt.toml")
-        .args(&["--profile", "blobby"])
-        .expect_failure(REPRODUCER_MARKER)
+        .args(&["--profile", "noblob"])
+        .expect_failure("got nonneg")
         .run();
+    assert_no_marker(out);
 }
 
 #[test]
@@ -168,7 +179,7 @@ fn hegel_config_env_naming_a_missing_file_fails_the_run() {
 #[test]
 fn debug_verbosity_logs_the_loaded_config() {
     let out = failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
+        .with_file("hegel.toml", NOBLOB_TOML)
         .env("HEGEL_DEFAULT_PROFILE", "base")
         .args(&["--verbosity", "debug"])
         .expect_failure("got nonneg")
@@ -196,36 +207,18 @@ fn debug_verbosity_logs_the_absence_of_a_config() {
 
 #[test]
 fn hegel_toml_is_discovered_from_a_subdirectory() {
-    failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
+    let out = failing()
+        .with_file("hegel.toml", NOBLOB_TOML)
         .in_subdir("nested/deeper")
-        .env("HEGEL_DEFAULT_PROFILE", "blobby")
-        .expect_failure(REPRODUCER_MARKER)
+        .env("HEGEL_DEFAULT_PROFILE", "noblob")
+        .expect_failure("got nonneg")
         .run();
+    assert_no_marker(out);
 }
 
 #[test]
 fn compiled_in_settings_apply_on_top_of_the_profile_flag() {
-    fixture(MAIN_PROFILE)
-        .args(&["--profile", "base"])
-        .expect_failure(REPRODUCER_MARKER)
-        .run();
-}
-
-#[test]
-fn compiled_in_settings_apply_on_top_of_the_default_profile() {
-    fixture(MAIN_PROFILE)
-        .env("HEGEL_DEFAULT_PROFILE", "base")
-        .expect_failure(REPRODUCER_MARKER)
-        .run();
-}
-
-#[test]
-fn profile_flag_wins_over_the_environment_and_detection() {
-    let out = failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
-        .env("HEGEL_DEFAULT_PROFILE", "blobby")
-        .env("CI", "true")
+    let out = fixture(MAIN_PROFILE)
         .args(&["--profile", "base"])
         .expect_failure("got nonneg")
         .run();
@@ -233,12 +226,33 @@ fn profile_flag_wins_over_the_environment_and_detection() {
 }
 
 #[test]
-fn profile_flag_position_does_not_matter() {
+fn compiled_in_settings_apply_on_top_of_the_default_profile() {
+    let out = fixture(MAIN_PROFILE)
+        .env("HEGEL_DEFAULT_PROFILE", "base")
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
+}
+
+#[test]
+fn profile_flag_wins_over_the_environment_and_detection() {
     failing()
-        .with_file("hegel.toml", BLOBBY_TOML)
-        .args(&["--derandomize", "false", "--profile", "blobby"])
+        .with_file("hegel.toml", NOBLOB_TOML)
+        .env("HEGEL_DEFAULT_PROFILE", "noblob")
+        .env("CI", "true")
+        .args(&["--profile", "base"])
         .expect_failure(REPRODUCER_MARKER)
         .run();
+}
+
+#[test]
+fn profile_flag_position_does_not_matter() {
+    let out = failing()
+        .with_file("hegel.toml", NOBLOB_TOML)
+        .args(&["--derandomize", "false", "--profile", "noblob"])
+        .expect_failure("got nonneg")
+        .run();
+    assert_no_marker(out);
 }
 
 #[test]
@@ -253,7 +267,7 @@ fn bogus_profile_flag_is_a_usage_error() {
 fn register_test_profile() {
     hegel::Settings::register_profile(
         "test_profiles_registered",
-        hegel::Settings::from_profile("base").print_blob(true),
+        hegel::Settings::from_profile("base").print_blob(false),
     );
 }
 
@@ -266,10 +280,11 @@ fn registered_profile_fixture(tc: TestCase) {
 
 #[test]
 fn registered_profile_drives_the_test_attribute() {
-    self_test("registered_profile_fixture")
+    let out = self_test("registered_profile_fixture")
         .env("HEGEL_DEFAULT_PROFILE", "base")
-        .expect_failure(REPRODUCER_MARKER)
+        .expect_failure("x was")
         .run();
+    assert_no_marker(out);
 }
 
 #[hegel::test(profile = "base", test_cases = 5)]

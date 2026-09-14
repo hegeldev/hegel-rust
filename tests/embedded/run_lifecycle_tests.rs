@@ -127,7 +127,7 @@ fn format_backtrace_short_strips_through_filter() {
 
 #[test]
 fn reproducer_line_none_when_print_blob_disabled() {
-    let settings = Settings::from_profile("base");
+    let settings = Settings::from_profile("base").print_blob(false);
     assert!(!settings.print_blob);
     assert!(reproducer_line(&settings, Some("AAEC")).is_none());
 }
