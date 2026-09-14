@@ -1682,7 +1682,7 @@ fn spans_nested_past_max_depth_conclude_invalid() {
 }
 
 #[test]
-fn weighted_index_sample_follows_the_weights_and_skips_zero_entries() {
+fn weighted_index_sample_follows_the_weights_and_skips_excluded_entries() {
     let mut rng = EngineRng::seeded(7);
     let weights = [1.0, 3.0, 0.0, 0.0];
     let mut counts = [0usize; 4];
@@ -1738,7 +1738,7 @@ fn draw_index_weighted_forces_the_only_positive_entry() {
 }
 
 #[test]
-fn draw_index_weighted_replays_the_prefix_even_at_zero_weight() {
+fn draw_index_weighted_replays_the_prefix_even_for_an_excluded_entry() {
     let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
     assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
 }
