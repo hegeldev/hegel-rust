@@ -83,6 +83,51 @@ fn lower_common_node_offset_collapses_zig_zag_pair() {
     assert!(shrinker.changed_nodes().is_empty());
 }
 
+fn bounded_int_node(value: i128, min: i128, max: i128) -> ChoiceNode {
+    ChoiceNode::integer(
+        IntegerChoice {
+            min_value: BigInt::from(min),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(value),
+        false,
+    )
+}
+
+#[test]
+fn full_shrink_breaks_a_far_away_zig_zag_within_a_few_improvements() {
+    let initial = vec![
+        bounded_int_node(-977, -1000, 1000),
+        bounded_int_node(-977, -1000, 1000),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let interesting = match nodes {
+                    [m, n] => {
+                        let (m, n) = (int_value(m), int_value(n));
+                        m.abs_diff(n) <= 1 && m <= -10 && n <= -10
+                    }
+                    _ => false,
+                };
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.shrink()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), -10);
+    assert!(int_value(&shrinker.current_nodes[1]).abs_diff(-10) <= 1);
+    assert!(
+        shrinker.improvements < 50,
+        "zig-zag was stepped one at a time: {} improvements",
+        shrinker.improvements
+    );
+}
+
 #[test]
 fn lower_common_node_offset_handles_negative_shrink_target() {
     let initial = vec![int_node(-5, -10), int_node(-7, -10)];
