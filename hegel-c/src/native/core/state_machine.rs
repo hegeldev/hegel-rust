@@ -191,8 +191,8 @@ pub struct NativeStateMachine {
     group_ids: Vec<i64>,
     /// Per rule: its selection weight relative to the other rules of its
     /// group, as supplied at creation (parallel to `rule_groups`). Every
-    /// weight is finite and strictly positive.
-    #[allow(dead_code)]
+    /// weight is finite and strictly positive. See [`Self::select_rule`]
+    /// for how the weights combine with swarm testing.
     rule_weights: Vec<f64>,
     concurrency: i64,
     /// The group whose rules are handed out this round, written by every
@@ -494,12 +494,25 @@ impl NativeStateMachine {
     }
 
     /// Select the next rule's global index from the current group's member
-    /// list.
+    /// list, weighted by the rules' weights among the rules the
+    /// worker's swarm flags enable.
     ///
     /// Every selection draw is an index in `[0, group_size)` mapped back to
     /// the global rule index, so each selection is in-group by construction.
-    /// Up to three rejection-sampling tries against the worker's swarm
-    /// flags, then a fallback that enumerates the group's enabled rules.
+    /// Up to three rejection-sampling tries draw an index with probability
+    /// proportional to the candidate rules' weights and check the drawn
+    /// rule's swarm flag; a rule found disabled drops out of the candidates
+    /// for the remaining tries. The fallback decides the flag of every
+    /// remaining candidate and draws among the enabled ones, again by
+    /// weight, recording the chosen index as a forced draw in the same
+    /// `[0, group_size)` domain as the tries so it shrinks like one.
+    ///
+    /// Rejecting disabled rules and redrawing is what conditions the
+    /// weights on the enabled subset: the realized frequency of a rule is
+    /// its weight over the total weight of the rules its worker has
+    /// enabled, so relative frequencies between two rules shift with which
+    /// other rules the swarm disabled. The registered weights are a guide,
+    /// not a guarantee.
     fn select_rule(
         &mut self,
         ntc: &mut NativeTestCase,
@@ -509,39 +522,32 @@ impl NativeStateMachine {
         let members = &self.groups[group];
         let n = members.len();
         let flags = &mut self.workers[worker_idx].flags;
+        let mut candidate_weights: Vec<f64> = members
+            .iter()
+            .map(|&rule| self.rule_weights[rule])
+            .collect();
 
-        let mut known_bad: HashSet<usize> = HashSet::default();
         for _ in 0..3 {
-            let k = draw_index(ntc, n)?;
-            if !known_bad.contains(&k) {
+            let k = ntc.draw_index_weighted(&candidate_weights)?;
+            if candidate_weights[k] > 0.0 {
                 if flags.is_enabled(ntc, group, members[k])? {
                     return Ok(members[k] as i64);
                 }
-                known_bad.insert(k);
+                // exclude rule from later tries
+                candidate_weights[k] = 0.0;
             }
         }
 
-        let max_good = n - known_bad.len();
-        let speculative = draw_index(ntc, max_good)?;
         let mut allowed: Vec<usize> = Vec::new();
+        let mut allowed_weights: Vec<f64> = Vec::new();
         for (k, &rule) in members.iter().enumerate() {
-            if known_bad.contains(&k) {
-                continue;
-            }
-            if flags.is_enabled(ntc, group, rule)? {
+            if candidate_weights[k] > 0.0 && flags.is_enabled(ntc, group, rule)? {
                 allowed.push(k);
-                if allowed.len() > speculative {
-                    ntc.draw_integer_forced(
-                        BigInt::from(0),
-                        BigInt::from(n as i64 - 1),
-                        BigInt::from(k as i64),
-                    )?;
-                    return Ok(rule as i64);
-                }
+                allowed_weights.push(candidate_weights[k]);
             }
         }
         hegel_internal_assert!(!allowed.is_empty());
-        let j = draw_index(ntc, allowed.len())?;
+        let j = ntc.draw_index_weighted(&allowed_weights)?;
         let k = allowed[j];
         ntc.draw_integer_forced(
             BigInt::from(0),

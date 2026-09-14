@@ -189,7 +189,8 @@ pub trait DataSource: Send + Sync {
     /// rules (each assigned to a concurrency group via `rule_groups`,
     /// parallel to `rule_names`) and a selection weight (`rule_weights`,
     /// also parallel to `rule_names`; every weight finite and strictly
-    /// positive), invariants (each flagged always-check or
+    /// positive, applied among the rules a worker's swarm subset enables),
+    /// invariants (each flagged always-check or
     /// sampled via `invariant_always_check`, parallel to
     /// `invariant_names`), and concurrency bounds.
     /// Groups are identified by arbitrary `i64` ids: the machine has one

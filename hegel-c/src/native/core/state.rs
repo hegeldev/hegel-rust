@@ -900,6 +900,25 @@ pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bo
     rng.random_bool(p)
 }
 
+/// Sample an index in `[0, weights.len())` with probability proportional to
+/// `weights[i]`.
+pub(crate) fn weighted_index_sample(weights: &[f64], rng: &mut EngineRng) -> usize {
+    let total: f64 = weights.iter().sum();
+    let mut target = rng.random::<f64>() * total;
+    let mut chosen = 0;
+    for (i, &w) in weights.iter().enumerate() {
+        if w <= 0.0 {
+            continue;
+        }
+        chosen = i;
+        if target < w {
+            break;
+        }
+        target -= w;
+    }
+    chosen
+}
+
 /// Interesting string constants: logic keywords, numeric edge cases,
 /// common Unicode stress strings. Stored as codepoint vectors so they can
 /// be validated against and inserted into the draw_string nasty pool.
@@ -1998,6 +2017,25 @@ impl NativeTestCase {
         Ok(hegel_internal_unwrap!(
             u64::try_from(v).ok(),
             "draw_integer_uniform: validated value does not fit u64"
+        ))
+    }
+
+    /// Draw an index in `[0, weights.len())` with probability proportional
+    /// to `weights[i]`. The choice is recorded as an integer over that range.
+    pub fn draw_index_weighted(&mut self, weights: &[f64]) -> Result<usize, EngineError> {
+        let kind = IntegerChoice {
+            min_value: BigInt::zero(),
+            max_value: BigInt::from(weights.len() as u64 - 1),
+            shrink_towards: BigInt::zero(),
+        };
+
+        let v = self.draw_integer_from(&kind, |_, rng| {
+            Ok(BigInt::from(weighted_index_sample(weights, rng) as u64))
+        })?;
+
+        Ok(hegel_internal_unwrap!(
+            usize::try_from(v).ok(),
+            "draw_index_weighted: validated value does not fit usize"
         ))
     }
 

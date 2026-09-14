@@ -3355,7 +3355,11 @@ unsafe fn state_machine_ref<'a>(
 ///
 /// The engine owns rule selection — including swarm testing, where each
 /// worker enables a random subset of rules (at least one per group) and
-/// selection draws only from that subset. The caller drives execution in
+/// selection draws only from that subset, with probability proportional
+/// to `rule_weights` among the enabled rules of the current group. A
+/// rule's realized frequency therefore depends on which other rules its
+/// worker has enabled: the weights are a guide, not a guarantee. The
+/// caller drives execution in
 /// rounds: on the root test-case handle it asks
 /// `hegel_state_machine_next_group` whether another round should run, then
 /// each worker asks `hegel_state_machine_next_rule` which rule to run and
