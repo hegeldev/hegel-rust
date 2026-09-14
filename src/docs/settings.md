@@ -9,7 +9,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `test_cases` | integer ≥ 1 | `100` | How many test cases to run. |
 | `verbosity` | `quiet`, `normal`, `verbose`, `debug` | `normal` | How much Hegel prints ([`Verbosity`](crate::Verbosity)). |
 | `seed` | integer, or none | none | A fixed seed for reproducibility; none means a fresh random seed per run. |
-| `derandomize` | boolean | `false` | Use a fixed seed derived from the test name, so every run of a test is the same. |
+| `derandomize` | boolean | `false` | Use a fixed seed derived from the test name, so every run of a test is the same. A fixed `seed` takes precedence. |
 | `database` | a path, `disabled`, or `default` | `default` | Where failing examples are stored for replay; `default` is `.hegel/examples` under the working directory. |
 | `suppress_health_check` | list of `filter_too_much`, `too_slow`, `test_cases_too_large`, `large_initial_test_case`, or `all` | none | Health checks that should not fail the run ([`HealthCheck`](crate::HealthCheck)). Suppressing `test_cases_too_large` also removes the limit of 2^20 choices per test case. |
 | `phases` | list of `explicit`, `reuse`, `generate`, `target`, `shrink` | all five | Which parts of the run happen ([`Phase`](crate::Phase)); leaving out `shrink`, say, reports the first counterexample found. |
@@ -76,8 +76,15 @@ layers below it set and leaves the rest alone:
    | `HEGEL_TEST_CASES` | Overrides `test_cases`. Must be a positive integer. |
    | `HEGEL_DATABASE` | Overrides `database`: `disabled` turns it off, any other value is the path. |
    | `HEGEL_STATISTICS` | Anything but `0` or the empty string turns `show_statistics` on. |
+   | `HEGEL_SEED` | Overrides `seed`: an integer is the seed, `none` clears a fixed seed. |
+   | `HEGEL_DERANDOMIZE` | Overrides `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
+   | `HEGEL_PRINT_BLOB` | Overrides `print_blob`, with the same vocabulary. |
 
-   An empty variable is ignored.
+   An empty variable is ignored; any other malformed value is an error.
+   The overrides do not change how the settings combine: a fixed `seed`,
+   from wherever it came, still takes precedence over `derandomize`, so
+   `HEGEL_DERANDOMIZE=true` has no effect on a test with a compiled-in
+   seed unless `HEGEL_SEED=none` clears it.
 
 `HEGEL_DEFAULT_PROFILE` and `HEGEL_CONFIG` also come from the environment
 but act on layer 2, choosing the default profile and the config file; they
@@ -310,5 +317,8 @@ run first.
 | `HEGEL_TEST_CASES` | each run | Overrides `test_cases`, after every other layer. |
 | `HEGEL_DATABASE` | each run | Overrides `database`, after every other layer. |
 | `HEGEL_STATISTICS` | each run | Turns `show_statistics` on, after every other layer. |
+| `HEGEL_SEED` | each run | Overrides `seed`, after every other layer. |
+| `HEGEL_DERANDOMIZE` | each run | Overrides `derandomize`, after every other layer. |
+| `HEGEL_PRINT_BLOB` | each run | Overrides `print_blob`, after every other layer. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
