@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.42.1 - 2026-09-14
+
+This patch changes how libhegel releases are tagged and named. A libhegel release is now tagged `libhegel-v<version>` and its GitHub release is titled `libhegel v<version>`, so the prebuilt binaries download from `https://github.com/hegeldev/hegel-rust/releases/download/libhegel-v<version>/<asset>`. The repository's plain `v<version>` tags now belong to the `hegeltest` crate, whose version differs from libhegel's. Earlier libhegel releases keep their `v<version>` tags and also carry `libhegel-v<version>` tags, so existing pins keep working and a binding can use one URL scheme for every version.
+
 ## 0.42.0 - 2026-09-14
 
 This release changes the base value of `print_blob` from `false` to `true`, and removes `print_blob = true` from the `ci` profile. 

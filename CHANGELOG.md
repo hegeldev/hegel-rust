@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.1 - 2026-09-14
+
+This patch changes how releases are tagged in the hegel-rust repository. Every `hegeltest` release is now tagged `v<version>`, and libhegel releases, which previously took the plain `v<version>` tags, are tagged `libhegel-v<version>` instead. Nothing about the crate itself changes.
+
 ## 0.45.0 - 2026-09-14
 
 This release turns `print_blob` on by default.
