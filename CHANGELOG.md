@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.44.2 - 2026-09-14
+
+This patch moves the [Antithesis](https://antithesis.com/) integration into the engine: the test's location is now passed to libhegel, which writes the verdict to `sdk.jsonl` itself when running inside Antithesis. Nothing changes in what is reported.
+
+With no JSON left to write in the frontend, `serde_json` is now only a dependency when the `serde_json` feature is enabled, instead of always.
+
 ## 0.44.1 - 2026-09-11
 
 This release updates the `hegeltest-c` dependency to 0.41.0.
