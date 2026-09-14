@@ -2022,10 +2022,18 @@ impl NativeTestCase {
 
     /// Draw an index in `[0, weights.len())` with probability proportional
     /// to `weights[i]`. The choice is recorded as an integer over that range.
+    /// When only one weight is positive the draw is forced to that index.
     pub fn draw_index_weighted(&mut self, weights: &[f64]) -> Result<usize, EngineError> {
+        let max_index = weights.len() as u64 - 1;
+        if weights.iter().filter(|w| **w > 0.0).count() == 1 {
+            let only = weights.iter().position(|w| *w > 0.0).unwrap();
+            self.draw_integer_forced(BigInt::zero(), BigInt::from(max_index), BigInt::from(only))?;
+            return Ok(only);
+        }
+
         let kind = IntegerChoice {
             min_value: BigInt::zero(),
-            max_value: BigInt::from(weights.len() as u64 - 1),
+            max_value: BigInt::from(max_index),
             shrink_towards: BigInt::zero(),
         };
 

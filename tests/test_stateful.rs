@@ -1128,6 +1128,7 @@ mod weights {
     use hegel::TestCase;
     use hegel::stateful::{Invariant, Rule, StateMachine};
     use hegel::{Hegel, Settings, Verbosity};
+    use std::sync::{Arc, Mutex};
 
     struct Weighted {
         steps: i64,
@@ -1169,6 +1170,56 @@ mod weights {
     #[hegel::test]
     fn test_weighted_machine_runs(tc: TestCase) {
         hegel::stateful::machine(Weighted { steps: 0 }).run(tc);
+    }
+
+    /// Per test case: how often the heavy and the light rule ran. The
+    /// closure pushes a fresh entry as each case starts; the rules bump the
+    /// last one.
+    struct Lopsided {
+        cases: Arc<Mutex<Vec<(i64, i64)>>>,
+    }
+
+    #[hegel::state_machine]
+    impl Lopsided {
+        #[rule(weight = 50)]
+        fn heavy(&mut self, _: TestCase) {
+            self.cases.lock().unwrap().last_mut().unwrap().0 += 1;
+        }
+
+        #[rule]
+        fn light(&mut self, _: TestCase) {
+            self.cases.lock().unwrap().last_mut().unwrap().1 += 1;
+        }
+    }
+
+    /// Swarm testing disables one of the two rules in about half the
+    /// cases, so no aggregate ratio is meaningful, but in a case where both
+    /// rules ran the weighting itself is visible.
+    #[test]
+    fn test_heavier_rules_are_chosen_more_often() {
+        let cases = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::clone(&cases);
+        Hegel::new(move |tc: TestCase| {
+            shared.lock().unwrap().push((0i64, 0i64));
+            hegel::stateful::machine(Lopsided {
+                cases: Arc::clone(&shared),
+            })
+            .run(tc);
+        })
+        .settings(
+            Settings::new()
+                .database(None)
+                .derandomize(true)
+                .test_cases(100),
+        )
+        .run();
+        let cases = cases.lock().unwrap();
+        assert!(
+            cases
+                .iter()
+                .any(|&(heavy, light)| light > 0 && heavy >= 30 * light),
+            "expected a case where both rules ran and the weight-50 rule dominated: {cases:?}"
+        );
     }
 
     #[test]

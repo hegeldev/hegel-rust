@@ -1,7 +1,7 @@
 use super::*;
 use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
-use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::{BooleanChoice, ChoiceKind};
 use crate::native::rng::EngineRng;
 
 #[test]
@@ -1679,4 +1679,72 @@ fn spans_nested_past_max_depth_conclude_invalid() {
         tc.start_span(1);
     }
     assert_eq!(tc.status(), Some(Status::Invalid));
+}
+
+#[test]
+fn weighted_index_sample_follows_the_weights_and_skips_zero_entries() {
+    let mut rng = EngineRng::seeded(7);
+    let weights = [1.0, 3.0, 0.0, 0.0];
+    let mut counts = [0usize; 4];
+    for _ in 0..6000 {
+        counts[weighted_index_sample(&weights, &mut rng)] += 1;
+    }
+    assert_eq!(counts[2], 0);
+    assert_eq!(counts[3], 0);
+    assert!(
+        counts[1] > counts[0] * 2 && counts[1] < counts[0] * 4,
+        "expected roughly a 1:3 split, got {counts:?}"
+    );
+}
+
+#[test]
+fn weighted_index_sample_of_a_single_positive_entry_is_that_entry() {
+    let mut rng = EngineRng::seeded(7);
+    for _ in 0..100 {
+        assert_eq!(weighted_index_sample(&[0.0, 0.0, 2.0], &mut rng), 2);
+    }
+}
+
+#[test]
+fn draw_index_weighted_records_an_ordinary_index_choice() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut seen = [false; 3];
+    for _ in 0..50 {
+        let i = ntc.draw_index_weighted(&[0.0, 5.0, 5.0]).unwrap();
+        assert_ne!(i, 0);
+        seen[i] = true;
+    }
+    assert!(seen[1] && seen[2]);
+    let node = &ntc.nodes[0];
+    assert!(!node.was_forced);
+    assert!(matches!(
+        node.kind(),
+        ChoiceKind::Integer(k) if k.min_value == BigInt::zero() && k.max_value == BigInt::from(2)
+    ));
+}
+
+#[test]
+fn draw_index_weighted_forces_the_only_positive_entry() {
+    // prefix that should be ignored
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 5.0, 0.0]).unwrap(), 1);
+    let node = &ntc.nodes[0];
+    assert!(node.was_forced);
+    assert_eq!(node.value(), ChoiceValue::Integer(BigInt::from(1)));
+    assert!(matches!(
+        node.kind(),
+        ChoiceKind::Integer(k) if k.min_value == BigInt::zero() && k.max_value == BigInt::from(2)
+    ));
+}
+
+#[test]
+fn draw_index_weighted_replays_the_prefix_even_at_zero_weight() {
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
+}
+
+#[test]
+fn draw_index_weighted_simplest_is_zero() {
+    let mut ntc = NativeTestCase::for_simplest(8).unwrap();
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
 }
