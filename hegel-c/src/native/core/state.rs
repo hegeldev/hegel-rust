@@ -15,6 +15,8 @@ use rand::{Rng, RngExt};
 
 use crate::native::rng::EngineRng;
 
+#[cfg(any(test, feature = "__bench"))]
+use super::ExternalReplay;
 use super::MAX_CLONE_DEPTH;
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind, ChoiceValue,
@@ -1585,6 +1587,30 @@ impl NativeTestCase {
         max_size: usize,
     ) -> Result<Self, InternalError> {
         let replay = Replay::counterexample(timelines.to_vec());
+        let max_size = max_size.max(replay.longest());
+        Self::new_stream(
+            replay,
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
+    /// Replay a test case every draw of which `resolver` decides
+    /// (experiment 017), drawing randomly where it declines, up to
+    /// `max_size` choices in total.
+    #[cfg(any(test, feature = "__bench"))]
+    pub fn for_external(
+        resolver: Box<dyn ExternalReplay>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        let replay = Replay::external(resolver);
         let max_size = max_size.max(replay.longest());
         Self::new_stream(
             replay,

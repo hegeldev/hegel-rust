@@ -89,6 +89,98 @@ pub mod __bench {
     pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
         crate::native::core::state::biased_float_sample(fc, rng).unwrap()
     }
+
+    pub use crate::backend::{DataSource, Failure, TestCaseResult};
+    pub use crate::native::bignum::ToPrimitive;
+    pub use crate::native::core::{Divergence, ExternalReplay};
+
+    /// How `replay_case` builds its test case.
+    pub enum ReplayKind<'a> {
+        /// Fresh generation under a draw budget.
+        Fresh { budget: usize },
+        /// One sequence positionally, bare when `extend == 0`, else with up
+        /// to `extend` random draws past it (`Rescue::Pun`).
+        Sequence {
+            choices: &'a [ChoiceValue],
+            extend: usize,
+        },
+        /// A counterexample under the live set (decision 74), with up to
+        /// `extend` random draws past its longest timeline.
+        Set {
+            timelines: &'a [Vec<ChoiceValue>],
+            extend: usize,
+        },
+        /// Every draw decided by the resolver (experiment 017).
+        External {
+            resolver: alloc::boxed::Box<dyn ExternalReplay>,
+            budget: usize,
+        },
+    }
+
+    pub struct ReplayOutcome {
+        pub interesting: bool,
+        pub origin: Option<alloc::string::String>,
+        pub realized: Vec<ChoiceValue>,
+        pub divergence: Option<Divergence>,
+        pub live: Vec<bool>,
+    }
+
+    /// Run the caller's body once against a replayed test case and report
+    /// what it realized (experiments 004 and 017).
+    pub fn replay_case(
+        kind: ReplayKind<'_>,
+        seed: u64,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<ReplayOutcome, alloc::string::String> {
+        use crate::native::core::{NativeTestCase, flattened_values_len};
+        let rng = EngineRng::seeded(seed);
+        let ntc = match kind {
+            ReplayKind::Fresh { budget } => NativeTestCase::for_probe(&[], rng, budget),
+            ReplayKind::Sequence { choices, extend: 0 } => {
+                Ok(NativeTestCase::for_choices(choices, None, None))
+            }
+            ReplayKind::Sequence { choices, extend } => {
+                NativeTestCase::for_probe(choices, rng, flattened_values_len(choices) + extend)
+            }
+            ReplayKind::Set { timelines, extend } => {
+                let longest = timelines
+                    .iter()
+                    .map(|t| flattened_values_len(t))
+                    .max()
+                    .unwrap_or(0);
+                NativeTestCase::for_counterexample(timelines, rng, longest + extend)
+            }
+            ReplayKind::External { resolver, budget } => {
+                NativeTestCase::for_external(resolver, rng, budget)
+            }
+        };
+        let ntc = ntc.map_err(|e| alloc::format!("{e:?}"))?;
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = async {
+            let (data_source, handle) = crate::native::data_source::NativeDataSource::new(ntc);
+            exchange.offer(alloc::boxed::Box::new(data_source)).await;
+            let nodes = crate::native::data_source::NativeDataSource::take_nodes(&handle);
+            let outcome = crate::native::data_source::NativeDataSource::take_outcome(&handle);
+            let (divergence, live) = {
+                let tc = handle.lock();
+                (tc.divergence(), tc.live_timelines())
+            };
+            (nodes, outcome, divergence, live)
+        };
+        let (nodes, outcome, divergence, live) = crate::exchange::drive(&exchange, fut, run_case);
+        let outcome = outcome.map_err(|e| alloc::format!("{e}"))?;
+        let (interesting, origin) = match outcome {
+            TestCaseResult::Interesting(f) => (true, Some(f.origin)),
+            _ => (false, None),
+        };
+        Ok(ReplayOutcome {
+            interesting,
+            origin,
+            realized: nodes.iter().map(|n| n.value()).collect(),
+            divergence,
+            live,
+        })
+    }
 }
 
 use crate::backend::{

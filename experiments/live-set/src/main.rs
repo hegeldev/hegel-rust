@@ -18,6 +18,8 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 static EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
+static FIRST_FAILURE_AT: AtomicUsize = AtomicUsize::new(0);
+static K: AtomicUsize = AtomicUsize::new(2);
 static HIDDEN: Mutex<u64> = Mutex::new(0x9E3779B97F4A7C15);
 
 fn seed_hidden(seed: u64) {
@@ -38,6 +40,15 @@ fn hidden_coin() -> bool {
 
 fn count_execution() {
     EXECUTIONS.fetch_add(1, Ordering::SeqCst);
+}
+
+fn fail_if(fail: bool) {
+    if fail {
+        FIRST_FAILURE_AT
+            .compare_exchange(0, EXECUTIONS.load(Ordering::SeqCst), Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+    }
+    assert!(!fail, "branch bug");
 }
 
 fn small_int() -> impl gs::PrintableGenerator<i64> {
@@ -121,14 +132,67 @@ fn twobranch_body(tc: TestCase) {
     assert!(!fail, "branch bug");
 }
 
-fn body_for(name: &str) -> fn(TestCase) {
-    match name {
+fn shift_piece(tc: &TestCase) -> bool {
+    if hidden_coin() {
+        tc.draw(gs::booleans())
+    } else {
+        let x = tc.draw(small_int());
+        tc.draw(gs::booleans());
+        x >= 60
+    }
+}
+
+fn kblock_body(tc: TestCase) {
+    count_execution();
+    let a = tc.draw(gs::booleans());
+    let mut hot = true;
+    for _ in 0..K.load(Ordering::SeqCst) {
+        hot &= hot_piece(&tc);
+    }
+    fail_if(a && hot);
+}
+
+fn kshift_body(tc: TestCase) {
+    count_execution();
+    let a = tc.draw(gs::booleans());
+    let mut hot = true;
+    for _ in 0..K.load(Ordering::SeqCst) {
+        hot &= shift_piece(&tc);
+    }
+    fail_if(a && hot);
+}
+
+fn body_for(name: &str) -> (fn(TestCase), u64) {
+    if let Some(k) = name.strip_prefix("kblock") {
+        K.store(k.parse().expect("kblock<k>"), Ordering::SeqCst);
+        return (kblock_body, 2000);
+    }
+    if let Some(k) = name.strip_prefix("kshift") {
+        K.store(k.parse().expect("kshift<k>"), Ordering::SeqCst);
+        return (kshift_body, 2000);
+    }
+    let body: fn(TestCase) = match name {
         "racy" => racy_body,
         "clone" => clone_flaky_body,
         "branch" => branch_body,
         "twobranch" => twobranch_body,
         other => panic!("unknown body {other}"),
-    }
+    };
+    (body, 200)
+}
+
+fn shape(timeline: &[ChoiceValue]) -> String {
+    timeline
+        .iter()
+        .map(|v| match v {
+            ChoiceValue::Integer(_) => 'i',
+            ChoiceValue::Boolean(_) => 'b',
+            ChoiceValue::Float(_) => 'f',
+            ChoiceValue::Bytes(_) => 'y',
+            ChoiceValue::String(_) => 's',
+            ChoiceValue::Clone(_) => 'c',
+        })
+        .collect()
 }
 
 fn flat_len(timeline: &[ChoiceValue]) -> usize {
@@ -152,6 +216,8 @@ fn blobinfo(blob: &str) {
                 .map(|t| flat_len(t).to_string())
                 .collect();
             println!("LENGTHS: {}", lengths.join(","));
+            let shapes: Vec<String> = timelines.iter().map(|t| shape(t)).collect();
+            println!("SHAPES: {}", shapes.join(","));
         }
     }
 }
@@ -164,10 +230,10 @@ fn wallclock_seed() -> u64 {
     nanos ^ ((std::process::id() as u64) << 32)
 }
 
-fn db_settings(dbdir: String, seed: u64, phases: [Phase; 2]) -> Settings {
+fn db_settings(dbdir: String, seed: u64, phases: [Phase; 2], test_cases: u64) -> Settings {
     Settings::new()
         .database(Some(dbdir))
-        .test_cases(200)
+        .test_cases(test_cases)
         .print_blob(true)
         .seed(Some(seed))
         .phases(phases)
@@ -188,7 +254,7 @@ fn main() {
     }
     let (verb, body_name) = mode.split_once('-').expect("mode is <verb>-<body>");
     let verb = verb.to_string();
-    let body = body_for(body_name);
+    let (body, test_cases) = body_for(body_name);
     let arg = args[2].clone();
     let seed: Option<u64> = args.get(3).map(|s| s.parse().expect("seed is a u64"));
     let salt = match verb.as_str() {
@@ -210,6 +276,7 @@ fn main() {
                     arg,
                     seed.unwrap(),
                     [Phase::Generate, Phase::Shrink],
+                    test_cases,
                 ))
                 .run(),
             "reuse" => h
@@ -217,6 +284,7 @@ fn main() {
                     arg,
                     seed.unwrap(),
                     [Phase::Reuse, Phase::Shrink],
+                    test_cases,
                 ))
                 .run(),
             "replay" => h
@@ -229,6 +297,7 @@ fn main() {
     let elapsed = start.elapsed().as_secs_f64();
     println!("SECONDS: {elapsed:.3}");
     println!("EXECUTIONS: {}", EXECUTIONS.load(Ordering::SeqCst));
+    println!("FIRST_FAILURE_AT: {}", FIRST_FAILURE_AT.load(Ordering::SeqCst));
     match outcome {
         Ok(()) => println!("RESULT: PASSED"),
         Err(payload) => {

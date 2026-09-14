@@ -10,6 +10,8 @@ pub use choices::{
 };
 pub use float_index::{float_to_index, index_to_float};
 pub use replay::Divergence;
+#[cfg(any(test, feature = "__bench"))]
+pub use replay::ExternalReplay;
 pub(crate) use state::float_clamp;
 pub use state::{
     GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables,

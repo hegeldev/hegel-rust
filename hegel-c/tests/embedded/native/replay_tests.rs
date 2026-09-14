@@ -423,3 +423,79 @@ fn a_proposal_that_runs_out_at_a_clone_leaves_the_child_stream_random() {
     draw_int(&mut child.lock());
     assert_eq!(tc.live_timelines(), vec![false, false]);
 }
+
+struct Scripted {
+    values: Vec<ChoiceValue>,
+    seen: Vec<(Vec<usize>, usize)>,
+    divergence: Option<Divergence>,
+}
+
+impl ExternalReplay for Scripted {
+    fn resolve(
+        &mut self,
+        stream: &[usize],
+        position: usize,
+        fits: &dyn Fn(&ChoiceValue) -> bool,
+    ) -> Option<ChoiceValue> {
+        self.seen.push((stream.to_vec(), position));
+        let stored = self.values.get(self.seen.len() - 1)?.clone();
+        if !fits(&stored) && self.divergence.is_none() {
+            self.divergence = Some(Divergence {
+                stream: stream.to_vec(),
+                position,
+            });
+        }
+        Some(stored)
+    }
+
+    fn divergence(&self) -> Option<Divergence> {
+        self.divergence.clone()
+    }
+
+    fn longest(&self) -> usize {
+        self.values.len()
+    }
+}
+
+fn scripted(values: Vec<ChoiceValue>) -> NativeTestCase {
+    let resolver = Scripted {
+        values,
+        seen: Vec::new(),
+        divergence: None,
+    };
+    NativeTestCase::for_external(Box::new(resolver), EngineRng::seeded(5), 8).unwrap()
+}
+
+#[test]
+fn an_external_resolver_serves_fitting_values_and_the_run_draws_past_it() {
+    let mut tc = scripted(vec![int(7), boolean(true)]);
+    assert_eq!(draw_int(&mut tc), 7);
+    assert!(draw_bool(&mut tc));
+    draw_int(&mut tc);
+    assert_eq!(tc.nodes.len(), 3);
+    assert_eq!(tc.divergence(), None);
+    assert_eq!(tc.live_timelines(), Vec::<bool>::new());
+}
+
+#[test]
+fn an_external_resolver_reports_its_own_divergence_and_a_misfit_draws_randomly() {
+    let mut tc = scripted(vec![boolean(true), int(3)]);
+    draw_int(&mut tc);
+    assert_eq!(
+        tc.divergence(),
+        Some(Divergence {
+            stream: vec![],
+            position: 0
+        })
+    );
+    assert_eq!(draw_int(&mut tc), 3);
+}
+
+#[test]
+fn a_cloned_stream_resolves_through_the_same_external_resolver() {
+    let mut tc = scripted(vec![int(1), int(2)]);
+    assert_eq!(draw_int(&mut tc), 1);
+    let child = tc.clone_stream().unwrap();
+    assert_eq!(draw_int(&mut child.lock()), 2);
+    assert_eq!(tc.divergence(), None);
+}

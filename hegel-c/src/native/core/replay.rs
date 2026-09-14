@@ -14,6 +14,7 @@
 //! disagreement inside a cloned stream prunes the timeline for its parent
 //! too.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -43,6 +44,24 @@ pub struct Divergence {
     pub stream: Vec<usize>,
     pub position: usize,
 }
+
+/// A resolver outside the engine deciding every draw of a replay
+/// (experiment 017: the counterexample as a graph, walked by the
+/// harness). `resolve` returns the stored value to serve at `position` of
+/// `stream`, or `None` to draw randomly; `fits` is the draw's acceptance
+/// test over stored values.
+pub trait ExternalReplay: Send {
+    fn resolve(
+        &mut self,
+        stream: &[usize],
+        position: usize,
+        fits: &dyn Fn(&ChoiceValue) -> bool,
+    ) -> Option<ChoiceValue>;
+    fn divergence(&self) -> Option<Divergence>;
+    fn longest(&self) -> usize;
+}
+
+type External = Arc<Mutex<Box<dyn ExternalReplay>>>;
 
 /// The family-wide replay state: which timelines are live, the order in
 /// which the others were pruned (as batches, one per pruning draw), and the
@@ -155,9 +174,31 @@ pub(crate) struct Replay {
     insist: Vec<bool>,
     rescue: Rescue,
     shared: Arc<Mutex<LiveSet>>,
+    external: Option<External>,
 }
 
 impl Replay {
+    /// A replay every draw of which is decided by `resolver`.
+    #[cfg(any(test, feature = "__bench"))]
+    pub(crate) fn external(resolver: Box<dyn ExternalReplay>) -> Self {
+        Self::external_view(
+            Arc::new(Mutex::new(resolver)),
+            Arc::new(Mutex::new(LiveSet::new(0))),
+        )
+    }
+
+    fn external_view(external: External, shared: Arc<Mutex<LiveSet>>) -> Self {
+        Replay {
+            timelines: Vec::new(),
+            nodes: Vec::new(),
+            puns: Vec::new(),
+            insist: Vec::new(),
+            rescue: Rescue::Continue,
+            shared,
+            external: Some(external),
+        }
+    }
+
     /// A [`Rescue::Pun`] replay of one proposed sequence.
     pub(crate) fn pun(prefix: Vec<ChoiceValue>, nodes: Option<Vec<ChoiceNode>>) -> Self {
         Replay {
@@ -167,6 +208,7 @@ impl Replay {
             insist: alloc::vec![false],
             rescue: Rescue::Pun,
             shared: Arc::new(Mutex::new(LiveSet::new(1))),
+            external: None,
         }
     }
 
@@ -180,6 +222,7 @@ impl Replay {
             insist: alloc::vec![false; count],
             rescue: Rescue::Continue,
             shared: Arc::new(Mutex::new(LiveSet::new(count))),
+            external: None,
         }
     }
 
@@ -210,6 +253,7 @@ impl Replay {
             insist,
             rescue: Rescue::Continue,
             shared: Arc::new(Mutex::new(LiveSet::new(count))),
+            external: None,
         }
     }
 
@@ -239,6 +283,18 @@ impl Replay {
         position: usize,
         fits: impl Fn(&ChoiceValue) -> Option<V>,
     ) -> Resolved<'_, V> {
+        if let Some(external) = &self.external {
+            return match external
+                .lock()
+                .resolve(stream, position, &|v| fits(v).is_some())
+            {
+                Some(stored) => match fits(&stored) {
+                    Some(v) => Resolved::Served(v),
+                    None => Resolved::Exhausted,
+                },
+                None => Resolved::Exhausted,
+            };
+        }
         match self.rescue {
             Rescue::Pun => match self.proposal().get(position) {
                 Some(stored) => match fits(stored) {
@@ -323,6 +379,9 @@ impl Replay {
     /// each timeline's cloned sequence there, with the timelines that have
     /// no clone at that position leaving the live set.
     pub(crate) fn clone_child(&self, stream: &[usize], position: usize) -> Self {
+        if let Some(external) = &self.external {
+            return Self::external_view(Arc::clone(external), Arc::clone(&self.shared));
+        }
         let mut set = self.shared.lock();
         let mut timelines = Vec::with_capacity(self.timelines.len());
         let mut nodes = Vec::with_capacity(self.timelines.len());
@@ -378,11 +437,15 @@ impl Replay {
             insist: self.insist.clone(),
             rescue: self.rescue,
             shared: Arc::clone(&self.shared),
+            external: None,
         }
     }
 
     /// The family's first divergence, if any.
     pub(crate) fn divergence(&self) -> Option<Divergence> {
+        if let Some(external) = &self.external {
+            return external.lock().divergence();
+        }
         self.shared.lock().divergence.clone()
     }
 
@@ -415,6 +478,9 @@ impl Replay {
     /// The longest timeline's top-level length: the floor of a replay's
     /// size budget.
     pub(crate) fn longest(&self) -> usize {
+        if let Some(external) = &self.external {
+            return external.lock().longest();
+        }
         self.timelines
             .iter()
             .map(|t| t.as_ref().map_or(0, Vec::len))

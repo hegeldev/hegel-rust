@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 TARGET = Path(os.environ.get("CARGO_TARGET_DIR", "/tmp/hegel-exp-target"))
 BIN = TARGET / "release" / "livesets"
 BLOB_RE = re.compile(r'reproduce_failure\("([^"]+)"\)')
-BODIES = ["racy", "clone", "branch", "twobranch"]
+BODIES = ["racy", "clone", "branch", "twobranch"] + [f"kblock{k}" for k in range(2, 7)] + [f"kshift{k}" for k in range(2, 7)]
 TIMEOUT = 600
 REPLAYS = 3
 
@@ -93,6 +93,7 @@ def episode(body, index, seed):
         "seed": seed,
         "discover_found": False,
         "discover_executions": None,
+        "first_failure_at": None,
         "discover_secs": None,
         "discover_caveats": [],
         "blob": None,
@@ -100,6 +101,7 @@ def episode(body, index, seed):
         "blob_nd": None,
         "timelines": None,
         "lengths": None,
+        "shapes": None,
         "reuse_reproduced": None,
         "reuse_executions": None,
         "reuse_secs": None,
@@ -112,6 +114,7 @@ def episode(body, index, seed):
         rec["discover_verdict"] = verdict(d)
         rec["discover_found"] = verdict(d) == "failed"
         rec["discover_executions"] = int_field(d["out"], "EXECUTIONS")
+        rec["first_failure_at"] = int_field(d["out"], "FIRST_FAILURE_AT")
         rec["discover_secs"] = round(d["secs"], 3)
         rec["discover_caveats"] = caveat_keys(d["out"])
         rec["discover_panic"] = field(d["out"], "PANIC")
@@ -130,6 +133,8 @@ def episode(body, index, seed):
             rec["timelines"] = int(tl) if tl and tl.isdigit() else tl
             lengths = field(b["out"], "LENGTHS")
             rec["lengths"] = [int(x) for x in lengths.split(",") if x] if lengths else None
+            shapes = field(b["out"], "SHAPES")
+            rec["shapes"] = [x for x in shapes.split(",") if x] if shapes else None
             nd = field(b["out"], "ND")
             rec["blob_nd"] = None if nd is None else nd == "true"
             a = anomaly_of(b, "blobinfo") if tl is None else None
@@ -188,6 +193,12 @@ def summarize(body, recs):
     replay_ok = [p for p in replays if p["reproduced"]]
     timelines = Counter(str(r["timelines"]) for r in with_blob)
     first_len = [r["lengths"][0] for r in with_blob if r["lengths"]]
+    distinct_shapes = Counter(str(len(set(r["shapes"]))) for r in with_blob if r["shapes"])
+    post_first = [
+        r["discover_executions"] - r["first_failure_at"]
+        for r in found
+        if r["discover_executions"] is not None and r["first_failure_at"]
+    ]
     caveats = Counter(k for r in found for k in r["discover_caveats"])
     reuse_caveats = Counter(k for r in reuse_done for k in r["reuse_caveats"])
     replay_caveats = Counter(k for p in replays for k in p["caveats"])
@@ -203,6 +214,8 @@ def summarize(body, recs):
         "|---|---|",
         f"| discovery rate | {rate(len(found), n)} |",
         f"| median discovery executions | {median([r['discover_executions'] for r in found])} |",
+        f"| median executions after the first failure | {median(post_first)} |",
+        f"| distinct shapes histogram (count: episodes) | {hist(distinct_shapes)} |",
         f"| median discovery seconds | {median([r['discover_secs'] for r in found])} |",
         f"| blob-present rate | {rate(len(with_blob), len(found))} |",
         f"| timelines histogram (count: episodes) | {hist(timelines)} |",
