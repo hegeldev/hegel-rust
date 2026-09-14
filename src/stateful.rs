@@ -3,12 +3,12 @@
 //! State machines are defined using the [`state_machine`](crate::state_machine) attribute macro.
 //! Methods annotated with `#[rule]` become rules (actions applied to the state machine) and
 //! methods annotated with `#[invariant]` become invariants (checked on the machine's initial
-//! and final state, and sampled in between. `#[invariant(always_run)]` opts an invariant out 
-//! of the sampling: it runs after every rule, for invariants that must observe every 
-//! intermediate state or that mutate state when checked. `#[rule(weight = w)]` also 
-//! hints how often a rule should be chosen compared to other rules in its group. 
+//! and final state, and sampled in between. `#[invariant(always_run)]` opts an invariant out
+//! of the sampling: it runs after every rule, for invariants that must observe every
+//! intermediate state or that mutate state when checked. `#[rule(weight = w)]` also
+//! hints how often a rule should be chosen compared to other rules in its group.
 //! This is not a distributional guarantee.
-//! 
+//!
 //! Both take a [`TestCase`] parameter and borrow the state machine: rules
 //! typically have signature `fn(&mut self, tc: TestCase)` and invariants
 //! `fn(&self, tc: TestCase)`, but either kind of method may use `&self` or `&mut self`.
@@ -937,7 +937,7 @@ pub struct ConcurrentRule<M: ?Sized> {
 
 impl<M> ConcurrentRule<M> {
     /// Create a new rule with a name, a concurrency group, a selection
-    /// weight, and an apply function. Pass [`ANONYMOUS_GROUP`] as the 
+    /// weight, and an apply function. Pass [`ANONYMOUS_GROUP`] as the
     /// group for a rule without a group annotation.
     pub fn new(name: &str, group: &str, weight: f64, apply: fn(&M, TestCase)) -> Self {
         ConcurrentRule {
