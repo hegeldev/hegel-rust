@@ -39,7 +39,6 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/stateful.rs` — Stateful (model-based) testing via `#[state_machine]`
 - `src/explicit_test_case.rs` — Explicit test-case support (`#[explicit_test_case]`)
 - `src/control.rs` — Control-flow unwind payloads (`AssumeFailed`, `StopTest`) and their handling
-- `src/antithesis.rs` — Antithesis integration (always compiled in; activates when `ANTITHESIS_OUTPUT_DIR` is set)
 - `hegel-macros/` — Proc-macro crate (sub-crate with its own `Cargo.toml`)
 
 ### `hegel-c` — the engine, built as `libhegel`
@@ -48,6 +47,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 - `src/backend.rs` — The `DataSource` trait the engine implements and the C ABI drives
 - `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
+- `src/antithesis.rs` — The Antithesis integration: detection from `ANTITHESIS_OUTPUT_DIR` (selects the `workload` profile) and reporting each run's verdict to `sdk.jsonl` for tests whose settings carry a location (`hegel_settings_set_test_location`, which the frontend's macros supply)
 - `benches/` — Microbenchmarks of engine internals, exposed through the internal `__bench` feature
 - Released as `libhegel-<goos>-<goarch>.<ext>` assets on each GitHub release; the source is published to crates.io as `hegeltest-c` — the crate the frontend's `build.rs` builds the shared library from (and links directly under `static-engine`)
 

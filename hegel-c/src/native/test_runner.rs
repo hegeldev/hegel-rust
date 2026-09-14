@@ -1033,7 +1033,7 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
-        crate::antithesis_detect::check_environment()?;
+        crate::antithesis::check_environment()?;
         #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),

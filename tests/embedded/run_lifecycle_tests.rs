@@ -169,7 +169,7 @@ fn run_one_case(
     Option<String>,
 ) {
     init_panic_hook();
-    let c_settings = SettingsHandle::build(&test_settings(), None);
+    let c_settings = SettingsHandle::build(&test_settings(), None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()

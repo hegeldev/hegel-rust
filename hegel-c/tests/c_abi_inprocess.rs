@@ -28,11 +28,11 @@ use hegel_c::{
     hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
     hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
-    hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
-    hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
-    hegel_state_machine_should_check_invariant, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_clone, hegel_test_case_free, hegel_test_case_from_blob,
-    hegel_test_case_is_nondeterministic, hegel_version,
+    hegel_settings_set_test_location, hegel_start_span, hegel_state_machine_free,
+    hegel_state_machine_next_group, hegel_state_machine_next_rule,
+    hegel_state_machine_rule_rejected, hegel_state_machine_should_check_invariant, hegel_status_t,
+    hegel_stop_span, hegel_target, hegel_test_case_clone, hegel_test_case_free,
+    hegel_test_case_from_blob, hegel_test_case_is_nondeterministic, hegel_version,
 };
 use std::ffi::{CString, c_void};
 use std::os::raw::c_char;
@@ -181,6 +181,17 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_settings_set_database_key(ctx, ptr::null_mut(), c"x".as_ptr()),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_settings_set_test_location(
+                ctx,
+                ptr::null_mut(),
+                c"x".as_ptr(),
+                1,
+                c"x".as_ptr(),
+                c"x".as_ptr()
+            ),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -492,6 +503,33 @@ fn settings_string_setters_handle_bad_input() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
+
+        let good = c"x".as_ptr();
+        for (name, file, class_name, function) in [
+            ("file", ptr::null(), good, good),
+            ("class_name", good, ptr::null(), good),
+            ("function", good, good, ptr::null()),
+        ] {
+            assert_eq!(
+                hegel_settings_set_test_location(ctx, s, file, 1, class_name, function),
+                HEGEL_E_INVALID_ARG
+            );
+            assert_eq!(
+                last_error(ctx),
+                format!("hegel_settings_set_test_location: {name} is null")
+            );
+        }
+        assert_eq!(
+            hegel_settings_set_test_location(ctx, s, good, 1, bad.as_ptr(), good),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            last_error(ctx),
+            "hegel_settings_set_test_location: class_name is not valid UTF-8"
+        );
+        ok(hegel_settings_set_test_location(
+            ctx, s, good, 1, good, good,
+        ));
 
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));

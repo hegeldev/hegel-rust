@@ -1,4 +1,3 @@
-use crate::antithesis::TestLocation;
 use crate::test_case::TestCase;
 
 /// Health checks that can be suppressed during test execution.
@@ -446,6 +445,17 @@ where
 
 fn env_var(key: &str) -> Option<String> {
     std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
+}
+
+/// Where a test is defined, as the `#[hegel::test]` and `#[hegel::main]`
+/// macros record it: passed to the engine, which reports the test's verdict
+/// against it when running under [Antithesis](https://antithesis.com/).
+#[doc(hidden)]
+pub struct TestLocation {
+    pub function: String,
+    pub file: String,
+    pub class: String,
+    pub begin_line: u32,
 }
 
 #[doc(hidden)]

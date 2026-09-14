@@ -51,9 +51,9 @@ compile_error!("libhegel's WebAssembly build does not support threads or shared 
 pub struct Error;
 
 /// Filesystem operations, all rooted at plain `&str` paths joined with
-/// `/`. Failures are reported as [`Error`] without detail; the engine's
-/// only filesystem client (the failure database) treats every failure as
-/// a silent no-op.
+/// `/`. Failures are reported as [`Error`] without detail: the failure
+/// database treats every failure as a silent no-op, and the Antithesis
+/// reporter announces one on the run's output.
 #[cfg(not(target_family = "wasm"))]
 pub mod fs {
     use alloc::string::String;
@@ -75,6 +75,12 @@ pub mod fs {
     /// Create (or truncate) the file at `path` and write `data` to it.
     pub fn write(path: &str, data: &[u8]) -> Result<(), Error> {
         imp::write(path, data)
+    }
+
+    /// Append `data` to the file at `path`, creating it if it does not
+    /// exist.
+    pub fn append(path: &str, data: &[u8]) -> Result<(), Error> {
+        imp::append(path, data)
     }
 
     /// Create the directory at `path` and any missing parents.
