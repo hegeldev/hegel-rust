@@ -1,7 +1,7 @@
 # 017: the counterexample as a graph
 
 Status: run on 2026-09-14 against `be170b50` (decision 77) plus the experiment's own
-engine hook (an external-resolver replay mode behind `__bench`).
+engine hook (an external-resolver replay mode behind `__bench`); committed as `0829321c`.
 
 Question (David, turn 9 of the takeover): the timeline pool cannot represent independent
 branch points — k independent two-way choices are 2^k whole timelines under a cap of 10 —
