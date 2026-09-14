@@ -11,7 +11,10 @@ pub enum HealthCheck {
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
+    /// Generated test cases are too large: they routinely reach the limit
+    /// on the number of choices a single test case may make. Suppressing
+    /// this check also removes that limit, so a test case can run
+    /// indefinitely; see [`Settings::suppress_health_check`].
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -306,6 +309,30 @@ impl Settings {
     /// tests. Use this to suppress specific checks when they are expected.
     /// Replaces any previously configured suppressions, like [`Settings::phases`].
     ///
+    /// Suppressing [`HealthCheck::TestCasesTooLarge`] also removes the limit
+    /// on the number of choices a single test case may make, which is
+    /// otherwise 2^20 (1,048,576). Every draw counts as at least one choice,
+    /// as does each element of a collection, each step of a state machine,
+    /// and each cloned [`TestCase`](crate::TestCase); a test case that
+    /// reaches the limit is stopped and discarded. Suppress the check for a
+    /// test case that is meant to run for a long time, such as a concurrent
+    /// state machine driven for hours:
+    ///
+    /// ```no_run
+    /// use hegel::{HealthCheck, TestCase};
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test(test_cases = 1, suppress_health_check = [HealthCheck::TestCasesTooLarge])]
+    /// fn soak(tc: TestCase) {
+    ///     for _ in 0..5_000_000 {
+    ///         let _: u8 = tc.draw(gs::integers());
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The engine records every choice a test case makes, so an unlimited
+    /// test case's memory grows with its length.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -379,7 +406,9 @@ impl Settings {
     /// The settings a `#[hegel::main]` binary runs with: one test case, with
     /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
     /// both measure how valid test cases accumulate over a run and a run of
-    /// one has nothing to measure.
+    /// one has nothing to measure. Suppressing `TestCasesTooLarge` also
+    /// removes the choice limit, which suits a binary's one test case: it is
+    /// typically meant to run for a long time.
     pub(crate) fn for_single_test_case(mut self) -> Self {
         self.test_cases = 1;
         for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {

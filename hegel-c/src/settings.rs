@@ -13,7 +13,9 @@ pub enum HealthCheck {
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
+    /// Generated test cases are too large. Suppressing this check also
+    /// removes the per-test-case choice limit (see
+    /// [`Settings::unbounded_choices`]).
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -170,6 +172,9 @@ pub struct Settings {
     /// profile resolution and logged at run start under `Debug` verbosity,
     /// not a setting: no profile or builder touches it.
     pub(crate) config_path: Option<String>,
+    /// Whether test cases may make any number of choices. See
+    /// [`Settings::unbounded_choices`].
+    pub(crate) unbounded_choices: bool,
 }
 
 impl Settings {
@@ -205,6 +210,36 @@ impl Settings {
             print_blob: true,
             backend: Backend::Default,
             config_path: None,
+            unbounded_choices: false,
+        }
+    }
+
+    /// Remove the limit on the number of choices a single test case may
+    /// make. By default a test case may make
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20) choices.
+    ///
+    /// A test case that reaches the limit is concluded as an overrun: the
+    /// draw that would exceed it fails, the case is discarded, and enough
+    /// overruns trip the [`HealthCheck::TestCasesTooLarge`] and
+    /// [`HealthCheck::LargeInitialTestCase`] health checks. Suppressing
+    /// `TestCasesTooLarge` removes the limit too. Either way a long-running
+    /// test case — a concurrent state machine exercised for hours, say — can
+    /// keep drawing indefinitely, at the cost of the memory to record every
+    /// choice it makes.
+    pub fn unbounded_choices(mut self, unbounded: bool) -> Self {
+        self.unbounded_choices = unbounded;
+        self
+    }
+
+    /// The effective per-test-case choice bound: `usize::MAX` when
+    /// [`Settings::unbounded_choices`] is set or
+    /// [`HealthCheck::TestCasesTooLarge`] is suppressed, and
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) otherwise.
+    pub(crate) fn choice_bound(&self) -> usize {
+        if self.unbounded_choices || self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
+            usize::MAX
+        } else {
+            crate::native::core::BUFFER_SIZE
         }
     }
 

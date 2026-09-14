@@ -23,8 +23,8 @@ use super::choices::{
 };
 use super::float_index::index_to_float;
 use super::{
-    BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
-    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+    BOUNDARY_PROBABILITY, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE, DIRICHLET_ALPHA_ENDPOINT,
+    DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
 };
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
@@ -1093,18 +1093,43 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
     cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
 }
 
-/// The smallest nonnegative integer not in `used`.
-fn smallest_unused_id(used: &BTreeSet<i64>) -> i64 {
-    let mut candidate = 0;
-    for &id in used {
-        if id > candidate {
-            break;
-        }
-        if id == candidate {
-            candidate += 1;
+/// The identifiers a test case has handed out through
+/// [`NativeTestCase::draw_fresh_id`], with the smallest unused one tracked
+/// incrementally. Identifiers are only ever added, so the smallest unused
+/// one never moves down and each insertion advances it past at most the
+/// identifiers it newly covers: amortised constant time per draw, where a
+/// scan from zero would make a long-running test case's pool additions
+/// quadratic.
+#[derive(Default)]
+pub(crate) struct FreshIds {
+    used: BTreeSet<i64>,
+    smallest_unused: i64,
+}
+
+impl FreshIds {
+    /// Record `id` as handed out.
+    pub(crate) fn insert(&mut self, id: i64) {
+        if self.used.insert(id) {
+            while self.used.contains(&self.smallest_unused) {
+                self.smallest_unused += 1;
+            }
         }
     }
-    candidate
+
+    /// Whether `id` has been handed out.
+    pub(crate) fn contains(&self, id: i64) -> bool {
+        self.used.contains(&id)
+    }
+
+    /// The smallest nonnegative identifier not yet handed out.
+    pub(crate) fn smallest_unused(&self) -> i64 {
+        self.smallest_unused
+    }
+
+    /// The largest identifier handed out, or `-1` if none has been.
+    pub(crate) fn max_used(&self) -> i64 {
+        self.used.iter().next_back().copied().unwrap_or(-1)
+    }
 }
 
 /// A pool of variable IDs for stateful testing.
@@ -1380,7 +1405,7 @@ pub struct FamilyCore {
     reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
-    fresh_ids: Mutex<BTreeSet<i64>>,
+    fresh_ids: Mutex<FreshIds>,
     /// This test case's swarm [`GenerationParameters`], drawn once when the
     /// root stream's RNG is attached (see [`NativeTestCase::with_random`]) and
     /// shared by every clone-stream so the whole case has one consistent
@@ -1399,7 +1424,7 @@ impl FamilyCore {
             events: Mutex::new(Vec::new()),
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
-            fresh_ids: Mutex::new(BTreeSet::new()),
+            fresh_ids: Mutex::new(FreshIds::default()),
             generation_parameters: OnceBox::new(),
         }
     }
@@ -1558,14 +1583,19 @@ pub struct NativeTestCase {
 impl NativeTestCase {
     #[cfg(test)]
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
+        Self::for_choices_and_template(&[], None, None, super::BUFFER_SIZE, None).with_random(rng)
     }
 
     /// Like [`Self::new_random`], but generating from the given swarm
-    /// parameters rather than drawing fresh ones — used by the exploration
-    /// loop, which draws each case's parameters itself.
-    pub fn new_random_with_params(rng: EngineRng, params: GenerationParameters) -> Self {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None)
+    /// parameters rather than drawing fresh ones, up to `max_size` choices —
+    /// used by the exploration loop, which draws each case's parameters
+    /// itself.
+    pub fn new_random_with_params(
+        rng: EngineRng,
+        params: GenerationParameters,
+        max_size: usize,
+    ) -> Self {
+        Self::for_choices_and_template(&[], None, None, max_size, None)
             .with_random_and_params(rng, params)
     }
 
@@ -2063,15 +2093,15 @@ impl NativeTestCase {
     pub fn draw_fresh_id(&mut self) -> Result<i64, EngineError> {
         let family = Arc::clone(&self.family);
         let mut used = family.fresh_ids.lock();
-        let window_hi = used.iter().next_back().copied().unwrap_or(-1) + 2;
-        let fallback = smallest_unused_id(&used);
+        let window_hi = used.max_used() + 2;
+        let fallback = used.smallest_unused();
         let (v, was_forced) = self.resolve_choice(
             || Ok(BigInt::from(fallback)),
             || Ok(BigInt::from(fallback)),
             |v| match v {
                 ChoiceValue::Integer(n)
                     if n.to_i64()
-                        .is_some_and(|id| (0..=window_hi).contains(&id) && !used.contains(&id)) =>
+                        .is_some_and(|id| (0..=window_hi).contains(&id) && !used.contains(id)) =>
                 {
                     Some(n.clone())
                 }
@@ -2123,10 +2153,7 @@ impl NativeTestCase {
         sorted.sort_unstable();
         sorted.dedup();
         hegel_internal_assert!(sorted[0] >= 0, "draw_from_set requires nonnegative members");
-        let window_hi = {
-            let used = self.family.fresh_ids.lock();
-            used.iter().next_back().copied().unwrap_or(-1) + 1
-        };
+        let window_hi = { self.family.fresh_ids.lock().max_used() + 1 };
         hegel_internal_assert!(
             *sorted.last().unwrap() <= window_hi,
             "draw_from_set members must be identifiers from draw_fresh_id"

@@ -53,6 +53,7 @@ fn parses_every_key() {
             show_statistics: Some(true),
             print_blob: Some(false),
             backend: Some(Backend::Default),
+            unbounded_choices: None,
         }
     );
 }

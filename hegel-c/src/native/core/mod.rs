@@ -15,8 +15,10 @@ pub use state::{
 };
 pub use state_machine::NativeStateMachine;
 
-/// Maximum number of choices a single test case can make.
-pub const BUFFER_SIZE: usize = 8 * 1024;
+/// Maximum number of choices a single test case can make, unless the run
+/// removes the limit (see
+/// [`Settings::unbounded_choices`](crate::settings::Settings::unbounded_choices)).
+pub const BUFFER_SIZE: usize = 1 << 20;
 
 /// Maximum nesting depth of cloned streams (a clone made from a clone made
 /// from …). The engine rejects deeper clones the same way it rejects

@@ -327,7 +327,10 @@ fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
             .settings(
                 Settings::new()
                     .database(None)
-                    .suppress_health_check([HealthCheck::LargeInitialTestCase])
+                    .suppress_health_check([
+                        HealthCheck::LargeInitialTestCase,
+                        HealthCheck::TooSlow,
+                    ])
                     .verbosity(Verbosity::Quiet),
             )
             .run();

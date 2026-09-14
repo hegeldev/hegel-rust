@@ -90,6 +90,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_get_show_statistics(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
             fn hegel_settings_get_suppress_health_check(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut u32) -> hegel_result_t;
             fn hegel_settings_get_test_cases(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut u64) -> hegel_result_t;
+            fn hegel_settings_get_unbounded_choices(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
             fn hegel_settings_get_verbosity(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut hegel_verbosity_t) -> hegel_result_t;
             fn hegel_settings_new(ctx: *mut HegelContext, out_settings: *mut *mut HegelSettings) -> hegel_result_t;
             fn hegel_settings_new_for_profile(ctx: *mut HegelContext, name: *const c_char, out_settings: *mut *mut HegelSettings) -> hegel_result_t;
@@ -106,6 +107,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_suppress_health_check(ctx: *mut HegelContext, s: *mut HegelSettings, checks: u32) -> hegel_result_t;
             fn hegel_settings_set_test_cases(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
             fn hegel_settings_set_test_location(ctx: *mut HegelContext, s: *mut HegelSettings, file: *const c_char, begin_line: u32, class_name: *const c_char, function: *const c_char) -> hegel_result_t;
+            fn hegel_settings_set_unbounded_choices(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_verbosity(ctx: *mut HegelContext, s: *mut HegelSettings, v: u32) -> hegel_result_t;
             fn hegel_start_span(ctx: *mut HegelContext, tc: *mut HegelTestCase, label: u64) -> hegel_result_t;
             fn hegel_state_machine_free(ctx: *mut HegelContext, state_machine: *mut HegelStateMachine) -> hegel_result_t;

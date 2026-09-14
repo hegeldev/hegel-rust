@@ -1255,13 +1255,10 @@ fn generate_string_validates_handles_and_reports_stop_test() {
         );
         assert!(last_error(ctx).contains("out parameter is null"));
 
-        let mut bytes_result = hegel_generate_bytes_result_t {
-            data: ptr::null_mut(),
-            len: 0,
-        };
+        let mut filler = false;
         loop {
-            match hegel_generate_bytes(ctx, tc, 1000, 10000, &mut bytes_result) {
-                HEGEL_OK => ok(hegel_generate_bytes_result_free(ctx, &mut bytes_result)),
+            match hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut filler) {
+                HEGEL_OK => {}
                 HEGEL_E_STOP_TEST => break,
                 other => panic!("unexpected rc: {other:?}"),
             }
@@ -1510,13 +1507,10 @@ fn structured_draws_after_overrun_report_stop_test() {
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
-        let mut result = hegel_generate_bytes_result_t {
-            data: ptr::null_mut(),
-            len: 0,
-        };
+        let mut filler = false;
         loop {
-            match hegel_generate_bytes(ctx, tc, 1000, 10000, &mut result) {
-                HEGEL_OK => ok(hegel_generate_bytes_result_free(ctx, &mut result)),
+            match hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut filler) {
+                HEGEL_OK => {}
                 HEGEL_E_STOP_TEST => break,
                 other => panic!("unexpected rc: {other:?}"),
             }
@@ -1598,9 +1592,10 @@ fn typed_draws_after_overrun_report_stop_test() {
             data: ptr::null_mut(),
             len: 0,
         };
+        let mut filler = false;
         loop {
-            match hegel_generate_bytes(ctx, tc, 1000, 10000, &mut result) {
-                HEGEL_OK => ok(hegel_generate_bytes_result_free(ctx, &mut result)),
+            match hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut filler) {
+                HEGEL_OK => {}
                 HEGEL_E_STOP_TEST => break,
                 other => panic!("unexpected rc: {other:?}"),
             }

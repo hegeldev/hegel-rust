@@ -487,7 +487,8 @@ fn snapshots_reproduce_their_settings_over_any_base() {
         .report_multiple_failures(true)
         .show_statistics(true)
         .print_blob(true)
-        .backend(Backend::Urandom);
+        .backend(Backend::Urandom)
+        .unbounded_choices(true);
     let mut restored = Settings::base(false)
         .test_cases(1)
         .seed(Some(23))
@@ -504,6 +505,7 @@ fn snapshots_reproduce_their_settings_over_any_base() {
     assert!(restored.show_statistics);
     assert!(restored.print_blob);
     assert_eq!(restored.backend, Backend::Urandom);
+    assert!(restored.unbounded_choices);
 }
 
 #[test]

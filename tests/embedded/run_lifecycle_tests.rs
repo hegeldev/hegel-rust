@@ -148,6 +148,7 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
     );
 }
 
+/// Settings for the single-case runs below.
 fn test_settings() -> Settings {
     Settings::new()
         .database(None)

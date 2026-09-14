@@ -838,6 +838,25 @@ hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `yes`: When `true`, a test case may make any number of choices (draws,
+   spans, collection and clone steps). By default a test case is
+   concluded as an overrun once it has made 2^20 choices: the draw that
+   would exceed the limit returns `HEGEL_E_STOP_TEST`, and the frontend
+   reports the case with `HEGEL_STATUS_OVERRUN`. Suppressing the
+   `TestCasesTooLarge` health check (see
+   `hegel_settings_set_suppress_health_check`) removes the limit too. A
+   long-running test case — a concurrent state machine driven for hours,
+   say — needs it removed; the cost is the memory to record every choice
+   it makes.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_unbounded_choices(hegel_context_t *ctx,
+                                                    hegel_settings_t *s,
+                                                    bool yes);
+
+/*
+ Parameters:
  `database`: NULL sets it to the default: `./.hegel/examples/`, including
    resetting a value the handle already carries. `""` disables the
    database entirely. Discovered failures will not be stored. Anything
@@ -1068,6 +1087,17 @@ hegel_result_t hegel_settings_get_report_multiple_failures(hegel_context_t *ctx,
 hegel_result_t hegel_settings_get_show_statistics(hegel_context_t *ctx,
                                                   const hegel_settings_t *s,
                                                   bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether test cases may make any number of choices (see
+   `hegel_settings_set_unbounded_choices`).
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_unbounded_choices(hegel_context_t *ctx,
+                                                    const hegel_settings_t *s,
+                                                    bool *out);
 
 /*
  Parameters:

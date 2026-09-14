@@ -11,7 +11,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `seed` | integer, or none | none | A fixed seed for reproducibility; none means a fresh random seed per run. |
 | `derandomize` | boolean | `false` | Use a fixed seed derived from the test name, so every run of a test is the same. |
 | `database` | a path, `disabled`, or `default` | `default` | Where failing examples are stored for replay; `default` is `.hegel/examples` under the working directory. |
-| `suppress_health_check` | list of `filter_too_much`, `too_slow`, `test_cases_too_large`, `large_initial_test_case`, or `all` | none | Health checks that should not fail the run ([`HealthCheck`](crate::HealthCheck)). |
+| `suppress_health_check` | list of `filter_too_much`, `too_slow`, `test_cases_too_large`, `large_initial_test_case`, or `all` | none | Health checks that should not fail the run ([`HealthCheck`](crate::HealthCheck)). Suppressing `test_cases_too_large` also removes the limit of 2^20 choices per test case. |
 | `phases` | list of `explicit`, `reuse`, `generate`, `target`, `shrink` | all five | Which parts of the run happen ([`Phase`](crate::Phase)); leaving out `shrink`, say, reports the first counterexample found. |
 | `report_multiple_failures` | boolean | `false` | Report every distinct failure a run finds rather than collapsing to one. |
 | `show_statistics` | boolean | `false` | Print the end-of-run statistics report for events recorded with [`TestCase::event`](crate::TestCase::event) and [`TestCase::event_value`](crate::TestCase::event_value). |

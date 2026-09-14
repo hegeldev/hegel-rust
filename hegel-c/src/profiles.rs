@@ -83,6 +83,10 @@ pub(crate) struct ProfileDelta {
     pub(crate) show_statistics: Option<bool>,
     pub(crate) print_blob: Option<bool>,
     pub(crate) backend: Option<Backend>,
+    /// Carried by registered snapshots only: `hegel.toml` has no key for
+    /// it, since users lift the choice limit by suppressing
+    /// `TestCasesTooLarge` rather than through a setting of their own.
+    pub(crate) unbounded_choices: Option<bool>,
 }
 
 impl ProfileDelta {
@@ -121,6 +125,9 @@ impl ProfileDelta {
         if let Some(v) = self.backend {
             settings.backend = v;
         }
+        if let Some(v) = self.unbounded_choices {
+            settings.unbounded_choices = v;
+        }
     }
 
     /// A delta that reproduces `settings` exactly when applied over any
@@ -139,6 +146,7 @@ impl ProfileDelta {
             show_statistics: Some(settings.show_statistics),
             print_blob: Some(settings.print_blob),
             backend: Some(settings.backend),
+            unbounded_choices: Some(settings.unbounded_choices),
         }
     }
 }

@@ -1101,6 +1101,34 @@ pub unsafe extern "C" fn hegel_settings_set_show_statistics(
 }
 
 /// Parameters:
+/// `yes`: When `true`, a test case may make any number of choices (draws,
+///   spans, collection and clone steps). By default a test case is
+///   concluded as an overrun once it has made 2^20 choices: the draw that
+///   would exceed the limit returns `HEGEL_E_STOP_TEST`, and the frontend
+///   reports the case with `HEGEL_STATUS_OVERRUN`. Suppressing the
+///   `TestCasesTooLarge` health check (see
+///   `hegel_settings_set_suppress_health_check`) removes the limit too. A
+///   long-running test case — a concurrent state machine driven for hours,
+///   say — needs it removed; the cost is the memory to record every choice
+///   it makes.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_unbounded_choices(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_unbounded_choices") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().unbounded_choices(yes);
+    HEGEL_OK
+}
+
+/// Parameters:
 /// `database`: NULL sets it to the default: `./.hegel/examples/`, including
 ///   resetting a value the handle already carries. `""` disables the
 ///   database entirely. Discovered failures will not be stored. Anything
@@ -1681,6 +1709,33 @@ pub unsafe extern "C" fn hegel_settings_get_show_statistics(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out = handle.inner.show_statistics };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out`: Receives whether test cases may make any number of choices (see
+///   `hegel_settings_set_unbounded_choices`).
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_unbounded_choices(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_unbounded_choices") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    if out.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_settings_get_unbounded_choices: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out = handle.inner.unbounded_choices };
     HEGEL_OK
 }
 

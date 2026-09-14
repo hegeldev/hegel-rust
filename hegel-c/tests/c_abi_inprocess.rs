@@ -10,7 +10,9 @@
 
 mod common;
 
-use common::{last_error, make_settings, next_case, ok, start, start_with_output};
+use common::{
+    last_error, make_settings, make_settings_no_db, next_case, ok, start, start_with_output,
+};
 use hegel_c::hegel_result_t::*;
 use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelCollection, HegelContext, HegelFailure, HegelPool,
@@ -208,6 +210,15 @@ fn null_handles_are_rejected_without_crashing() {
         );
         assert_eq!(
             hegel_c::hegel_settings_set_show_statistics(ctx, ptr::null_mut(), true),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_set_unbounded_choices(ctx, ptr::null_mut(), true),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut unbounded = false;
+        assert_eq!(
+            hegel_c::hegel_settings_get_unbounded_choices(ctx, ptr::null(), &mut unbounded),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -1376,7 +1387,7 @@ fn primitives_after_overrun_all_report_stop_test() {
 
         let mut value = 0i64;
         let mut overran = false;
-        for _ in 0..1_000_000 {
+        for _ in 0..=(1u32 << 20) {
             if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_E_STOP_TEST {
                 overran = true;
                 break;
@@ -2857,6 +2868,70 @@ fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
     }
 }
 
+/// One choice past the buffer: the frontend-visible limit.
+const BUFFER_SIZE_PLUS_ONE: u32 = (1 << 20) + 1;
+
+#[test]
+fn unbounded_choices_lets_a_test_case_outgrow_the_buffer() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_unbounded_choices(ctx, s, true));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        let mut value = false;
+        for _ in 0..BUFFER_SIZE_PLUS_ONE {
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+        }
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        drain_run_valid(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn a_test_case_overruns_one_choice_past_the_buffer() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        let mut value = false;
+        for _ in 0..BUFFER_SIZE_PLUS_ONE - 1 {
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+        }
+        assert_eq!(
+            hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut value),
+            HEGEL_E_STOP_TEST
+        );
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        drain_run_valid(ctx, run);
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 /// Every field of a settings handle read back through the
 /// `hegel_settings_get_*` functions. `database` mirrors the setter
 /// convention: `None` unset, `Some("")` disabled, else the path.
@@ -2872,6 +2947,7 @@ struct SettingsView {
     show_statistics: bool,
     print_blob: bool,
     backend: u32,
+    unbounded_choices: bool,
 }
 
 unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings) -> SettingsView {
@@ -2941,6 +3017,12 @@ unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings
         ));
         let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;
         ok(hegel_c::hegel_settings_get_backend(ctx, s, &mut backend));
+        let mut unbounded_choices = false;
+        ok(hegel_c::hegel_settings_get_unbounded_choices(
+            ctx,
+            s,
+            &mut unbounded_choices,
+        ));
         SettingsView {
             test_cases,
             verbosity: verbosity as u32,
@@ -2953,6 +3035,7 @@ unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings
             show_statistics,
             print_blob,
             backend: backend as u32,
+            unbounded_choices,
         }
     }
 }
@@ -3000,6 +3083,8 @@ fn settings_getters_read_back_every_setter() {
             hegel_backend_t::HEGEL_BACKEND_URANDOM as u32,
         ));
 
+        ok(hegel_c::hegel_settings_set_unbounded_choices(ctx, s, true));
+
         let view = read_settings(ctx, s);
         assert_eq!(view.test_cases, 7);
         assert_eq!(
@@ -3022,9 +3107,34 @@ fn settings_getters_read_back_every_setter() {
         assert!(view.show_statistics);
         assert!(view.print_blob);
         assert_eq!(view.backend, hegel_backend_t::HEGEL_BACKEND_URANDOM as u32);
+        assert!(view.unbounded_choices);
 
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
+    }
+}
+
+/// Pull every remaining case off `run`, completing each as valid after one
+/// draw, so the run can be freed cleanly.
+unsafe fn drain_run_valid(ctx: *mut HegelContext, run: *mut HegelRun) {
+    loop {
+        let tc = unsafe { next_case(ctx, run) };
+        if tc.is_null() {
+            break;
+        }
+        let mut value = false;
+        unsafe {
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
+        }
     }
 }
 
@@ -3363,6 +3473,10 @@ fn settings_getters_reject_null_handles_and_null_outs() {
         );
         assert_eq!(
             hegel_c::hegel_settings_get_print_blob(ctx, s, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_c::hegel_settings_get_unbounded_choices(ctx, s, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         let mut backend = hegel_backend_t::HEGEL_BACKEND_URANDOM;

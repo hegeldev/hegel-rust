@@ -114,3 +114,27 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
     let s = Settings::new().output(Output::callback(|_| {}));
     assert_eq!(format!("{:?}", s.output), "Output(callback)");
 }
+
+#[test]
+fn choice_bound_defaults_to_buffer_size_and_can_be_removed() {
+    let s = Settings::new();
+    assert!(!s.unbounded_choices);
+    assert_eq!(crate::native::core::BUFFER_SIZE, 1 << 20);
+    assert_eq!(s.choice_bound(), crate::native::core::BUFFER_SIZE);
+    let s = s.unbounded_choices(true);
+    assert_eq!(s.choice_bound(), usize::MAX);
+    let s = s.unbounded_choices(false);
+    assert_eq!(s.choice_bound(), crate::native::core::BUFFER_SIZE);
+}
+
+#[test]
+fn suppressing_test_cases_too_large_removes_the_choice_bound() {
+    let s = Settings::new().suppress_health_check([HealthCheck::TestCasesTooLarge]);
+    assert_eq!(s.choice_bound(), usize::MAX);
+    assert_eq!(
+        Settings::base(true).choice_bound(),
+        crate::native::core::BUFFER_SIZE
+    );
+    let s = Settings::new().suppress_health_check([HealthCheck::TooSlow]);
+    assert_eq!(s.choice_bound(), crate::native::core::BUFFER_SIZE);
+}
