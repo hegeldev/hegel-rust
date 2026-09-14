@@ -36,6 +36,7 @@ pub fn expand_test(attr: TokenStream, item: TokenStream) -> TokenStream {
     let test_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
+            profile: None,
             settings_args: Vec::new(),
         }
     } else {

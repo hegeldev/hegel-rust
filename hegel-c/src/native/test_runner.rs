@@ -36,14 +36,17 @@ use crate::native::core::{
     ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
+#[cfg(not(target_family = "wasm"))]
+use crate::native::database::DirectoryTestCaseDatabase;
 use crate::native::database::{
-    DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
-    serialize_nodes,
+    TestCaseDatabase, deserialize_choices, serialize_choices, serialize_nodes,
 };
 use crate::native::exec_cache::{ExecCache, KindLedger};
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
-use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::Database;
+use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -179,6 +182,13 @@ impl<'a> Engine<'a> {
                 }
             }
         };
+
+        if matches!(verbosity, Verbosity::Debug) {
+            match &settings.config_path {
+                Some(path) => output.line(&format!("loaded config: {path}")),
+                None => output.line("no config file loaded"),
+            }
+        }
 
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
         let target_phase = settings.phases.contains(&Phase::Target);
@@ -1026,16 +1036,20 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
+        crate::antithesis::check_environment()?;
+        #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
             Database::Disabled => None,
         };
+        #[cfg(target_family = "wasm")]
+        let db: Option<Box<dyn TestCaseDatabase>> = None;
         Ok(Engine {
             settings,
             database_key,
             exchange,
-            rng: create_rng(settings, database_key)?,
+            rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
             exec_cache: ExecCache::default(),
             kind_ledger: KindLedger::default(),
@@ -1469,24 +1483,20 @@ impl<'a> Engine<'a> {
     }
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineRng, RunError> {
-    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis()?)
-        == Backend::Urandom
-    {
-        return Ok(EngineRng::urandom());
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
+    if settings.backend == Backend::Urandom {
+        return EngineRng::urandom();
     }
     if let Some(seed) = settings.seed {
-        Ok(EngineRng::seeded(seed))
+        EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        Ok(EngineRng::seeded(crate::native::database::fnv1a(
-            key.as_bytes(),
-        )))
+        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
     } else {
-        Ok(EngineRng::from_os())
+        EngineRng::from_os()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/test_runner_tests.rs"]
 mod tests;

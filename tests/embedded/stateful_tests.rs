@@ -14,7 +14,7 @@ type Captured = Arc<Mutex<Vec<String>>>;
 /// [`RunHandle`].
 fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
     let settings = Settings::new().database(None).__max_choices(8192);
-    let c_settings = SettingsHandle::build(&settings, None);
+    let c_settings = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&c_settings, None).unwrap();
     let c_tc = run.next_test_case().unwrap();
     let lines: Captured = Arc::default();

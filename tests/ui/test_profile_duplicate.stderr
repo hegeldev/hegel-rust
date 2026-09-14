@@ -1,0 +1,5 @@
+error: duplicate profile argument
+ --> tests/ui/test_profile_duplicate.rs:3:31
+  |
+3 | #[hegel::test(profile = "ci", profile = "default")]
+  |                               ^^^^^^^

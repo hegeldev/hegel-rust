@@ -127,7 +127,7 @@ fn format_backtrace_short_strips_through_filter() {
 
 #[test]
 fn reproducer_line_none_when_print_blob_disabled() {
-    let settings = Settings::new();
+    let settings = Settings::from_profile("base");
     assert!(!settings.print_blob);
     assert!(reproducer_line(&settings, Some("AAEC")).is_none());
 }
@@ -173,7 +173,7 @@ fn run_one_case(
     Option<String>,
 ) {
     init_panic_hook();
-    let c_settings = SettingsHandle::build(&test_settings(), None);
+    let c_settings = SettingsHandle::build(&test_settings(), None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()

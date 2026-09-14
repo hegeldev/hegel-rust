@@ -322,6 +322,12 @@ impl DataSource for NativeDataSource {
                  got [{min_concurrency}, {max_concurrency}]"
             )));
         }
+        #[cfg(target_family = "wasm")]
+        if max_concurrency > 1 {
+            return Err(DataSourceError::InvalidArgument(
+                "concurrent state machines are not supported in the WebAssembly build".to_string(),
+            ));
+        }
         if step_count < 1 {
             return Err(DataSourceError::InvalidArgument(format!(
                 "state machine step count must be at least 1, got {step_count}"

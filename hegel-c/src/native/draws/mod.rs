@@ -20,28 +20,29 @@ use alloc::vec::Vec;
 
 pub use text::TextAlphabet;
 
-use crate::hegel_label_t;
+use crate::native::labels::label_from_name;
 
-/// Span labels for the engine-side compound draws, derived from the
-/// `hegel_label_t` values exported by the C ABI. Emitted internally so the
-/// shrinker sees each compound string / structured draw as a unit.
-pub(crate) const LABEL_REGEX: u64 = hegel_label_t::HEGEL_LABEL_REGEX as u64;
-pub(crate) const LABEL_EMAIL: u64 = hegel_label_t::HEGEL_LABEL_EMAIL as u64;
-pub(crate) const LABEL_URL: u64 = hegel_label_t::HEGEL_LABEL_URL as u64;
-pub(crate) const LABEL_DOMAIN: u64 = hegel_label_t::HEGEL_LABEL_DOMAIN as u64;
-pub(crate) const LABEL_DATE: u64 = hegel_label_t::HEGEL_LABEL_DATE as u64;
-pub(crate) const LABEL_TIME: u64 = hegel_label_t::HEGEL_LABEL_TIME as u64;
-pub(crate) const LABEL_DATETIME: u64 = hegel_label_t::HEGEL_LABEL_DATETIME as u64;
-pub(crate) const LABEL_UUID: u64 = hegel_label_t::HEGEL_LABEL_UUID as u64;
-pub(crate) const LABEL_IP_ADDRESS: u64 = hegel_label_t::HEGEL_LABEL_IP_ADDRESS as u64;
-pub(crate) const LABEL_INTEGER: u64 = hegel_label_t::HEGEL_LABEL_INTEGER as u64;
-pub(crate) const LABEL_FLOAT: u64 = hegel_label_t::HEGEL_LABEL_FLOAT as u64;
-pub(crate) const LABEL_BOOLEAN: u64 = hegel_label_t::HEGEL_LABEL_BOOLEAN as u64;
-pub(crate) const LABEL_BYTES: u64 = hegel_label_t::HEGEL_LABEL_BYTES as u64;
-pub(crate) const LABEL_STRING: u64 = hegel_label_t::HEGEL_LABEL_STRING as u64;
-pub(crate) const LABEL_FRESH_ID: u64 = hegel_label_t::HEGEL_LABEL_FRESH_ID as u64;
-pub(crate) const LABEL_SET_CHOICE: u64 = hegel_label_t::HEGEL_LABEL_SET_CHOICE as u64;
-pub(crate) const LABEL_CONCURRENCY: u64 = hegel_label_t::HEGEL_LABEL_CONCURRENCY as u64;
+/// Span labels for the engine's own draws. Emitted internally so the
+/// shrinker sees each draw as a unit, and so the mutation machinery can find
+/// same-label spans to duplicate.
+pub(crate) const LABEL_REGEX: u64 = label_from_name("hegel.regex");
+pub(crate) const LABEL_EMAIL: u64 = label_from_name("hegel.email");
+pub(crate) const LABEL_URL: u64 = label_from_name("hegel.url");
+pub(crate) const LABEL_DOMAIN: u64 = label_from_name("hegel.domain");
+pub(crate) const LABEL_DATE: u64 = label_from_name("hegel.date");
+pub(crate) const LABEL_TIME: u64 = label_from_name("hegel.time");
+pub(crate) const LABEL_DATETIME: u64 = label_from_name("hegel.datetime");
+pub(crate) const LABEL_UUID: u64 = label_from_name("hegel.uuid");
+pub(crate) const LABEL_IP_ADDRESS: u64 = label_from_name("hegel.ip_address");
+pub(crate) const LABEL_INTEGER: u64 = label_from_name("hegel.integer");
+pub(crate) const LABEL_FLOAT: u64 = label_from_name("hegel.float");
+pub(crate) const LABEL_BOOLEAN: u64 = label_from_name("hegel.boolean");
+pub(crate) const LABEL_BYTES: u64 = label_from_name("hegel.bytes");
+pub(crate) const LABEL_STRING: u64 = label_from_name("hegel.string");
+pub(crate) const LABEL_FRESH_ID: u64 = label_from_name("hegel.fresh_id");
+pub(crate) const LABEL_SET_CHOICE: u64 = label_from_name("hegel.set_choice");
+pub(crate) const LABEL_CONCURRENCY: u64 = label_from_name("hegel.concurrency");
+pub(crate) const LABEL_FEATURE_FLAG: u64 = label_from_name("hegel.feature_flag");
 
 /// Parameters of a float draw as accepted at the `hegel_generate_float` API
 /// surface. Width-32 handling (bound clamping, result rounding) and the

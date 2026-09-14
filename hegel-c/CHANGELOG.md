@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.41.1 - 2026-09-14
+
+This patch moves the [Antithesis](https://antithesis.com/) integration into libhegel, so every language binding gets it rather than each reimplementing it.
+
+The new `hegel_settings_set_test_location` records where the test under a settings handle lives: its source file and line, the class, module or package enclosing it, and the function name.
+
+```c
+hegel_settings_set_test_location(ctx, settings, "tests/list_tests.c", 42, "list_tests", "reversal_is_involutive");
+```
+
+Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), libhegel then writes the verdict of every run started from those settings, and of every test case replayed from a blob with them, to `sdk.jsonl` in the output directory as an `always` assertion in the format Antithesis's SDKs use — identified as `<class_name>::<function> passes properties` — so the property is listed alongside the assertions in the system under test and flagged when it fails. A run that ends in a run-level error (a failed health check, say) is reported as a failure, since it is no verdict on the property. Outside Antithesis, and for settings without a location, nothing is written. Like the database key, the location is per-test identity rather than a setting, and `hegel_settings_register_profile` does not snapshot it.
+
+## 0.41.0 - 2026-09-11
+
+This release changes the numeric values of `hegel_verbosity_t` so that the default, `HEGEL_VERBOSITY_NORMAL`, is 0. A zero-initialized value now selects the default level
+([#357](https://github.com/hegeldev/hegel-rust/issues/357)):
+
+```c
+/* before */
+HEGEL_VERBOSITY_QUIET = 0, HEGEL_VERBOSITY_NORMAL = 1
+
+/* after */
+HEGEL_VERBOSITY_NORMAL = 0, HEGEL_VERBOSITY_QUIET = 1
+```
+RELEASE_TYPE: patch
+
+This patch fixes an engine panic during shrinking. When the span-reordering pass ran against a test case with several groups of same-label sibling spans, and reordering one group produced an improvement that shortened the recorded span list, the pass went on to index the remaining groups with positions from the old, longer list. The run then aborted with `Engine panic: index out of bounds` instead of reporting the shrunk counterexample (re-running the test recovered via the failure database, but the first run's result was lost). Span groups are now re-validated against the current spans after each improvement, and groups that no longer exist are skipped.
+
+## 0.40.0 - 2026-09-11
+
+This release moves settings defaults into named profiles resolved by the engine, so every language binding shares the same `hegel.toml` configuration and default-profile selection.
+
+Two profile names are reserved. `base` is the immutable base settings. `default` is the default profile, the one in effect when nothing names a profile: the strongest set of `hegel_set_default_profile`, `HEGEL_DEFAULT_PROFILE`, and the `default` entry in `hegel.toml`, else the detected environment (`workload` inside Antithesis, `ci` on CI servers), else `development`. Three ordinary profiles ship with the engine: `development` (empty), `ci` (derandomize, database disabled, `too_slow` health check suppressed, print reproduce blobs), and `workload` (database disabled, every health check suppressed). A custom profile without an explicit `extends` extends `default`, skipping candidates already in its chain, so it layers over the environment's profile. The shipped profiles themselves extend `base` and never layer over one another.
+
+- `hegel_settings_new` now resolves the `default` profile and can fail with `HEGEL_E_INVALID_ARG` when a default-profile setting names an unknown profile or a discovered `hegel.toml` is malformed. Callers must check its return code.
+- `HEGEL_CONFIG` names the `hegel.toml` to load directly, replacing the upward search from the working directory, for test processes that run outside the source tree. A set `HEGEL_CONFIG` that cannot be read is an error. The config is loaded once per process, and under debug verbosity each run logs which config file was loaded.
+- New functions: `hegel_settings_new_for_profile`, `hegel_settings_register_profile`, `hegel_set_default_profile`, `hegel_settings_set_print_blob`, and a `hegel_settings_get_*` getter for every settings field, so frontends can materialize a resolved profile.
+- `hegel_settings_set_database(ctx, settings, NULL)` now resets the database to unset, as its documentation already said, instead of leaving the previous value in place.
+- The default for `report_multiple_failures` is now `false`, matching the Rust frontend's documented default.
+- The shipped `ci` profile sets `print_blob`, so failing runs on CI print a reproduce blob by default.
+- Inside Antithesis, health checks are suppressed by the shipped `workload` profile rather than forced off by detection. A `[profiles.workload]` delta can set `suppress_health_check`, and resolving a profile that does not extend `workload` inside Antithesis runs the health checks.
+
+## 0.39.0 - 2026-09-11
+
+This release removes the `hegel_label_t` enum of predefined span labels from `hegel.h`, and with it the idea that a span label means anything. A label is now an opaque `uint64_t` identifying the generator that opened the span: libhegel treats two spans with the same label as coming from the same generator — candidates for swapping, duplicating and reordering when it shrinks and mutates test cases — and does nothing else with it. This is how Hypothesis has always treated labels, and it means a new kind of generator no longer needs a new ABI constant.
+
+Two functions derive labels, so every binding derives them the same way:
+
+```c
+uint64_t list_kind, element;
+hegel_label_from_name(ctx, "mylib.list", &list_kind);
+hegel_label_from_name(ctx, "mylib.integers", &element);
+uint64_t parts[2] = {list_kind, element};
+uint64_t list_of_integers;
+hegel_label_combine(ctx, parts, 2, &list_of_integers);
+```
+
+`hegel_label_from_name` is the 64-bit FNV-1a hash of the name's bytes, so a binding may equally compute labels ahead of time. `hegel_label_combine` hashes a sequence of labels into one; passing a generator's own label followed by its components' labels gives `lists(integers())` and `lists(text())` different labels while every `lists(integers())` gets the same one, which is what lets the engine tell them apart.
+
+Bindings that passed `HEGEL_LABEL_*` constants to `hegel_start_span` should replace each with a label derived from a name of their own choosing, prefixed with the binding's name to keep clear of libhegel's `hegel.<kind>` names, and should give each generator built from other generators a label combined from its components'. libhegel's own spans around its draws are now labelled the same way, from names such as `hegel.integer` and `hegel.feature_flag`; nothing about them was ever part of the ABI.
+
+## 0.38.1 - 2026-09-11
+
+This patch adds support for building the raw C ABI as `wasm32-unknown-unknown` for host integrations such as browser TypeScript and Swift. The Wasm build uses host-provided entropy and time, disables filesystem failure persistence and concurrent state machines, and is published as module and static archive release assets. The static archive uses stable C hook symbols.
+
 ## 0.38.0 - 2026-09-10
 
 This release makes the stateful step count a per-machine parameter. `hegel_new_state_machine` takes a new `step_count` argument. `hegel_settings_set_stateful_step_count` is removed, and the engine no longer has a default step count. Frontends pass one explicitly (50 is the conventional choice). A `step_count` below 1 is rejected with `HEGEL_E_INVALID_ARG`.

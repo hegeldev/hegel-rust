@@ -11,10 +11,11 @@ missing here compiles fine under `static-engine` and fails only in a
 default-features build. Deriving the list from the engine source closes
 that gap, the same way cbindgen derives `hegel-c/include/hegel.h`.
 
-The signatures are already Rust, so this is text extraction: every
+The signatures are already Rust, so this is text extraction: every native
 `#[unsafe(no_mangle)] pub [unsafe] extern "C" fn hegel_*` at the top level
 of `lib.rs`, with its parameter list and return type collapsed onto one
-line, sorted by name.
+line, sorted by name. Target-only exports are excluded because this list is
+used by the native loader and static engine.
 
 Usage:
     scripts/gen-ffi-list.py           # rewrite src/ffi/sys/fns.rs
@@ -66,6 +67,8 @@ def extract_signatures(source: str) -> list[str]:
     signatures: dict[str, str] = {}
     for m in FN_RE.finditer(source):
         name = m.group("name")
+        if name in {"hegel_alloc", "hegel_dealloc"}:
+            continue
         if not m.group("attr"):
             raise ValueError(f"{name} is `pub extern \"C\"` but not `#[unsafe(no_mangle)]`")
         open_index = m.end() - 1

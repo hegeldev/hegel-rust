@@ -1,10 +1,17 @@
-use super::{Collection, Generator, PrintableGenerator, TestCase, labels};
+use super::{Collection, Generator, PrintableGenerator, TestCase, combine_labels, label_from_name};
 use crate::control::hegel_internal_assert;
 use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
+
+const VEC_LABEL: u64 = label_from_name("hegel.vec");
+const HASH_SET_LABEL: u64 = label_from_name("hegel.hash_set");
+const HASH_MAP_LABEL: u64 = label_from_name("hegel.hash_map");
+const BTREE_SET_LABEL: u64 = label_from_name("hegel.btree_set");
+const BTREE_MAP_LABEL: u64 = label_from_name("hegel.btree_map");
+const ARRAY_LABEL: u64 = label_from_name("hegel.array");
 
 /// Generator for `Vec<T>`. Created by [`vecs()`].
 pub struct VecGenerator<G, T> {
@@ -49,6 +56,7 @@ impl<G, T> VecGenerator<G, T> {
     fn draw_vec(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> Vec<T> {
@@ -57,7 +65,7 @@ impl<G, T> VecGenerator<G, T> {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::LIST);
+        tc.start_span(label);
         printer.begin_group(5, "vec![");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut result = Vec::new();
@@ -88,10 +96,17 @@ impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
 where
     G: Generator<T>,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[VEC_LABEL, self.elements.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
-        self.draw_vec(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
-        })
+        self.draw_vec(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
     }
 }
 
@@ -100,7 +115,7 @@ where
     G: PrintableGenerator<T>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
-        self.draw_vec(tc, printer, |elements, tc, printer| {
+        self.draw_vec(tc, self.label(), printer, |elements, tc, printer| {
             tc.draw_and_print(elements, printer)
         })
     }
@@ -166,6 +181,7 @@ where
     fn draw_set(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> HashSet<T> {
@@ -174,7 +190,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::SET);
+        tc.start_span(label);
         printer.begin_group(15, "HashSet::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
@@ -205,10 +221,17 @@ where
     G: Generator<T>,
     T: Eq + Hash,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[HASH_SET_LABEL, self.elements.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
-        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
-        })
+        self.draw_set(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
     }
 }
 
@@ -218,7 +241,7 @@ where
     T: Eq + Hash,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
-        self.draw_set(tc, printer, |elements, tc, printer| {
+        self.draw_set(tc, self.label(), printer, |elements, tc, printer| {
             tc.draw_and_print(elements, printer)
         })
     }
@@ -265,9 +288,14 @@ where
     V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[HASH_MAP_LABEL, self.keys.label(), self.values.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
         self.draw_map(
             tc,
+            self.label(),
             &mut PrettyPrinter::noop(),
             |keys, tc, _| keys.do_draw(tc),
             |values, tc, _| values.do_draw(tc),
@@ -287,6 +315,7 @@ where
     fn draw_map(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
         draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
@@ -296,7 +325,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::MAP);
+        tc.start_span(label);
         printer.begin_group(15, "HashMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
@@ -338,6 +367,7 @@ where
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashMap<KT, VT> {
         self.draw_map(
             tc,
+            self.label(),
             printer,
             |keys, tc, printer| tc.draw_and_print(keys, printer),
             |values, tc, printer| tc.draw_and_print(values, printer),
@@ -402,6 +432,7 @@ where
     fn draw_set(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> BTreeSet<T> {
@@ -410,7 +441,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::SET);
+        tc.start_span(label);
         printer.begin_group(16, "BTreeSet::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = BTreeSet::new();
@@ -441,10 +472,17 @@ where
     G: Generator<T>,
     T: Ord,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[BTREE_SET_LABEL, self.elements.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
-        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
-        })
+        self.draw_set(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |elements, tc, _| elements.do_draw(tc),
+        )
     }
 }
 
@@ -454,7 +492,7 @@ where
     T: Ord,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeSet<T> {
-        self.draw_set(tc, printer, |elements, tc, printer| {
+        self.draw_set(tc, self.label(), printer, |elements, tc, printer| {
             tc.draw_and_print(elements, printer)
         })
     }
@@ -514,9 +552,14 @@ where
     V: Generator<VT>,
     KT: Ord,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[BTREE_MAP_LABEL, self.keys.label(), self.values.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> BTreeMap<KT, VT> {
         self.draw_map(
             tc,
+            self.label(),
             &mut PrettyPrinter::noop(),
             |keys, tc, _| keys.do_draw(tc),
             |values, tc, _| values.do_draw(tc),
@@ -531,6 +574,7 @@ where
     fn draw_map(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
         draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
@@ -540,7 +584,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::MAP);
+        tc.start_span(label);
         printer.begin_group(16, "BTreeMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = BTreeMap::new();
@@ -582,6 +626,7 @@ where
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeMap<KT, VT> {
         self.draw_map(
             tc,
+            self.label(),
             printer,
             |keys, tc, printer| tc.draw_and_print(keys, printer),
             |values, tc, printer| tc.draw_and_print(values, printer),
@@ -646,10 +691,11 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
     fn draw_array(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> [T; N] {
-        tc.start_span(labels::TUPLE);
+        tc.start_span(label);
         printer.begin_group(1, "[");
         let result = std::array::from_fn(|i| {
             if i > 0 {
@@ -667,10 +713,17 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
 impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
     for ArrayGenerator<G, T, N>
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[ARRAY_LABEL, self.element.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> [T; N] {
-        self.draw_array(tc, &mut PrettyPrinter::noop(), |element, tc, _| {
-            element.do_draw(tc)
-        })
+        self.draw_array(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |element, tc, _| element.do_draw(tc),
+        )
     }
 }
 
@@ -678,7 +731,7 @@ impl<G: PrintableGenerator<T> + Send + Sync, T, const N: usize> PrintableGenerat
     for ArrayGenerator<G, T, N>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> [T; N] {
-        self.draw_array(tc, printer, |element, tc, printer| {
+        self.draw_array(tc, self.label(), printer, |element, tc, printer| {
             tc.draw_and_print(element, printer)
         })
     }

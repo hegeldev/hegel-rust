@@ -129,7 +129,7 @@ fn zero_p_disabled_enables_every_rule() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
+        crate::native::draws::LABEL_FEATURE_FLAG.to_string()
     );
     assert!(!ntc.spans[0usize].discarded);
 }
@@ -607,7 +607,7 @@ fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
     assert_eq!(sm.concurrency(), 4);
     assert_eq!(
         ntc.spans[0usize].label,
-        (crate::hegel_label_t::HEGEL_LABEL_CONCURRENCY as u64).to_string()
+        crate::native::draws::LABEL_CONCURRENCY.to_string()
     );
 }
 
@@ -763,7 +763,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        (crate::hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64).to_string()
+        crate::native::draws::LABEL_FEATURE_FLAG.to_string()
     );
     assert_eq!(ntc.spans[0usize].start, 3);
     assert_eq!(ntc.spans[0usize].end, 3);

@@ -978,6 +978,9 @@ impl TestCase {
         local.span_depth = depth;
     }
 
+    /// Open a span labelled `label` (see
+    /// [`Generator::label`](crate::generators::Generator::label)) grouping
+    /// the draws made until the matching [`stop_span`](Self::stop_span).
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;
@@ -1175,30 +1178,6 @@ impl<'a> Collection<'a> {
         let handle = self.handle.as_ref().unwrap();
         let _ = self.tc.with_ctc(|ctc| ctc.collection_reject(handle, why));
     }
-}
-
-#[doc(hidden)]
-pub mod labels {
-    use crate::ffi::sys::hegel_label_t;
-
-    pub const LIST: u64 = hegel_label_t::HEGEL_LABEL_LIST as u64;
-    pub const LIST_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_LIST_ELEMENT as u64;
-    pub const SET: u64 = hegel_label_t::HEGEL_LABEL_SET as u64;
-    pub const SET_ELEMENT: u64 = hegel_label_t::HEGEL_LABEL_SET_ELEMENT as u64;
-    pub const MAP: u64 = hegel_label_t::HEGEL_LABEL_MAP as u64;
-    pub const MAP_ENTRY: u64 = hegel_label_t::HEGEL_LABEL_MAP_ENTRY as u64;
-    pub const TUPLE: u64 = hegel_label_t::HEGEL_LABEL_TUPLE as u64;
-    pub const ONE_OF: u64 = hegel_label_t::HEGEL_LABEL_ONE_OF as u64;
-    pub const OPTIONAL: u64 = hegel_label_t::HEGEL_LABEL_OPTIONAL as u64;
-    pub const FIXED_DICT: u64 = hegel_label_t::HEGEL_LABEL_FIXED_DICT as u64;
-    pub const FLAT_MAP: u64 = hegel_label_t::HEGEL_LABEL_FLAT_MAP as u64;
-    pub const FILTER: u64 = hegel_label_t::HEGEL_LABEL_FILTER as u64;
-    pub const MAPPED: u64 = hegel_label_t::HEGEL_LABEL_MAPPED as u64;
-    pub const SAMPLED_FROM: u64 = hegel_label_t::HEGEL_LABEL_SAMPLED_FROM as u64;
-    pub const ENUM_VARIANT: u64 = hegel_label_t::HEGEL_LABEL_ENUM_VARIANT as u64;
-    pub const FEATURE_FLAG: u64 = hegel_label_t::HEGEL_LABEL_FEATURE_FLAG as u64;
-    pub const STATEFUL_RULE: u64 = hegel_label_t::HEGEL_LABEL_STATEFUL_RULE as u64;
-    pub const RECURSIVE: u64 = hegel_label_t::HEGEL_LABEL_RECURSIVE as u64;
 }
 
 #[cfg(test)]
