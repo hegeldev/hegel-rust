@@ -312,12 +312,6 @@ fn test_settings_for_single_test_case_suppresses_run_level_health_checks() {
 }
 
 #[test]
-fn test_settings_max_choices_is_unset_until_asked_for() {
-    assert_eq!(Settings::new().max_choices, None);
-    assert_eq!(Settings::new().__max_choices(10).max_choices, Some(10));
-}
-
-#[test]
 fn test_settings_for_single_test_case_keeps_existing_suppressions() {
     let s = Settings::new()
         .suppress_health_check([HealthCheck::TestCasesTooLarge, HealthCheck::FilterTooMuch])

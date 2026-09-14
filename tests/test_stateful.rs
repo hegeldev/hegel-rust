@@ -165,12 +165,7 @@ fn test_pool_add_stops_the_test_case_when_out_of_data() {
                     bundle.add(0u8);
                 }
             })
-            .settings(
-                hegel::Settings::new()
-                    .database(None)
-                    .test_cases(5)
-                    .__max_choices(1000),
-            )
+            .settings(hegel::Settings::new().database(None).test_cases(5))
             .run();
         },
         "LargeInitialTestCase",

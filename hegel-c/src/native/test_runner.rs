@@ -1075,7 +1075,7 @@ impl<'a> Engine<'a> {
         self.persister.db.as_deref()
     }
 
-    /// The run's per-test-case choice bound (see [`Settings::max_choices`]).
+    /// The run's per-test-case choice bound (see [`Settings::unbounded_choices`]).
     pub(crate) fn choice_bound(&self) -> usize {
         self.settings.choice_bound()
     }

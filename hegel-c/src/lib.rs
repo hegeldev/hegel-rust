@@ -1129,35 +1129,6 @@ pub unsafe extern "C" fn hegel_settings_set_unbounded_choices(
     HEGEL_OK
 }
 
-/// Internal, and deliberately absent from `hegel.h`: sets the choice limit
-/// a bounded test case runs under, so Hegel's own test suites can make a
-/// case overrun after a handful of draws instead of 2^20. Not part of the
-/// supported ABI. Returns `HEGEL_E_INVALID_ARG` for a limit of 0.
-///
-/// cbindgen:ignore
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_internal_settings_set_max_choices(
-    ctx: *mut HegelContext,
-    s: *mut HegelSettings,
-    max_choices: u64,
-) -> hegel_result_t {
-    clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_internal_settings_set_max_choices") } {
-        Ok(h) => h,
-        Err(rc) => return rc,
-    };
-    if max_choices == 0 {
-        set_last_error(
-            ctx,
-            "hegel_internal_settings_set_max_choices: max_choices must be at least 1",
-        );
-        return HEGEL_E_INVALID_ARG;
-    }
-    let limit = usize::try_from(max_choices).unwrap_or(usize::MAX);
-    handle.inner = handle.inner.clone().__max_choices(limit);
-    HEGEL_OK
-}
-
 /// Parameters:
 /// `database`: NULL sets it to the default: `./.hegel/examples/`, including
 ///   resetting a value the handle already carries. `""` disables the

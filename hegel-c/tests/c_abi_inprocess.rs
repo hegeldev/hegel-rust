@@ -222,10 +222,6 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_c::hegel_internal_settings_set_max_choices(ctx, ptr::null_mut(), 1),
-            HEGEL_E_INVALID_HANDLE
-        );
-        assert_eq!(
             hegel_c::hegel_settings_set_test_cases(ctx, ptr::null_mut(), 1),
             HEGEL_E_INVALID_HANDLE
         );
@@ -1359,9 +1355,6 @@ fn primitives_after_overrun_all_report_stop_test() {
         let empty = CString::new("").unwrap();
         ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 5));
-        ok(hegel_c::hegel_internal_settings_set_max_choices(
-            ctx, s, 1000,
-        ));
         let run = start(ctx, s);
 
         let tc = next_case(ctx, run);
@@ -1394,7 +1387,7 @@ fn primitives_after_overrun_all_report_stop_test() {
 
         let mut value = 0i64;
         let mut overran = false;
-        for _ in 0..1_000_000 {
+        for _ in 0..=(1u32 << 20) {
             if hegel_generate_integer(ctx, tc, 0, 100, &mut value) == HEGEL_E_STOP_TEST {
                 overran = true;
                 break;
@@ -2875,40 +2868,20 @@ fn concurrent_clone_pools_do_not_trip_nondeterminism_detection() {
     }
 }
 
-#[test]
-fn unbounded_choices_toggle_is_accepted_and_internal_zero_limit_is_rejected() {
-    let ctx = hegel_context_new();
-    unsafe {
-        let s = make_settings(ctx);
-        ok(hegel_c::hegel_settings_set_unbounded_choices(ctx, s, true));
-        ok(hegel_c::hegel_settings_set_unbounded_choices(ctx, s, false));
-        assert_eq!(
-            hegel_c::hegel_internal_settings_set_max_choices(ctx, s, 0),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("at least 1"));
-        ok(hegel_c::hegel_internal_settings_set_max_choices(
-            ctx,
-            s,
-            u64::MAX,
-        ));
-        ok(hegel_settings_free(ctx, s));
-        ok(hegel_context_free(ctx));
-    }
-}
+/// One choice past the buffer: the frontend-visible limit.
+const BUFFER_SIZE_PLUS_ONE: u32 = (1 << 20) + 1;
 
 #[test]
-fn unbounded_choices_lets_a_test_case_pass_an_explicit_limit() {
+fn unbounded_choices_lets_a_test_case_outgrow_the_buffer() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings_no_db(ctx);
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
-        ok(hegel_c::hegel_internal_settings_set_max_choices(ctx, s, 3));
         ok(hegel_c::hegel_settings_set_unbounded_choices(ctx, s, true));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         let mut value = false;
-        for _ in 0..100 {
+        for _ in 0..BUFFER_SIZE_PLUS_ONE {
             ok(hegel_generate_boolean(
                 ctx, tc, 0.5, false, false, &mut value,
             ));
@@ -2928,16 +2901,15 @@ fn unbounded_choices_lets_a_test_case_pass_an_explicit_limit() {
 }
 
 #[test]
-fn max_choices_bounds_a_test_case() {
+fn a_test_case_overruns_one_choice_past_the_buffer() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings_no_db(ctx);
         ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
-        ok(hegel_c::hegel_internal_settings_set_max_choices(ctx, s, 3));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         let mut value = false;
-        for _ in 0..3 {
+        for _ in 0..BUFFER_SIZE_PLUS_ONE - 1 {
             ok(hegel_generate_boolean(
                 ctx, tc, 0.5, false, false, &mut value,
             ));

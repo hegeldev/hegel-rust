@@ -327,8 +327,10 @@ fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
             .settings(
                 Settings::new()
                     .database(None)
-                    .__max_choices(2000)
-                    .suppress_health_check([HealthCheck::LargeInitialTestCase])
+                    .suppress_health_check([
+                        HealthCheck::LargeInitialTestCase,
+                        HealthCheck::TooSlow,
+                    ])
                     .verbosity(Verbosity::Quiet),
             )
             .run();
@@ -892,12 +894,7 @@ fn pool_add_on_an_exhausted_stream_is_an_overrun() {
             };
             machine(m).run_concurrent(tc);
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .__max_choices(1000)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");
@@ -917,12 +914,7 @@ fn creating_a_pool_on_an_exhausted_stream_is_an_overrun() {
             let _: ConcurrentPool<i64> = concurrent_pool(&tc);
             unreachable!("creating a pool on an exhausted stream must overrun");
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .__max_choices(1000)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");
@@ -939,12 +931,7 @@ fn budget_exhaustion_during_machine_creation_is_an_overrun() {
             };
             machine(m).run_concurrent(tc);
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .__max_choices(1000)
-                .verbosity(Verbosity::Quiet),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
     });
     let payload = result.expect_err("the first case overruns, so the health check fires");

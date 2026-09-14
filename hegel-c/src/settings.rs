@@ -175,10 +175,6 @@ pub struct Settings {
     /// Whether test cases may make any number of choices. See
     /// [`Settings::unbounded_choices`].
     pub(crate) unbounded_choices: bool,
-    /// The bound on the number of choices one test case may make while
-    /// bounded: [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE), or the
-    /// smaller value a test set through [`Settings::__max_choices`].
-    pub(crate) max_choices: usize,
 }
 
 impl Settings {
@@ -215,7 +211,6 @@ impl Settings {
             backend: Backend::Default,
             config_path: None,
             unbounded_choices: false,
-            max_choices: crate::native::core::BUFFER_SIZE,
         }
     }
 
@@ -236,24 +231,15 @@ impl Settings {
         self
     }
 
-    /// Set the choice limit a bounded test case runs under. Internal: the
-    /// test suites use a small limit so a case that draws until it overruns
-    /// finishes quickly. Users get [`Settings::unbounded_choices`].
-    #[doc(hidden)]
-    pub fn __max_choices(mut self, max_choices: usize) -> Self {
-        self.max_choices = max_choices;
-        self
-    }
-
     /// The effective per-test-case choice bound: `usize::MAX` when
     /// [`Settings::unbounded_choices`] is set or
-    /// [`HealthCheck::TestCasesTooLarge`] is suppressed, and the configured
-    /// limit otherwise.
+    /// [`HealthCheck::TestCasesTooLarge`] is suppressed, and
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) otherwise.
     pub(crate) fn choice_bound(&self) -> usize {
         if self.unbounded_choices || self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
             usize::MAX
         } else {
-            self.max_choices
+            crate::native::core::BUFFER_SIZE
         }
     }
 

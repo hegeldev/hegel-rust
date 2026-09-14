@@ -182,13 +182,6 @@ impl SettingsHandle {
                     raw,
                     settings.show_statistics,
                 ));
-                if let Some(max_choices) = settings.max_choices {
-                    require_ok(hegel_c::hegel_internal_settings_set_max_choices(
-                        ctx,
-                        raw,
-                        max_choices,
-                    ));
-                }
                 match &settings.database {
                     Database::Disabled => {
                         let empty = CString::new("").unwrap();
@@ -377,7 +370,6 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
         show_statistics,
         print_blob,
         backend: backend_from_c(backend),
-        max_choices: None,
     }
 }
 
