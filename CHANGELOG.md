@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.44.2 - 2026-09-14
+
+This patch moves the [Antithesis](https://antithesis.com/) integration into the engine: the test's location is now passed to libhegel, which writes the verdict to `sdk.jsonl` itself when running inside Antithesis. Nothing changes in what is reported.
+
+With no JSON left to write in the frontend, `serde_json` is now only a dependency when the `serde_json` feature is enabled, instead of always.
+
+## 0.44.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.41.0.
+
+## 0.44.0 - 2026-09-11
+
+This release adds named settings profiles. Three ship with Hegel: `development` (what local runs get), `ci` (selected automatically on CI servers), and `workload` (selected automatically inside Antithesis). Modify a shipped profile or define your own in a `hegel.toml` at your package or workspace root:
+
+```toml
+default = "nightly"   # optional: the default profile for this project
+
+[profiles.ci]
+test_cases = 1000
+
+[profiles.nightly]
+test_cases = 10000
+```
+
+A profile layers over whichever profile the environment selects, so on CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` → `development`. To opt out, pin a parent with `extends`, where `extends = "base"` means the plain base settings. The shipped profiles are siblings rooted in the base settings, so a delta meant for every environment goes in a profile of its own that the others name with `extends`. Select a profile with `#[hegel::test(profile = "nightly")]` or `Settings::from_profile`, and set the suite-wide default — the reserved `default` profile — with the `default` entry in `hegel.toml`, the `HEGEL_DEFAULT_PROFILE` environment variable, or the new `--profile` flag on a `#[hegel::main]` binary. Profiles can also be registered programmatically with `Settings::register_profile`, and the default set with `Settings::set_default_profile`.
+
+The `hegel.toml` is found by searching upward from the test process's working directory; when tests run outside the source tree, set `HEGEL_CONFIG` to the file's path instead, and under debug verbosity each run logs which config file it loaded. The new `hegel::docs::settings` page in the crate documentation covers the whole settings system: every setting, where each can be set, how the layers combine, and profile resolution in full.
+
+Inside Antithesis, the `urandom` backend and health-check suppression are now selected by the shipped `workload` profile rather than forced by detection, so they can be changed under `[profiles.workload]`, and a test that selects a profile not extending `workload` runs the health checks on the default backend. The `backend` setting is therefore a plain choice between `default` and `urandom`: the automatic option is gone, `Settings::new()` reports `Backend::Default` outside Antithesis, and the C ABI's `HEGEL_BACKEND_AUTO` has been removed from `hegel_backend_t` (`hegel_settings_set_backend` rejects its old value, 0, as an invalid argument; `HEGEL_BACKEND_DEFAULT` and `HEGEL_BACKEND_URANDOM` keep their values).
+
+This changes one default: failing tests on CI now print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. The failure database is disabled on CI, so the printed blob is the only way to reproduce a CI failure locally. To restore the old behavior, set `print_blob = false` under `[profiles.ci]` in `hegel.toml`.
+
+## 0.43.1 - 2026-09-11
+
+This patch adds `Generator::label`, a provided method giving every generator a label of its own, and the functions `generators::label_from_name` and `generators::combine_labels` for deriving one. A label is an opaque `u64` identifying a generator to the engine, which treats two spans with the same label as coming from the same generator when it shrinks and mutates test cases; it has no other meaning. The default label is derived from the generator's type name, so hand-written generators get a stable label with no extra work; generators built from others should combine a label of their own with their components':
+
+```rust
+use hegel::generators::{self as gs, Generator};
+
+impl<T, G: Generator<T>> Generator<(T, T)> for Pairs<G> {
+    fn label(&self) -> u64 {
+        gs::combine_labels(&[gs::label_from_name("mycrate.pairs"), self.inner.label()])
+    }
+
+    fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
+        (self.inner.do_draw(tc), self.inner.do_draw(tc))
+    }
+}
+```
+
+Previously every collection shared one label, every `map` another and so on, regardless of what they contained. The built-in combinators, `#[derive(DefaultGenerator)]` and `#[composite]` now label their spans this way, so `vecs(integers())` and `vecs(text())` have different labels, which should let the engine's span-swapping shrink passes and mutations line up spans that actually correspond. The hidden `generators::labels` constants and `generators::fnv1a_hash` are gone; the engine's `hegel_label_t` enum they mirrored no longer exists.
+
+## 0.43.0 - 2026-09-11
+
+This release deprecates the `exclude_min(bool)` and `exclude_max(bool)` builder methods on `gs::floats()` in favour of `min_value_exclusive` and `max_value_exclusive`, which take the bound directly:
+
+```rust
+// before
+gs::floats::<f64>().min_value(0.0).exclude_min(true).max_value(1.0).exclude_max(true)
+
+// after
+gs::floats::<f64>().min_value_exclusive(0.0).max_value_exclusive(1.0)
+```
+
+`min_value` and `min_value_exclusive` set the same bound, so whichever is called last wins (likewise for `max_value` / `max_value_exclusive`). An exclusive bound can no longer be set without a bound value, so that `InvalidArgument` no longer exists; the remaining validation (an exclusive `+inf` minimum, an exclusive `-inf` maximum, or exclusive bounds on a single-point range) is unchanged.
+
+`exclude_min` and `exclude_max` remain as deprecated methods so existing call sites get a deprecation warning naming the replacement, but calling either now panics immediately rather than configuring the generator.
+
 ## 0.42.1 - 2026-09-11
 
 This release updates the `hegeltest-c` dependency to 0.38.1.

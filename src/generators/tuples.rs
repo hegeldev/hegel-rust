@@ -1,6 +1,10 @@
-use super::{DefaultGenerator, Generator, PrintableGenerator, TestCase, labels};
+use super::{
+    DefaultGenerator, Generator, PrintableGenerator, TestCase, combine_labels, label_from_name,
+};
 use crate::pretty::PrettyPrinter;
 use std::marker::PhantomData;
+
+const TUPLE_LABEL: u64 = label_from_name("hegel.tuple");
 
 /// Creates a tuple generator from 0–12 component generators.
 ///
@@ -91,8 +95,12 @@ macro_rules! impl_tuple {
         where
             $($G: Generator<$T>,)+
         {
+            fn label(&self) -> u64 {
+                combine_labels(&[TUPLE_LABEL, $(self.$field.label(),)+])
+            }
+
             fn do_draw(&self, tc: &TestCase) -> ($($T,)+) {
-                tc.start_span(labels::TUPLE);
+                tc.start_span(self.label());
                 let result = ($(self.$field.do_draw(tc),)+);
                 tc.stop_span(false);
                 result
@@ -108,7 +116,7 @@ macro_rules! impl_tuple {
                 tc: &TestCase,
                 printer: &mut PrettyPrinter,
             ) -> ($($T,)+) {
-                tc.start_span(labels::TUPLE);
+                tc.start_span(self.label());
                 printer.begin_group(1, "(");
                 let mut index = 0usize;
                 let result = ($(

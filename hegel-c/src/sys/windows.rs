@@ -12,10 +12,11 @@ use windows_sys::Win32::Foundation::{
     SetLastError,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_ATTRIBUTE_NORMAL,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FindClose, FindFirstFileW, FindNextFileW,
-    GetFileAttributesW, INVALID_FILE_ATTRIBUTES, MOVEFILE_REPLACE_EXISTING, MoveFileExW,
-    OPEN_EXISTING, ReadFile, RemoveDirectoryW, WIN32_FIND_DATAW, WriteFile,
+    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_APPEND_DATA,
+    FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FindClose,
+    FindFirstFileW, FindNextFileW, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    MOVEFILE_REPLACE_EXISTING, MoveFileExW, OPEN_ALWAYS, OPEN_EXISTING, ReadFile, RemoveDirectoryW,
+    WIN32_FIND_DATAW, WriteFile,
 };
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
 
@@ -123,6 +124,17 @@ pub(super) fn read(path: &str) -> Result<Vec<u8>, Error> {
 /// Create (or truncate) the file at `path` and write `data` to it.
 pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
     let handle = open(path, GENERIC_WRITE, 0, CREATE_ALWAYS)?;
+    write_to(&handle, data)
+}
+
+/// Append `data` to the file at `path`, creating it if it does not exist.
+pub(super) fn append(path: &str, data: &[u8]) -> Result<(), Error> {
+    let handle = open(path, FILE_APPEND_DATA, FILE_SHARE_READ, OPEN_ALWAYS)?;
+    write_to(&handle, data)
+}
+
+/// Write all of `data` to the open file `handle`.
+fn write_to(handle: &OwnedHandle, data: &[u8]) -> Result<(), Error> {
     let mut remaining = data;
     while !remaining.is_empty() {
         let mut n: u32 = 0;
@@ -287,6 +299,28 @@ pub(super) fn env_var(name: &str) -> Option<String> {
 pub(super) fn pid() -> u32 {
     // SAFETY: no preconditions.
     unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() }
+}
+
+/// The current working directory, decoded lossily. `None` if the OS cannot
+/// report one.
+pub(super) fn cwd() -> Option<String> {
+    let mut buf = vec![0u16; 256];
+    loop {
+        // SAFETY: `buf` is valid for writes of its length.
+        let n = unsafe {
+            windows_sys::Win32::System::Environment::GetCurrentDirectoryW(
+                buf.len() as u32,
+                buf.as_mut_ptr(),
+            )
+        };
+        if n == 0 {
+            return None;
+        }
+        if (n as usize) < buf.len() {
+            return Some(String::from_utf16_lossy(&buf[..n as usize]));
+        }
+        buf.resize(n as usize, 0);
+    }
 }
 
 /// Block until [`unpark`] is called on `word`, returning immediately (and

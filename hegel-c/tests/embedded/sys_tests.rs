@@ -21,6 +21,24 @@ fn fs_write_truncates_an_existing_file() {
 }
 
 #[test]
+fn fs_append_creates_then_extends_a_file() {
+    let dir = TempDir::new().unwrap();
+    let path = temp_path(&dir, "file");
+    fs::append(&path, b"first line\n").unwrap();
+    fs::append(&path, b"second line\n").unwrap();
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        b"first line\nsecond line\n".to_vec()
+    );
+}
+
+#[test]
+fn fs_append_into_missing_directory_fails() {
+    let dir = TempDir::new().unwrap();
+    assert!(fs::append(&temp_path(&dir, "missing/file"), b"data").is_err());
+}
+
+#[test]
 fn fs_read_of_missing_file_fails() {
     let dir = TempDir::new().unwrap();
     assert!(fs::read(&temp_path(&dir, "missing")).is_err());
@@ -347,4 +365,11 @@ fn stderr_line_is_best_effort() {
 fn pid_is_nonzero_and_stable() {
     assert_ne!(pid(), 0);
     assert_eq!(pid(), pid());
+}
+
+#[test]
+fn cwd_reports_an_absolute_directory() {
+    let dir = cwd().unwrap();
+    assert!(!dir.is_empty());
+    assert!(fs::exists(&dir));
 }

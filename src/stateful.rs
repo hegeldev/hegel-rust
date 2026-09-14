@@ -147,13 +147,18 @@ use crate::control::{
     raise_control, with_test_context,
 };
 use crate::ffi::{PoolHandle, StateMachineHandle};
-use crate::generators::Generator;
+use crate::generators::{Generator, label_from_name};
 use crate::run_lifecycle::{self, PanicInfo};
-use crate::test_case::{labels, raise_for_rc};
+use crate::test_case::raise_for_rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Mutex, mpsc};
+
+/// The label of the span around each round of rule invocations, grouping
+/// every draw the round makes so the shrinker can delete a whole step at
+/// once.
+const RULE_LABEL: u64 = label_from_name("hegel.stateful.rule");
 
 /// The concurrency group a `#[rule]` without a `group = "..."` argument is
 /// assigned to. All unannotated rules share this one group, so a machine
@@ -847,7 +852,7 @@ fn run_sequential<M: StateMachine>(mut m: M, tc: TestCase, step_count: i64) {
     let mut steps_attempted: i64 = 0;
 
     loop {
-        tc.start_span(labels::STATEFUL_RULE);
+        tc.start_span(RULE_LABEL);
         if machine_next_group(&tc, &machine).is_none() {
             tc.stop_span(false);
             break;

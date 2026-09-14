@@ -50,8 +50,12 @@ fn test_do_draw_wraps_body_call_in_span() {
             tc.draw(gs::just(BinTree::Leaf()))
         }
     });
-    assert_contains_tokens(&out, quote! { tc.start_span(__HEGEL_COMPOSITE_LABEL) });
+    assert_contains_tokens(&out, quote! { tc.start_span(self.label()) });
     assert_contains_tokens(&out, quote! { tc.stop_span(false) });
+    assert_contains_tokens(
+        &out,
+        quote! { ::hegel::generators::label_from_name("{ tc . draw (gs :: just (BinTree :: Leaf ())) }") },
+    );
     let start = out.find("start_span").unwrap();
     let call = out.find("Self :: __hegel_body").unwrap();
     let stop = out.find("stop_span").unwrap();

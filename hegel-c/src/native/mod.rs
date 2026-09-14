@@ -12,6 +12,7 @@ pub(crate) mod events;
 pub(crate) mod exec_cache;
 pub mod floats;
 pub mod intervalsets;
+pub mod labels;
 pub mod printer;
 pub mod re;
 pub mod rng;

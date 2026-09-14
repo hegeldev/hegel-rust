@@ -216,6 +216,7 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
         exchange,
         current_family: None,
         result: None,
+        reporter: None,
     }));
 
     unsafe {
@@ -302,6 +303,7 @@ fn internal_run_error_surfaces_through_run_result_error() {
         exchange,
         current_family: None,
         result: None,
+        reporter: None,
     }));
 
     unsafe {
