@@ -1016,31 +1016,59 @@ pub unsafe extern "C" fn hegel_settings_set_show_statistics(
 }
 
 /// Parameters:
-/// `max_choices`: The maximum number of choices (draws, spans, collection
-///   and clone steps) one test case may make before it is concluded as an
-///   overrun: the draw that would exceed the bound returns
-///   `HEGEL_E_STOP_TEST`, and the frontend reports the case with
-///   `HEGEL_STATUS_OVERRUN`. Defaults to 2^20. 0 removes the limit, as
-///   does suppressing the `TestCasesTooLarge` health check (see
-///   `hegel_settings_set_suppress_health_check`): test cases are then
-///   unbounded, which a long-running test case — a concurrent state
-///   machine driven for hours, say — needs; the cost is the memory to
-///   record every choice it makes.
+/// `yes`: When `true`, a test case may make any number of choices (draws,
+///   spans, collection and clone steps). By default a test case is
+///   concluded as an overrun once it has made 2^20 choices: the draw that
+///   would exceed the limit returns `HEGEL_E_STOP_TEST`, and the frontend
+///   reports the case with `HEGEL_STATUS_OVERRUN`. Suppressing the
+///   `TestCasesTooLarge` health check (see
+///   `hegel_settings_set_suppress_health_check`) removes the limit too. A
+///   long-running test case — a concurrent state machine driven for hours,
+///   say — needs it removed; the cost is the memory to record every choice
+///   it makes.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_settings_set_max_choices(
+pub unsafe extern "C" fn hegel_settings_set_unbounded_choices(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    yes: bool,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_unbounded_choices") } {
+        Ok(h) => h,
+        Err(rc) => return rc,
+    };
+    handle.inner = handle.inner.clone().unbounded_choices(yes);
+    HEGEL_OK
+}
+
+/// Internal, and deliberately absent from `hegel.h`: sets the choice limit
+/// a bounded test case runs under, so Hegel's own test suites can make a
+/// case overrun after a handful of draws instead of 2^20. Not part of the
+/// supported ABI. Returns `HEGEL_E_INVALID_ARG` for a limit of 0.
+///
+/// cbindgen:ignore
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_internal_settings_set_max_choices(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
     max_choices: u64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_max_choices") } {
+    let handle = match unsafe { settings_mut(ctx, s, "hegel_internal_settings_set_max_choices") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
+    if max_choices == 0 {
+        set_last_error(
+            ctx,
+            "hegel_internal_settings_set_max_choices: max_choices must be at least 1",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
     let limit = usize::try_from(max_choices).unwrap_or(usize::MAX);
-    handle.inner = handle.inner.clone().max_choices(limit);
+    handle.inner = handle.inner.clone().__max_choices(limit);
     HEGEL_OK
 }
 

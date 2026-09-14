@@ -32,6 +32,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_generate_string_result_free(ctx: *mut HegelContext, result: *mut hegel_generate_string_result_t) -> hegel_result_t;
             fn hegel_generate_time(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_value: hegel_time_t, max_value: hegel_time_t, out_value: *mut hegel_time_t) -> hegel_result_t;
             fn hegel_generate_uuid(ctx: *mut HegelContext, tc: *mut HegelTestCase, version: u8, has_version: bool, out_bytes: *mut u8) -> hegel_result_t;
+            fn hegel_internal_settings_set_max_choices(ctx: *mut HegelContext, s: *mut HegelSettings, max_choices: u64) -> hegel_result_t;
             fn hegel_mark_complete(ctx: *mut HegelContext, tc: *mut HegelTestCase, status: u32, origin: *const c_char) -> hegel_result_t;
             fn hegel_new_collection(ctx: *mut HegelContext, tc: *mut HegelTestCase, min_size: u64, max_size: u64, out_collection: *mut *mut HegelCollection) -> hegel_result_t;
             fn hegel_new_pool(ctx: *mut HegelContext, tc: *mut HegelTestCase, out_pool: *mut *mut HegelPool) -> hegel_result_t;
@@ -82,13 +83,13 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_database(ctx: *mut HegelContext, s: *mut HegelSettings, database: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_database_key(ctx: *mut HegelContext, s: *mut HegelSettings, key: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_derandomize(ctx: *mut HegelContext, s: *mut HegelSettings, derandomize: bool) -> hegel_result_t;
-            fn hegel_settings_set_max_choices(ctx: *mut HegelContext, s: *mut HegelSettings, max_choices: u64) -> hegel_result_t;
             fn hegel_settings_set_phases(ctx: *mut HegelContext, s: *mut HegelSettings, phases: u32) -> hegel_result_t;
             fn hegel_settings_set_report_multiple_failures(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_seed(ctx: *mut HegelContext, s: *mut HegelSettings, seed: u64, has_seed: bool) -> hegel_result_t;
             fn hegel_settings_set_show_statistics(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_suppress_health_check(ctx: *mut HegelContext, s: *mut HegelSettings, checks: u32) -> hegel_result_t;
             fn hegel_settings_set_test_cases(ctx: *mut HegelContext, s: *mut HegelSettings, n: u64) -> hegel_result_t;
+            fn hegel_settings_set_unbounded_choices(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_verbosity(ctx: *mut HegelContext, s: *mut HegelSettings, v: u32) -> hegel_result_t;
             fn hegel_start_span(ctx: *mut HegelContext, tc: *mut HegelTestCase, label: u64) -> hegel_result_t;
             fn hegel_state_machine_free(ctx: *mut HegelContext, state_machine: *mut HegelStateMachine) -> hegel_result_t;

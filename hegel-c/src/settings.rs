@@ -14,7 +14,8 @@ pub enum HealthCheck {
     /// Test execution is too slow.
     TooSlow,
     /// Generated test cases are too large. Suppressing this check also
-    /// removes the per-test-case choice limit (see [`Settings::max_choices`]).
+    /// removes the per-test-case choice limit (see
+    /// [`Settings::unbounded_choices`]).
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -163,8 +164,12 @@ pub struct Settings {
     /// (urandom under Antithesis, the default PRNG otherwise). An explicit
     /// [`Settings::backend`] always wins over the automatic choice.
     pub(crate) backend: Option<Backend>,
-    /// Upper bound on the number of choices one test case may make, or 0
-    /// for no bound. See [`Settings::max_choices`].
+    /// Whether test cases may make any number of choices. See
+    /// [`Settings::unbounded_choices`].
+    pub(crate) unbounded_choices: bool,
+    /// The bound on the number of choices one test case may make while
+    /// bounded: [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE), or the
+    /// smaller value a test set through [`Settings::__max_choices`].
     pub(crate) max_choices: usize,
 }
 
@@ -204,38 +209,46 @@ impl Settings {
             report_multiple_failures: true,
             show_statistics: false,
             backend: None,
+            unbounded_choices: false,
             max_choices: crate::native::core::BUFFER_SIZE,
         }
     }
 
-    /// Set the maximum number of choices a single test case may make, or 0
-    /// for no limit. Defaults to
-    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20).
+    /// Remove the limit on the number of choices a single test case may
+    /// make. By default a test case may make
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20) choices.
     ///
     /// A test case that reaches the limit is concluded as an overrun: the
     /// draw that would exceed it fails, the case is discarded, and enough
     /// overruns trip the [`HealthCheck::TestCasesTooLarge`] and
-    /// [`HealthCheck::LargeInitialTestCase`] health checks. The limit is
-    /// therefore tied to `TestCasesTooLarge`: suppressing that check removes
-    /// the limit whatever this is set to, letting a long-running test case —
-    /// a concurrent state machine exercised for hours, say — keep drawing
-    /// indefinitely, at the cost of the memory to record every choice it
-    /// makes.
-    pub fn max_choices(mut self, max_choices: usize) -> Self {
+    /// [`HealthCheck::LargeInitialTestCase`] health checks. Suppressing
+    /// `TestCasesTooLarge` removes the limit too. Either way a long-running
+    /// test case — a concurrent state machine exercised for hours, say — can
+    /// keep drawing indefinitely, at the cost of the memory to record every
+    /// choice it makes.
+    pub fn unbounded_choices(mut self, unbounded: bool) -> Self {
+        self.unbounded_choices = unbounded;
+        self
+    }
+
+    /// Set the choice limit a bounded test case runs under. Internal: the
+    /// test suites use a small limit so a case that draws until it overruns
+    /// finishes quickly. Users get [`Settings::unbounded_choices`].
+    #[doc(hidden)]
+    pub fn __max_choices(mut self, max_choices: usize) -> Self {
         self.max_choices = max_choices;
         self
     }
 
     /// The effective per-test-case choice bound: `usize::MAX` when
-    /// [`HealthCheck::TestCasesTooLarge`] is suppressed or
-    /// [`Settings::max_choices`] is 0, and `max_choices` otherwise.
+    /// [`Settings::unbounded_choices`] is set or
+    /// [`HealthCheck::TestCasesTooLarge`] is suppressed, and the configured
+    /// limit otherwise.
     pub(crate) fn choice_bound(&self) -> usize {
-        if self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
-            return usize::MAX;
-        }
-        match self.max_choices {
-            0 => usize::MAX,
-            n => n,
+        if self.unbounded_choices || self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
+            usize::MAX
+        } else {
+            self.max_choices
         }
     }
 

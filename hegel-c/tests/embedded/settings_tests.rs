@@ -143,28 +143,30 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
 }
 
 #[test]
-fn max_choices_defaults_to_buffer_size_and_can_be_removed() {
+fn choice_bound_defaults_to_buffer_size_and_can_be_removed() {
     let s = Settings::new();
+    assert!(!s.unbounded_choices);
     assert_eq!(s.max_choices, crate::native::core::BUFFER_SIZE);
     assert_eq!(crate::native::core::BUFFER_SIZE, 1 << 20);
     assert_eq!(s.choice_bound(), crate::native::core::BUFFER_SIZE);
-    let s = s.max_choices(7);
+    let s = s.__max_choices(7);
     assert_eq!(s.choice_bound(), 7);
-    let s = s.max_choices(0);
-    assert_eq!(s.max_choices, 0);
+    let s = s.unbounded_choices(true);
     assert_eq!(s.choice_bound(), usize::MAX);
+    let s = s.unbounded_choices(false);
+    assert_eq!(s.choice_bound(), 7);
 }
 
 #[test]
 fn suppressing_test_cases_too_large_removes_the_choice_bound() {
     let s = Settings::new()
-        .max_choices(7)
+        .__max_choices(7)
         .suppress_health_check([HealthCheck::TestCasesTooLarge]);
     assert_eq!(s.choice_bound(), usize::MAX);
-    let s = Settings::for_env(false, true).max_choices(7);
+    let s = Settings::for_env(false, true).__max_choices(7);
     assert_eq!(s.choice_bound(), usize::MAX);
     let s = Settings::new()
-        .max_choices(7)
+        .__max_choices(7)
         .suppress_health_check([HealthCheck::TooSlow]);
     assert_eq!(s.choice_bound(), 7);
 }

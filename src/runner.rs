@@ -205,9 +205,9 @@ impl Settings {
         self
     }
 
-    /// Set an explicit per-test-case choice limit. Internal: the test suite
-    /// uses a small limit so a case that draws until it overruns finishes
-    /// quickly. Users lift the limit by suppressing
+    /// Set the choice limit a bounded test case runs under. Internal: the
+    /// test suite uses a small limit so a case that draws until it overruns
+    /// finishes quickly. Users lift the limit by suppressing
     /// [`HealthCheck::TestCasesTooLarge`].
     #[doc(hidden)]
     pub fn __max_choices(mut self, max_choices: u64) -> Self {
