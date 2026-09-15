@@ -61,6 +61,7 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
         vec![0],
+        vec![1.0],
         alloc::vec::Vec::new(),
         alloc::vec::Vec::new(),
         2,

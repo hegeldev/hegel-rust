@@ -1,0 +1,5 @@
+error: unsupported #[rule] argument
+ --> tests/ui/state_machine_bad_rule_arg.rs:8:12
+  |
+8 |     #[rule(group = "rw")]
+  |            ^^^^^

@@ -250,6 +250,7 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
             tc,
             rules.as_ptr(),
             rule_groups.as_ptr(),
+            ptr::null(),
             1,
             ptr::null(),
             ptr::null(),

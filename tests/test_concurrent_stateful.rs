@@ -1019,3 +1019,101 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
          report: {lines:?}"
     );
 }
+
+struct WeightedGroups {
+    log: Mutex<Vec<&'static str>>,
+}
+
+#[hegel::concurrent_state_machine]
+impl WeightedGroups {
+    #[rule(group = "letters", weight = 2.5)]
+    fn alpha(&self, _: TestCase) {
+        self.log.lock().unwrap().push("alpha");
+    }
+
+    #[rule(weight = 4, group = "letters")]
+    fn beta(&self, _: TestCase) {
+        self.log.lock().unwrap().push("beta");
+    }
+
+    #[rule(weight = 0.5)]
+    fn anonymous(&self, _: TestCase) {
+        self.log.lock().unwrap().push("anonymous");
+    }
+
+    #[rule(group = "numbers")]
+    fn one(&self, _: TestCase) {
+        self.log.lock().unwrap().push("one");
+    }
+}
+
+#[test]
+fn concurrent_rule_weight_argument_sets_the_rule_weight() {
+    use hegel::stateful::{ANONYMOUS_GROUP, ConcurrentStateMachine};
+    let m = WeightedGroups {
+        log: Mutex::new(Vec::new()),
+    };
+    let rules = m.rules();
+    let rules: Vec<(&str, &str, f64)> = rules
+        .iter()
+        .map(|r| (r.name.as_str(), r.group.as_str(), r.weight))
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            ("alpha", "letters", 2.5),
+            ("beta", "letters", 4.0),
+            ("anonymous", ANONYMOUS_GROUP, 0.5),
+            ("one", "numbers", 1.0),
+        ]
+    );
+}
+
+#[hegel::test]
+fn test_weighted_grouped_machine_passes(tc: TestCase) {
+    let m = WeightedGroups {
+        log: Mutex::new(Vec::new()),
+    };
+    machine(m).max_concurrency(3).run_concurrent(tc);
+}
+
+#[test]
+fn concurrent_rule_new_takes_the_weight() {
+    use hegel::stateful::ConcurrentRule;
+    let rule = ConcurrentRule::new("hit", "g", 3.0, |_m: &Counter, _tc| {});
+    assert_eq!(rule.weight, 3.0);
+    assert_eq!(rule.group, "g");
+    assert_eq!(rule.name, "hit");
+}
+
+struct BadConcurrentWeight;
+
+impl hegel::stateful::ConcurrentStateMachine for BadConcurrentWeight {
+    fn rules(&self) -> Vec<hegel::stateful::ConcurrentRule<Self>> {
+        vec![hegel::stateful::ConcurrentRule::new(
+            "bad",
+            "g",
+            0.0,
+            |_m: &Self, _tc| {},
+        )]
+    }
+    fn invariants(&self) -> Vec<hegel::stateful::ConcurrentInvariant<Self>> {
+        vec![]
+    }
+}
+
+#[test]
+fn a_non_positive_concurrent_rule_weight_is_a_usage_error() {
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            machine(BadConcurrentWeight).run_concurrent(tc);
+        })
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+        .run();
+    });
+    let payload = result.expect_err("a zero rule weight cannot run");
+    assert_matches_regex(
+        &panic_message(&payload),
+        "rule weights must be finite and positive, but rule 0 \\(bad\\) has weight 0",
+    );
+}

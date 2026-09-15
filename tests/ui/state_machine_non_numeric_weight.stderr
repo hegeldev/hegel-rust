@@ -1,0 +1,5 @@
+error: #[rule] weight must be a number literal, like `weight = 2.0`
+ --> tests/ui/state_machine_non_numeric_weight.rs:7:21
+  |
+7 |     #[rule(weight = "heavy")]
+  |                     ^^^^^^^

@@ -334,8 +334,8 @@ mod stateful {
     impl StateMachine for BumpMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![
-                Rule::new("bump", |m: &mut BumpMachine, _tc| m.count += 1),
-                Rule::new("noop", |_m: &mut BumpMachine, _tc| {}),
+                Rule::new("bump", 1.0, |m: &mut BumpMachine, _tc| m.count += 1),
+                Rule::new("noop", 1.0, |_m: &mut BumpMachine, _tc| {}),
             ]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
@@ -518,6 +518,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "do_something",
+                1.0,
                 |m: &mut CountStepsMachine, _tc: TestCase| {
                     *m.count.lock().unwrap() += 1;
                 },
@@ -537,6 +538,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "count_rule",
+                1.0,
                 |m: &mut SampledInvariantMachine, _tc: TestCase| {
                     *m.rules_run.lock().unwrap() += 1;
                 },
@@ -649,6 +651,7 @@ mod stateful {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![Rule::new(
                 "count_rule",
+                1.0,
                 |m: &mut MixedInvariantMachine, _tc: TestCase| {
                     *m.rules_run.lock().unwrap() += 1;
                 },
@@ -866,9 +869,9 @@ mod stateful {
     impl StateMachine for SwarmRecorderMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
             vec![
-                Rule::new("rule_0", |m, _tc| m.record(0)),
-                Rule::new("rule_1", |m, _tc| m.record(1)),
-                Rule::new("rule_2", |m, _tc| m.record(2)),
+                Rule::new("rule_0", 1.0, |m, _tc| m.record(0)),
+                Rule::new("rule_1", 1.0, |m, _tc| m.record(1)),
+                Rule::new("rule_2", 1.0, |m, _tc| m.record(2)),
             ]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
@@ -938,7 +941,7 @@ mod stateful {
 
     impl StateMachine for StepRecorderMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("step", |m: &mut StepRecorderMachine, tc| {
+            vec![Rule::new("step", 1.0, |m: &mut StepRecorderMachine, tc| {
                 *m.counts.lock().unwrap().last_mut().unwrap() += 1;
                 tc.assume(!m.fail_assumption);
             })]
@@ -1028,10 +1031,14 @@ mod stateful {
 
     impl StateMachine for LongCounterMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("increment", |m: &mut LongCounterMachine, _tc| {
-                m.counter += 1;
-                assert!(m.counter <= 60, "counter exceeded threshold");
-            })]
+            vec![Rule::new(
+                "increment",
+                1.0,
+                |m: &mut LongCounterMachine, _tc| {
+                    m.counter += 1;
+                    assert!(m.counter <= 60, "counter exceeded threshold");
+                },
+            )]
         }
         fn invariants(&self) -> Vec<Invariant<Self>> {
             vec![]
@@ -1070,7 +1077,7 @@ mod stateful {
 
     impl StateMachine for AlternatingMachine {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("step", |m: &mut AlternatingMachine, tc| {
+            vec![Rule::new("step", 1.0, |m: &mut AlternatingMachine, tc| {
                 m.attempts += 1;
                 tc.assume(m.attempts % 2 == 0);
                 *m.counts.lock().unwrap().last_mut().unwrap() += 1;
@@ -1113,5 +1120,144 @@ mod stateful {
              steps despite rejections, got {full}",
             counts.len()
         );
+    }
+}
+
+mod weights {
+    use super::common::utils::expect_panic;
+    use hegel::TestCase;
+    use hegel::stateful::{Invariant, Rule, StateMachine};
+    use hegel::{Hegel, Settings, Verbosity};
+    use std::sync::{Arc, Mutex};
+
+    struct Weighted {
+        steps: i64,
+    }
+
+    #[hegel::state_machine]
+    impl Weighted {
+        #[rule(weight = 2.5)]
+        fn heavy(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[rule(weight = 3)]
+        fn integral(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[rule]
+        fn plain(&mut self, _: TestCase) {
+            self.steps += 1;
+        }
+
+        #[invariant]
+        fn non_negative(&self, _: TestCase) {
+            assert!(self.steps >= 0);
+        }
+    }
+
+    #[test]
+    fn test_rule_weight_argument_sets_the_rule_weight() {
+        let rules = Weighted { steps: 0 }.rules();
+        let weights: Vec<(&str, f64)> = rules.iter().map(|r| (r.name.as_str(), r.weight)).collect();
+        assert_eq!(
+            weights,
+            vec![("heavy", 2.5), ("integral", 3.0), ("plain", 1.0)]
+        );
+    }
+
+    #[hegel::test]
+    fn test_weighted_machine_runs(tc: TestCase) {
+        hegel::stateful::machine(Weighted { steps: 0 }).run(tc);
+    }
+
+    /// Per test case: how often the heavy and the light rule ran. The
+    /// closure pushes a fresh entry as each case starts; the rules bump the
+    /// last one.
+    struct Lopsided {
+        cases: Arc<Mutex<Vec<(i64, i64)>>>,
+    }
+
+    #[hegel::state_machine]
+    impl Lopsided {
+        #[rule(weight = 50)]
+        fn heavy(&mut self, _: TestCase) {
+            self.cases.lock().unwrap().last_mut().unwrap().0 += 1;
+        }
+
+        #[rule]
+        fn light(&mut self, _: TestCase) {
+            self.cases.lock().unwrap().last_mut().unwrap().1 += 1;
+        }
+    }
+
+    /// Swarm testing disables one of the two rules in about half the
+    /// cases, so no aggregate ratio is meaningful, but in a case where both
+    /// rules ran the weighting itself is visible.
+    #[test]
+    fn test_heavier_rules_are_chosen_more_often() {
+        let cases = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::clone(&cases);
+        Hegel::new(move |tc: TestCase| {
+            shared.lock().unwrap().push((0i64, 0i64));
+            hegel::stateful::machine(Lopsided {
+                cases: Arc::clone(&shared),
+            })
+            .run(tc);
+        })
+        .settings(
+            Settings::new()
+                .database(None)
+                .derandomize(true)
+                .test_cases(100),
+        )
+        .run();
+        let cases = cases.lock().unwrap();
+        assert!(
+            cases
+                .iter()
+                .any(|&(heavy, light)| light > 0 && heavy >= 30 * light),
+            "expected a case where both rules ran and the weight-50 rule dominated: {cases:?}"
+        );
+    }
+
+    #[test]
+    fn test_rule_new_takes_the_weight() {
+        let rule = Rule::new("bump", 0.25, |m: &mut Weighted, _tc| m.steps += 1);
+        assert_eq!(rule.weight, 0.25);
+        assert_eq!(rule.name, "bump");
+    }
+
+    struct BadWeight {
+        weight: f64,
+    }
+
+    impl StateMachine for BadWeight {
+        fn rules(&self) -> Vec<Rule<Self>> {
+            vec![
+                Rule::new("fine", 1.0, |_m: &mut BadWeight, _tc| {}),
+                Rule::new("bad", self.weight, |_m: &mut BadWeight, _tc| {}),
+            ]
+        }
+        fn invariants(&self) -> Vec<Invariant<Self>> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_non_positive_or_non_finite_weights_are_usage_errors() {
+        for weight in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+            expect_panic(
+                || {
+                    Hegel::new(move |tc: TestCase| {
+                        hegel::stateful::machine(BadWeight { weight }).run(tc);
+                    })
+                    .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+                    .run();
+                },
+                "rule weights must be finite and positive, but rule 1 \\(bad\\) has weight",
+            );
+        }
     }
 }
