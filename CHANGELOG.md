@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.4 - 2026-09-15
+
+This release updates the `hegeltest-c` dependency to 0.42.3.
+
 ## 0.45.3 - 2026-09-14
 
 This patch adds three environment variables that override settings for a single run, so a `#[hegel::test]` can be re-run with a chosen seed or made to print its reproducer without editing the test (libtest owns the command line, so the `#[hegel::main]` flags were never available to ordinary test targets):
