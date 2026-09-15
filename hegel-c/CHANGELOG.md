@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.42.3 - 2026-09-15
+
+This patch improves shrinking in two situations where the shrinker previously stopped well short of the minimal example.
+
+Two integers that a test pins together (for example a pair that must differ by at most one) shrank one step at a time, alternating between the two, until the shrinker's improvement budget ran out. They are now lowered together, so such a pair reaches its minimum in a handful of steps regardless of how far away it started.
+
+A shorter failing example that requires making one choice *less* simple — switching a `one_of` to a later, shorter alternative whose value must stay non-trivial, or flipping a boolean that replaces a collection with a single draw — was previously unreachable: the pass meant to find it proposed candidates the shrinker rejected before running them. The shrinker now runs those candidates and, when raising a choice changes the shape of the test case, also tries dropping each of the following draws to complete the switch.
+
 ## 0.42.2 - 2026-09-14
 
 This patch raises the limit on the number of choices a single test case may make from 8,192 to 2^20 (1,048,576), and adds `hegel_settings_set_unbounded_choices` to remove it. Suppressing the `TestCasesTooLarge` health check removes it too. An unbounded test case's draws never fail with `HEGEL_E_STOP_TEST` for running out of room. The `LargeInitialTestCase` health check now measures against the configured limit rather than the fixed buffer size.

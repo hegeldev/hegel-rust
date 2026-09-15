@@ -27,12 +27,25 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::replace`], which range-checks it against the node's
     /// constraint (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
+    ///
+    /// An accepted replacement is followed by
+    /// [`Shrinker::lower_common_node_offset`], as in Hypothesis's
+    /// `try_shrinking_nodes`: two integers pinned together by the predicate
+    /// (`|m - n| <= 1`) can each move only one step at a time, and the
+    /// scheduler re-steps an improving pass indefinitely, so left to a
+    /// standalone pass the offset lowering would only get its turn after
+    /// the improvement cap had been spent one step at a time.
     pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
-        self.replace(&HashMap::from_iter([(
-            i,
-            ChoiceValue::Integer(candidate.clone()),
-        )]))
-        .await
+        let accepted = self
+            .replace(&HashMap::from_iter([(
+                i,
+                ChoiceValue::Integer(candidate.clone()),
+            )]))
+            .await?;
+        if accepted {
+            self.lower_common_node_offset().await?;
+        }
+        Ok(accepted)
     }
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
