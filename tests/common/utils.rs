@@ -506,7 +506,7 @@ where
                     .database(None)
                     .seed(seed)
                     .derandomize(true)
-                    .report_multiple_failures(true),
+                    .report_multiple_failures(false),
             )
             .run();
         }));
