@@ -7,7 +7,7 @@ use crate::control::hegel_internal_unwrap;
 use crate::native::HashMap;
 use alloc::vec::Vec;
 
-use crate::native::bignum::{BigInt, BigUint, Zero};
+use crate::native::bignum::{BigUint, Zero};
 use crate::native::core::{ChoiceData, ChoiceValue};
 
 use super::{ShrinkResult, Shrinker};
@@ -27,6 +27,14 @@ impl<'a> Shrinker<'a> {
     /// Value punning (via `for_choices` with `prefix_nodes`) handles the
     /// case where decrementing changes the kind at position `j` (e.g. a
     /// `one_of` branch switch).
+    ///
+    /// The bumps tried on `j` are small relative offsets, then small
+    /// absolute indices, then the largest index: for a pair coupled through
+    /// a product or a threshold (`a × k ≥ 1000`), lowering `a` needs `k`
+    /// raised much further than a few units, and the largest value is the
+    /// one most likely to keep the predicate — once it does, the
+    /// value-lowering passes bring `k` down to the smallest value that
+    /// still does.
     pub(super) async fn lower_and_bump(&mut self) -> ShrinkResult<()> {
         let max_gap = core::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
@@ -113,6 +121,9 @@ impl<'a> Shrinker<'a> {
                                 }
                                 p *= BigUint::from(2u32);
                             }
+                            if let Some(v) = data_j.from_index(max_j)? {
+                                try_bump_ij(self, i, new_val, j, &v).await?;
+                            }
                         }
                     }
                 }
@@ -122,17 +133,27 @@ impl<'a> Shrinker<'a> {
         Ok(())
     }
 
-    /// For each indexed node, try *incrementing* its index to see if the test
-    /// takes a shorter path (e.g. triggering an earlier exit).
+    /// For each indexed node, try *raising* its index to see if the test
+    /// takes a shorter path: a gate whose larger values skip the draw behind
+    /// it, or an earlier exit.
     ///
     /// A value shrinker can only make values simpler; sometimes making a
-    /// value *less* simple (e.g. `false → true`) causes an earlier exit,
-    /// producing a shorter and thus overall simpler choice sequence.
+    /// value *less* simple (`false → true`, a coin past its threshold)
+    /// removes the draws that follow it, producing a shorter and thus
+    /// overall simpler choice sequence. The candidates are larger as
+    /// written, so they go through [`Shrinker::try_adopt`], which runs them
+    /// and keeps the result only when what comes back is smaller. Two
+    /// candidates per node — the next index and the largest — keep the pass
+    /// to two test runs per node: the largest value is the one most likely
+    /// to fall on the far side of a threshold, and once the shorter shape is
+    /// adopted the value-lowering passes bring it down to the smallest value
+    /// that keeps it. The last node is skipped: nothing follows it that a
+    /// raise could remove.
     pub(super) async fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
-        while i < self.current_nodes.len() {
+        while i + 1 < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            if is_sequence(&node.data) {
+            if node.was_forced || is_sequence(&node.data) {
                 i += 1;
                 continue;
             }
@@ -141,64 +162,40 @@ impl<'a> Shrinker<'a> {
                 continue;
             };
 
-            let mut candidates: Vec<ChoiceValue> = Vec::new();
             let node_value = node.value();
-            for d in [1u32, 2, 4, 8, 16] {
-                let t = &current_idx + BigUint::from(d);
-                if let Some(v) = node.data.from_index(t)? {
+            let mut candidates: Vec<ChoiceValue> = Vec::new();
+            let raised = [
+                Some(&current_idx + BigUint::from(1u32)),
+                node.data.max_index(),
+            ];
+            for idx in raised.into_iter().flatten() {
+                if let Some(v) = node.data.from_index(idx)? {
                     if v != node_value && !candidates.contains(&v) {
                         candidates.push(v);
                     }
                 }
             }
-            if let Some(mi) = node.data.max_index() {
-                if let Some(v) = node.data.from_index(mi)? {
-                    if v != node_value && !candidates.contains(&v) {
-                        candidates.push(v);
-                    }
-                }
-            }
 
-            if let ChoiceData::Integer(ic, _) = &node.data {
-                for e in 0u32..11 {
-                    let magnitude = BigInt::from(1u64 << e);
-                    for sign in [BigInt::from(1), BigInt::from(-1)] {
-                        let Some(av) = ic.value_from_bigint(&(sign * &magnitude)) else {
-                            continue;
-                        };
-                        let candidate_val = ChoiceValue::Integer(av);
-                        if candidate_val != node_value && !candidates.contains(&candidate_val) {
-                            candidates.push(candidate_val);
-                        }
-                    }
-                }
-            }
-
-            if candidates.is_empty() {
-                i += 1;
-                continue;
-            }
-
-            for incremented in &candidates {
-                if i >= self.current_nodes.len() {
+            for raised in &candidates {
+                let Some(current) = self.current_nodes.get(i) else {
                     break;
-                }
-                let mut attempt = self.current_nodes.clone();
-                let Some(bumped) = attempt[i].with_value(incremented) else {
+                };
+                let Some(bumped) = current.with_value(raised) else {
                     continue;
                 };
+                let mut attempt = self.current_nodes.clone();
                 attempt[i] = bumped;
-                let mut zeroed = attempt.clone();
-                for node in &mut zeroed[i + 1..] {
-                    *node = node.with_simplest()?;
-                }
-                self.consider(&zeroed).await?;
+                self.try_adopt(&attempt).await?;
             }
             i += 1;
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_index_passes_tests.rs"]
+mod tests;
 
 /// Helper for `lower_and_bump`: replace `{i: new_val, j: bump_val}` if the
 /// kind at j validates `bump_val`. Returns whether the attempt was

@@ -589,6 +589,49 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
 }
 
 #[test]
+fn fixate_hands_an_improving_stochastic_pass_over_to_the_deterministic_passes() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => (true, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node(10)],
+        Spans::new(),
+    );
+    let mut passes = vec![
+        ShrinkPass::new(
+            "decrement",
+            Box::new(|sh| {
+                Box::pin(async move {
+                    let Some(v) = sh.int_value_bigint(0) else {
+                        return Ok(());
+                    };
+                    if v > BigInt::from(0) {
+                        sh.replace_int(0, &(v - BigInt::from(1))).await?;
+                    }
+                    Ok(())
+                })
+            }),
+        )
+        .stochastic(),
+        ShrinkPass::new("zero_choices", Box::new(|sh| Box::pin(sh.zero_choices()))),
+    ];
+    drive_no_yield(shrinker.fixate_shrink_passes(&mut passes)).unwrap();
+    let stats = shrinker.pass_stats(&passes);
+    let shrinks_of = |name: &str| stats.iter().find(|s| s.0 == name).unwrap().2;
+    assert_eq!(
+        shrinks_of("decrement"),
+        1,
+        "the stochastic pass is stepped once after it improves, not walked to the end"
+    );
+    assert_eq!(shrinks_of("zero_choices"), 1);
+    match &shrinker.current_nodes[0].value() {
+        ChoiceValue::Integer(v) => assert_eq!(i128::try_from(v).unwrap(), 0),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn past_deadline_latches_and_short_circuits_consider_and_probe() {
     use core::time::Duration;
 

@@ -328,6 +328,21 @@ impl<'a> Shrinker<'a> {
                 }
             }
         }
+        self.try_adopt(nodes).await
+    }
+
+    /// Run `nodes` whatever its order relative to the current target, and
+    /// adopt the run's actual nodes when they are interesting and strictly
+    /// smaller.
+    ///
+    /// [`Shrinker::consider`] refuses, without running it, a candidate that
+    /// is larger *as written*. That is right for the value-lowering passes,
+    /// whose candidates come back as they went in, and wrong for a candidate
+    /// that only becomes smaller once the test has run — a gate raised past
+    /// its threshold so the draws behind it disappear, where the sequence
+    /// that comes back is shorter than the one that went in. Those go
+    /// through here: the run decides.
+    pub(super) async fn try_adopt(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkHalt::Stop);
         }
