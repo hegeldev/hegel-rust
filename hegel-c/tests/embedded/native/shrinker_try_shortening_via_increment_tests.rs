@@ -255,3 +255,72 @@ fn propagates_the_improvement_cap() {
     let halt = drive_no_yield(shrinker.try_shortening_via_increment()).unwrap_err();
     assert_eq!(halt, ShrinkHalt::Stop);
 }
+
+fn int_node(value: i128, max: i128) -> ChoiceNode {
+    ChoiceNode::integer(
+        IntegerChoice {
+            min_value: BigInt::from(0),
+            max_value: BigInt::from(max),
+            shrink_towards: BigInt::from(0),
+        },
+        BigInt::from(value),
+        false,
+    )
+}
+
+/// A coin in `[0, 99]` gates a pick: while the coin is below 50 the test
+/// draws the pick, then a value; from 50 up it draws the value alone. Every
+/// complete input is interesting, so the two-draw shape is reachable only
+/// by raising the coin past the threshold.
+fn gate_then_pick(choices: &[ChoiceValue]) -> (bool, Vec<ChoiceNode>) {
+    let Some(first) = choices.first() else {
+        return (false, Vec::new());
+    };
+    let coin = int_value(first);
+    let needed = if coin < 50 { 3 } else { 2 };
+    let mut nodes = vec![int_node(coin, 99)];
+    if choices.len() < needed {
+        return (false, nodes);
+    }
+    if coin < 50 {
+        nodes.push(int_node(int_value(&choices[1]).min(2), 2));
+    }
+    nodes.push(int_node(int_value(&choices[needed - 1]).min(1000), 1000));
+    (true, nodes)
+}
+
+fn gate_then_pick_shrinker() -> Shrinker<'static> {
+    Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| {
+            let choices = match run {
+                ShrinkRun::Full(nodes) => values(nodes),
+                ShrinkRun::Probe { prefix, .. } => prefix.to_vec(),
+            };
+            let (interesting, nodes) = gate_then_pick(&choices);
+            (interesting, nodes, Spans::new())
+        }),
+        vec![int_node(0, 99), int_node(0, 2), int_node(0, 1000)],
+        Spans::new(),
+    )
+}
+
+fn int_values(shrinker: &Shrinker<'_>) -> Vec<i128> {
+    values(&shrinker.current_nodes)
+        .iter()
+        .map(int_value)
+        .collect()
+}
+
+#[test]
+fn raises_a_gate_to_its_largest_value_to_drop_the_draw_behind_it() {
+    let mut shrinker = gate_then_pick_shrinker();
+    drive_no_yield(shrinker.try_shortening_via_increment()).unwrap();
+    assert_eq!(int_values(&shrinker), vec![99, 0]);
+}
+
+#[test]
+fn shrink_lowers_a_raised_gate_to_the_threshold_that_keeps_the_shorter_shape() {
+    let mut shrinker = gate_then_pick_shrinker();
+    drive_no_yield(shrinker.shrink()).unwrap();
+    assert_eq!(int_values(&shrinker), vec![50, 0]);
+}

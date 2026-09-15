@@ -50,7 +50,11 @@ impl<'a> Shrinker<'a> {
     /// Shrink float choices toward simpler values using the float lex ordering.
     ///
     /// Steps per float node:
-    /// 1. Try replacing with simplest().
+    /// 1. Try replacing with simplest(), then with the simplest non-zero
+    ///    value. The second is the answer for a predicate that rejects zero
+    ///    inside a bounded range, where the index bisection of step 4 is not
+    ///    monotone: below the simplest in-range value every index decodes
+    ///    out of range, and above it in- and out-of-range values interleave.
     /// 2. From ±inf, try ±f64::MAX (and -inf → +inf). Needed because the
     ///    later integer search saturates well below f64::MAX (i128::MAX as
     ///    f64 ≪ f64::MAX) and the lex-index bisection never lands on MAX's
@@ -82,6 +86,15 @@ impl<'a> Shrinker<'a> {
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
                         .await?;
+                }
+
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
+                if v != 0.0 {
+                    let s = fc.simplest_nonzero()?;
+                    if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
+                        self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
+                            .await?;
+                    }
                 }
 
                 let v = self.float_at(i).ok_or(PassExit::NodeGone)?;

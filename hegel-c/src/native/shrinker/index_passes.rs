@@ -8,7 +8,7 @@ use crate::native::{HashMap, HashSet};
 use alloc::vec::Vec;
 
 use crate::native::bignum::{BigUint, Zero};
-use crate::native::core::{ChoiceData, ChoiceValue, flattened_len};
+use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, flattened_len};
 
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 
@@ -37,6 +37,14 @@ impl<'a> Shrinker<'a> {
     /// Value punning (via `for_choices` with `prefix_nodes`) handles the
     /// case where decrementing changes the kind at position `j` (e.g. a
     /// `one_of` branch switch).
+    ///
+    /// The bumps tried on `j` are small relative offsets, then small
+    /// absolute indices, then the largest index: for a pair coupled through
+    /// a product or a threshold (`a × k ≥ 1000`), lowering `a` needs `k`
+    /// raised much further than a few units, and the largest value is the
+    /// one most likely to keep the predicate — once it does, the
+    /// value-lowering passes bring `k` down to the smallest value that
+    /// still does.
     pub(super) async fn lower_and_bump(&mut self) -> ShrinkResult<()> {
         let max_gap = core::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
@@ -123,6 +131,9 @@ impl<'a> Shrinker<'a> {
                                 }
                                 p *= BigUint::from(2u32);
                             }
+                            if let Some(v) = data_j.from_index(max_j)? {
+                                try_bump_ij(self, i, new_val, j, &v).await?;
+                            }
                         }
                     }
                 }
@@ -132,15 +143,20 @@ impl<'a> Shrinker<'a> {
         Ok(())
     }
 
-    /// For each indexed node, try *raising* its index by one to see if the
-    /// test then takes a shorter path.
+    /// For each indexed node, try *raising* its index — by one, then to its
+    /// largest — to see if the test then takes a shorter path.
     ///
     /// A value shrinker can only make values simpler; sometimes making a
     /// value *less* simple (`false → true`, or a `one_of` selector moved to
     /// a later alternative) leads to a shorter and thus overall simpler
     /// choice sequence. Such a candidate is lexicographically above the
     /// current target, so it goes through [`Shrinker::consider_reshaped`]
-    /// rather than the prefiltered `consider`.
+    /// rather than the prefiltered `consider`. The largest index is tried
+    /// as well because a gate that hides draws while it is below a
+    /// threshold (`if n(0, 99) < 50 { draw the pick }`) has to jump past
+    /// the threshold rather than step: the largest value is the one surest
+    /// to be past it, and the value-lowering passes then bring it back down
+    /// to the threshold.
     ///
     /// The raised sequence is first replayed as a [`ShrinkRun::Probe`], so
     /// the run may draw past its end: that both accepts a shorter
@@ -177,11 +193,29 @@ impl<'a> Shrinker<'a> {
         let Some(current_idx) = node.data.to_index()? else {
             return Ok(());
         };
-        let Some(raised_value) = node.data.from_index(current_idx + BigUint::from(1u32))? else {
-            return Ok(());
-        };
+        let plus_one = &current_idx + BigUint::from(1u32);
+        let max = node.data.max_index().filter(|m| *m > plus_one);
+        let epoch = self.improvements;
+        for target in core::iter::once(plus_one).chain(max) {
+            let Some(raised_value) = node.data.from_index(target)? else {
+                return Ok(());
+            };
+            self.shorten_via_raise(i, &node, &raised_value).await?;
+            if self.improvements > epoch {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn shorten_via_raise(
+        &mut self,
+        i: usize,
+        node: &ChoiceNode,
+        raised_value: &ChoiceValue,
+    ) -> ShrinkResult<()> {
         let raised_node = hegel_internal_unwrap!(
-            node.with_value(&raised_value),
+            node.with_value(raised_value),
             "try_shortening_via_increment: from_index produced a value of another kind"
         );
         let mut raised = self.current_nodes.clone();
