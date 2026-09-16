@@ -349,6 +349,7 @@ fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) ->
             Vec::new(),
             1,
             1,
+            REPLAY_STEP_COUNT,
         )
         .unwrap();
     let mut steps = 0;
@@ -372,14 +373,11 @@ fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) ->
 }
 
 /// Regression test for #396: a counterexample that needs more than the
-/// default 50 steps must replay under the `stateful_step_count` the
-/// settings carry, not the engine's default.
+/// usual 50 steps must replay in full under the step count the machine is
+/// created with.
 #[test]
-fn data_source_for_blob_honors_the_stateful_step_count() {
-    let settings = quiet_settings(100)
-        .seed(Some(0x5ca1ab1e))
-        .derandomize(true)
-        .stateful_step_count(REPLAY_STEP_COUNT);
+fn data_source_for_blob_replays_under_the_machines_step_count() {
+    let settings = quiet_settings(100).seed(Some(0x5ca1ab1e)).derandomize(true);
     let result = run_native(&settings, None, |ds| {
         drive_counter_machine(&*ds);
     })

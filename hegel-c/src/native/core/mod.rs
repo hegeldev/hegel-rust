@@ -15,13 +15,17 @@ pub use state::{
 };
 pub use state_machine::NativeStateMachine;
 
-/// Maximum number of choices a single test case can make.
-pub const BUFFER_SIZE: usize = 8 * 1024;
+/// Maximum number of choices a single test case can make, unless the run
+/// removes the limit (see
+/// [`Settings::unbounded_choices`](crate::settings::Settings::unbounded_choices)).
+pub const BUFFER_SIZE: usize = 1 << 20;
 
 /// Maximum nesting depth of cloned streams (a clone made from a clone made
 /// from …). The engine rejects deeper clones the same way it rejects
-/// over-deep spans, and the choice deserializer refuses deeper nesting so
-/// corrupt storage can't drive unbounded recursion.
+/// over-deep spans, and the choice serializer and deserializer both refuse
+/// deeper nesting — the deserializer so corrupt storage can't drive
+/// unbounded recursion, the serializer so it never emits bytes the
+/// deserializer would then reject.
 pub const MAX_CLONE_DEPTH: usize = 100;
 
 /// Probability of drawing a boundary/special value per special candidate. Used

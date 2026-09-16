@@ -979,15 +979,15 @@ fn errors_have_readable_messages() {
 #[test]
 fn note_emits_whole_lines() {
     let mut p = printer(79);
-    p.note(M, "hello").unwrap();
+    p.note(M, "hello", None).unwrap();
     assert_eq!(p.value().unwrap(), "hello\n");
 }
 
 #[test]
 fn note_splits_embedded_newlines_into_hard_breaks() {
     let mut p = printer(5);
-    p.note(M, "aaaaaaaa\nbb").unwrap();
-    p.note(M, "").unwrap();
+    p.note(M, "aaaaaaaa\nbb", None).unwrap();
+    p.note(M, "", None).unwrap();
     assert_eq!(p.value().unwrap(), "aaaaaaaa\nbb\n\n");
 }
 
@@ -996,10 +996,92 @@ fn note_respects_indentation_and_recording() {
     let mut p = printer(79);
     p.shift_indent(M, 2).unwrap();
     let slot = p.deferred(M).unwrap();
-    p.note(M, "after").unwrap();
+    p.note(M, "after", None).unwrap();
     p.text(Target::Slot(slot), "x").unwrap();
     p.resolve().unwrap();
     assert_eq!(p.value().unwrap(), "xafter\n  ");
+}
+
+#[test]
+fn note_during_a_speculation_is_held_until_the_commit() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = ").unwrap();
+    p.note(M, "from inside", None).unwrap();
+    p.text(M, "5;").unwrap();
+    p.hard_break(M).unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "let x = 5;\nfrom inside\n");
+}
+
+#[test]
+fn note_during_a_speculation_survives_its_abort() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = ").unwrap();
+    p.note(M, "from inside", None).unwrap();
+    p.abort_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "from inside\n");
+}
+
+#[test]
+fn held_notes_wait_for_the_outermost_speculation() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = [").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "1").unwrap();
+    p.note(M, "first", None).unwrap();
+    p.abort_speculative(M).unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "2").unwrap();
+    p.note(M, "second", None).unwrap();
+    p.commit_speculative(M).unwrap();
+    p.text(M, "];").unwrap();
+    p.hard_break(M).unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "let x = [2];\nfirst\nsecond\n");
+}
+
+#[test]
+fn held_notes_are_per_target() {
+    let mut p = printer(79);
+    let slot = p.deferred(M).unwrap();
+    let s = Target::Slot(slot);
+    p.begin_speculative(s).unwrap();
+    p.text(s, "a").unwrap();
+    p.note(s, "in slot", None).unwrap();
+    p.note(M, "on main", None).unwrap();
+    p.commit_speculative(s).unwrap();
+    p.begin_speculative(s).unwrap();
+    p.note(s, "aborted attempt", None).unwrap();
+    p.abort_speculative(s).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "ain slot\naborted attempt\non main\n");
+}
+
+#[test]
+fn note_on_a_slot_killed_by_an_aborted_speculation_errors() {
+    let mut p = printer(79);
+    p.begin_speculative(M).unwrap();
+    let slot = p.deferred(M).unwrap();
+    p.abort_speculative(M).unwrap();
+    assert_eq!(
+        p.note(Target::Slot(slot), "late", None),
+        Err(PrinterError::DeadSlot)
+    );
+    p.note(M, "still live", None).unwrap();
+    assert_eq!(p.value().unwrap(), "still live\n");
+}
+
+#[test]
+fn held_notes_die_when_the_document_is_sealed() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    p.begin_speculative(M).unwrap();
+    p.note(M, "never lands", None).unwrap();
+    assert_eq!(p.value().unwrap(), "a");
+    assert_eq!(p.note(M, "late", None), Err(PrinterError::DeadSlot));
 }
 
 #[derive(Debug, Clone)]
@@ -1174,4 +1256,157 @@ fn comments_always_terminate_their_line_and_appear_exactly_once() {
             }
         }
     }
+}
+
+#[test]
+fn block_indents_every_line_and_ends_with_the_block() {
+    let mut p = printer(79);
+    p.note(M, "head {", None).unwrap();
+    let block = p.block(M, 2).unwrap();
+    let b = Target::Slot(block);
+    p.note(b, "x", None).unwrap();
+    let nested = Target::Slot(p.block(b, 2).unwrap());
+    p.note(nested, "y", None).unwrap();
+    p.note(b, "z", None).unwrap();
+    p.note(M, "}", None).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "head {\n  x\n    y\n  z\n}\n");
+}
+
+#[test]
+fn block_indentation_pads_continuation_lines_of_broken_groups() {
+    let mut p = printer(10);
+    let b = Target::Slot(p.block(M, 2).unwrap());
+    p.begin_group(b, 1, "[").unwrap();
+    p.text(b, "aaaa,").unwrap();
+    p.breakable(b, " ").unwrap();
+    p.text(b, "bbbb").unwrap();
+    p.end_group(b, "]").unwrap();
+    p.hard_break(b).unwrap();
+    p.text(M, "after").unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "  [aaaa,\n   bbbb]\nafter");
+}
+
+#[test]
+fn block_opened_mid_line_continues_the_line() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    let b = Target::Slot(p.block(M, 2).unwrap());
+    assert!(!p.at_line_start(b));
+    p.text(b, "b").unwrap();
+    p.hard_break(b).unwrap();
+    p.text(b, "c").unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "ab\n  c");
+}
+
+#[test]
+fn line_prefix_precedes_block_and_break_indentation() {
+    let mut p = printer(79);
+    p.line_prefix(M, "> ").unwrap();
+    p.text(M, "a").unwrap();
+    p.hard_break(M).unwrap();
+    let b = Target::Slot(p.block(M, 2).unwrap());
+    p.shift_indent(b, 3).unwrap();
+    p.line_prefix(b, "> ").unwrap();
+    p.text(b, "x").unwrap();
+    p.hard_break(b).unwrap();
+    p.line_prefix(b, "> ").unwrap();
+    p.text(b, "y").unwrap();
+    p.shift_indent(b, -3).unwrap();
+    p.hard_break(b).unwrap();
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "> a\n>   x\n>      y\n");
+}
+
+#[test]
+fn line_prefix_counts_toward_the_width() {
+    let mut p = printer(12);
+    p.line_prefix(M, "> ").unwrap();
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "aaaa,").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.text(M, "bbbb").unwrap();
+    p.end_group(M, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "> [aaaa,\n bbbb]");
+}
+
+#[test]
+fn line_prefix_off_a_line_start_is_plain_text() {
+    let mut p = printer(79);
+    p.text(M, "a").unwrap();
+    p.line_prefix(M, "> ").unwrap();
+    p.text(M, "b").unwrap();
+    p.begin_group(M, 1, "[").unwrap();
+    p.text(M, "1").unwrap();
+    p.breakable(M, " ").unwrap();
+    p.line_prefix(M, "> ").unwrap();
+    p.text(M, "2").unwrap();
+    p.end_group(M, "]").unwrap();
+    assert_eq!(p.value().unwrap(), "a> b[1 > 2]");
+}
+
+#[test]
+fn at_line_start_tracks_hard_breaks_shifts_speculation_and_splices() {
+    let mut p = printer(79);
+    assert!(p.at_line_start(M));
+    p.text(M, "a").unwrap();
+    assert!(!p.at_line_start(M));
+    p.hard_break(M).unwrap();
+    assert!(p.at_line_start(M));
+    p.shift_indent(M, 2).unwrap();
+    assert!(p.at_line_start(M));
+    p.begin_speculative(M).unwrap();
+    assert!(p.at_line_start(M));
+    p.text(M, "b").unwrap();
+    assert!(!p.at_line_start(M));
+    p.abort_speculative(M).unwrap();
+    assert!(p.at_line_start(M));
+    p.breakable(M, " ").unwrap();
+    assert!(!p.at_line_start(M));
+    p.hard_break(M).unwrap();
+
+    let slot = Target::Slot(p.deferred(M).unwrap());
+    assert!(p.at_line_start(slot));
+    assert!(p.at_line_start(M));
+    p.text(slot, "c").unwrap();
+    assert!(!p.at_line_start(slot));
+    assert!(!p.at_line_start(M));
+    p.hard_break(slot).unwrap();
+    p.shift_indent(slot, 1).unwrap();
+    assert!(p.at_line_start(slot));
+    assert!(p.at_line_start(M));
+
+    p.text(M, "d").unwrap();
+    let mid_line = Target::Slot(p.deferred(M).unwrap());
+    assert!(!p.at_line_start(mid_line));
+    assert!(!p.at_line_start(M));
+    p.resolve().unwrap();
+    assert_eq!(p.value().unwrap(), "a\n \n  c\n  d");
+}
+
+#[test]
+fn note_line_prefix_applies_to_every_line_and_survives_holding() {
+    let mut p = printer(79);
+    p.note(M, "a\nb", Some("> ")).unwrap();
+    p.begin_speculative(M).unwrap();
+    p.text(M, "let x = ").unwrap();
+    p.note(M, "held", Some("> ")).unwrap();
+    p.text(M, "1;").unwrap();
+    p.hard_break(M).unwrap();
+    p.commit_speculative(M).unwrap();
+    assert_eq!(p.value().unwrap(), "> a\n> b\nlet x = 1;\n> held\n");
+}
+
+#[test]
+fn blank_lines_and_trailing_breaks_keep_their_padding() {
+    let mut p = printer(79);
+    p.shift_indent(M, 2).unwrap();
+    p.text(M, "a").unwrap();
+    p.hard_break(M).unwrap();
+    p.hard_break(M).unwrap();
+    p.text(M, "b").unwrap();
+    p.hard_break(M).unwrap();
+    assert_eq!(p.value().unwrap(), "a\n  \n  b\n  ");
 }

@@ -135,3 +135,20 @@ fn lower_and_bump_accepts_relative_bump() {
     assert_eq!(int_value(&shrinker.current_nodes[0]), 4);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 1);
 }
+
+#[test]
+fn integer_shrink_divides_the_distance_through_a_sparse_set_of_multiples() {
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let v = int_value(&nodes[0]);
+                (v > 0 && v % 1000 == 0, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node_st(1_000_000_000, 0, 1_000_000_000, 0)],
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1000);
+}

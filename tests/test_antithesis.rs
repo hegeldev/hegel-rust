@@ -10,7 +10,7 @@ mod common;
 use common::exec::self_test;
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::run_concurrent;
+use hegel::stateful::machine;
 use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::TempDir;
 
@@ -121,8 +121,9 @@ fn test_nonexistent_antithesis_output_dir_panics() {
 }
 
 /// Filters out every input. Outside Antithesis this trips the
-/// `FilterTooMuch` health check; inside Antithesis health checks are off, so
-/// the run ends quietly with no valid inputs.
+/// `FilterTooMuch` health check; inside Antithesis the `workload` profile
+/// suppresses every health check, so the run ends quietly with no valid
+/// inputs.
 #[hegel::test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_filter_everything_fixture(tc: hegel::TestCase) {
@@ -135,6 +136,16 @@ fn test_health_checks_are_disabled_in_antithesis() {
     let output_dir = TempDir::new().unwrap();
     self_test("antithesis_filter_everything_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+}
+
+#[test]
+fn test_health_checks_run_in_antithesis_under_a_profile_that_does_not_extend_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    self_test("antithesis_filter_everything_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .env("HEGEL_DEFAULT_PROFILE", "base")
+        .expect_failure("FailedHealthCheck: FilterTooMuch")
         .run();
 }
 
@@ -166,7 +177,10 @@ fn antithesis_concurrent_machine_fixture(tc: TestCase) {
     let m = Counter {
         value: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 2, 2);
+    machine(m)
+        .min_concurrency(2)
+        .max_concurrency(2)
+        .run_concurrent(tc);
 }
 
 #[test]

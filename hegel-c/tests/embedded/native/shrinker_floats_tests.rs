@@ -198,3 +198,23 @@ fn shrink_floats_negative_shrink_by_multiples_reaches_predicate_boundary() {
         _ => unreachable!(),
     }
 }
+
+#[test]
+fn shrink_floats_reaches_the_simplest_nonzero_value_of_a_bounded_range() {
+    let initial = vec![float_node(7e-166, -1e-165, 1e-165)];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let nonzero = matches!(nodes[0].value(), ChoiceValue::Float(v) if v != 0.0);
+                (nonzero, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.shrink_floats()).unwrap();
+    let (fc, v) = shrinker.current_nodes[0].data.as_float().unwrap();
+    assert_eq!(v, 2f64.powi(-549));
+    assert_eq!(v, fc.simplest_nonzero().unwrap());
+}

@@ -462,14 +462,24 @@ impl FloatChoice {
     /// float at all is an internal error — the draws layer rejects such
     /// constraints before constructing the `FloatChoice`.
     pub fn simplest(&self) -> Result<f64, InternalError> {
-        use super::float_index::{float_to_index, simplest_in_range};
-
         if self.validate(0.0) {
             return Ok(0.0);
         }
         if self.validate(-0.0) {
             return Ok(-0.0);
         }
+        self.simplest_nonzero()
+    }
+
+    /// The simplest valid float other than a zero: the lowest-sort-key
+    /// finite non-zero value in range, else an infinity, else NaN. This is
+    /// where a predicate that rejects zero sends the shrinker; inside a
+    /// bounded range it is not a point a bisection over the lex index
+    /// reaches, because every index below it decodes out of range. A choice
+    /// whose only valid float is zero is an internal error — callers ask
+    /// only when they hold a valid non-zero value.
+    pub fn simplest_nonzero(&self) -> Result<f64, InternalError> {
+        use super::float_index::{float_to_index, simplest_in_range};
 
         let mut best: Option<((u64, bool), f64)> = None;
         if self.max_value > 0.0 {

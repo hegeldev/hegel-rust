@@ -1,21 +1,90 @@
-use super::{BoxedGenerator, BoxedPrintableGenerator, Generator, PrintableGenerator};
+use super::{
+    BoxedGenerator, BoxedPrintableGenerator, Generator, PrintableGenerator, label_from_name,
+};
 use crate::pretty::PrettyPrinter;
 use crate::test_case::TestCase;
+use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
+/// The label a deferred generator reports for itself from inside its own
+/// label computation. A deferred definition can refer to itself (that is what
+/// it is for), so computing its label by asking its components would recurse
+/// forever; the reference back to the definition stands in with this
+/// constant instead, as Hypothesis's `calculating` sentinel does.
+const DEFERRED_LABEL: u64 = label_from_name("hegel.deferred");
+
+/// What every handle from one [`deferred()`] definition shares: the
+/// generator, once set, and its label, once computed.
+struct Shared<B> {
+    generator: OnceLock<B>,
+    label: OnceLock<u64>,
+}
+
+impl<B> Shared<B> {
+    fn new() -> Self {
+        Shared {
+            generator: OnceLock::new(),
+            label: OnceLock::new(),
+        }
+    }
+}
+
+thread_local! {
+    /// The definitions whose labels are being computed on this thread, by
+    /// address, so a self-reference met on the way can be recognised.
+    static CALCULATING_LABELS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Removes its definition from [`CALCULATING_LABELS`] when dropped, so a
+/// panic partway through a label computation cannot leave it marked.
+struct CalculatingLabel(usize);
+
+impl Drop for CalculatingLabel {
+    fn drop(&mut self) {
+        CALCULATING_LABELS.with(|calculating| {
+            let mut calculating = calculating.borrow_mut();
+            let position = calculating.iter().rposition(|&key| key == self.0).unwrap();
+            calculating.remove(position);
+        });
+    }
+}
+
 struct DeferredGenerator<B> {
-    inner: Arc<OnceLock<B>>,
+    inner: Arc<Shared<B>>,
 }
 
 impl<B> DeferredGenerator<B> {
     fn get(&self) -> &B {
         self.inner
+            .generator
             .get()
             .unwrap_or_else(|| panic!("DeferredGenerator has not been set"))
     }
 }
 
 impl<T, B: Generator<T> + Send + Sync> Generator<T> for DeferredGenerator<B> {
+    fn label(&self) -> u64 {
+        if let Some(&label) = self.inner.label.get() {
+            return label;
+        }
+        let generator = self.get();
+        let key = Arc::as_ptr(&self.inner) as usize;
+        let in_progress = CALCULATING_LABELS.with(|calculating| {
+            let mut calculating = calculating.borrow_mut();
+            let in_progress = calculating.contains(&key);
+            if !in_progress {
+                calculating.push(key);
+            }
+            in_progress
+        });
+        if in_progress {
+            return DEFERRED_LABEL;
+        }
+        let _guard = CalculatingLabel(key);
+        let label = generator.label();
+        *self.inner.label.get_or_init(|| label)
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.get().do_draw(tc)
     }
@@ -62,7 +131,7 @@ impl<T, B: PrintableGenerator<T> + Send + Sync> PrintableGenerator<T> for Deferr
 /// tree.set(hegel::one_of!(leaf, branch));
 /// ```
 pub struct DeferredGeneratorDefinition<T, B = BoxedPrintableGenerator<'static, T>> {
-    inner: Arc<OnceLock<B>>,
+    inner: Arc<Shared<B>>,
     _phantom: std::marker::PhantomData<fn(T)>,
 }
 
@@ -89,7 +158,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T, BoxedPrintableGene
     ///
     /// Drawing from a handle before `set` is called will panic.
     pub fn set(self, generator: impl PrintableGenerator<T> + Send + Sync + 'static) {
-        let _ = self.inner.set(generator.boxed_printable());
+        let _ = self.inner.generator.set(generator.boxed_printable());
     }
 }
 
@@ -117,7 +186,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T, BoxedGenerator<'st
     ///
     /// Drawing from a handle before `set` is called will panic.
     pub fn set(self, generator: impl Generator<T> + Send + Sync + 'static) {
-        let _ = self.inner.set(generator.boxed());
+        let _ = self.inner.generator.set(generator.boxed());
     }
 }
 
@@ -150,7 +219,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T, BoxedGenerator<'st
 /// ```
 pub fn deferred<T>() -> DeferredGeneratorDefinition<T> {
     DeferredGeneratorDefinition {
-        inner: Arc::new(OnceLock::new()),
+        inner: Arc::new(Shared::new()),
         _phantom: std::marker::PhantomData,
     }
 }
@@ -168,7 +237,7 @@ pub fn deferred<T>() -> DeferredGeneratorDefinition<T> {
 /// [`print_with`](Generator::print_with).
 pub fn deferred_silent<T>() -> DeferredGeneratorDefinition<T, BoxedGenerator<'static, T>> {
     DeferredGeneratorDefinition {
-        inner: Arc::new(OnceLock::new()),
+        inner: Arc::new(Shared::new()),
         _phantom: std::marker::PhantomData,
     }
 }

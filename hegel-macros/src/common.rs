@@ -28,19 +28,28 @@ pub struct SettingArg {
 /// - `settings_expr`
 /// - `settings_expr, seed = 42`
 /// - `seed = 42, test_cases = 10`
+/// - `profile = "nightly", test_cases = 10`
+///
+/// `profile` is special-cased: it names the settings profile the chain
+/// starts from (`Settings::from_profile`) rather than lowering to a builder
+/// call, so it cannot be combined with a positional settings expression,
+/// which is already a complete starting point.
 pub struct SettingsAttrArgs {
     pub settings: Option<Expr>,
+    pub profile: Option<Expr>,
     pub settings_args: Vec<SettingArg>,
 }
 
 impl Parse for SettingsAttrArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut settings = None;
+        let mut profile: Option<Expr> = None;
         let mut settings_args = Vec::new();
 
         if input.is_empty() {
             return Ok(SettingsAttrArgs {
                 settings,
+                profile,
                 settings_args,
             });
         }
@@ -57,7 +66,21 @@ impl Parse for SettingsAttrArgs {
             let key: Ident = input.parse()?;
             let _eq: Token![=] = input.parse()?;
             let value: Expr = input.parse()?;
-            settings_args.push(SettingArg { key, value });
+            if key == "profile" {
+                if settings.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "a profile cannot be combined with a settings expression; \
+                         apply builder methods on Settings::from_profile(...) instead",
+                    ));
+                }
+                if profile.is_some() {
+                    return Err(syn::Error::new_spanned(key, "duplicate profile argument"));
+                }
+                profile = Some(value);
+            } else {
+                settings_args.push(SettingArg { key, value });
+            }
             if !input.is_empty() {
                 let _comma: Token![,] = input.parse()?;
             }
@@ -65,6 +88,7 @@ impl Parse for SettingsAttrArgs {
 
         Ok(SettingsAttrArgs {
             settings,
+            profile,
             settings_args,
         })
     }
@@ -83,10 +107,13 @@ impl SettingsAttrArgs {
             })
             .collect();
 
-        match &self.settings {
-            Some(expr) => quote! { #expr #(#chain)* },
-            None if chain.is_empty() => quote! { ::hegel::Settings::new() },
-            None => quote! { ::hegel::Settings::new() #(#chain)* },
+        match (&self.settings, &self.profile) {
+            (Some(expr), _) => quote! { #expr #(#chain)* },
+            (None, Some(profile)) => {
+                quote! { ::hegel::Settings::from_profile(#profile) #(#chain)* }
+            }
+            (None, None) if chain.is_empty() => quote! { ::hegel::Settings::new() },
+            (None, None) => quote! { ::hegel::Settings::new() #(#chain)* },
         }
     }
 }

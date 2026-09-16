@@ -69,7 +69,7 @@ fn test_double_increment_shrinks_to_three_ops() {
                 counters: Vec::new(),
                 trace,
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         },
         None,
     );
@@ -110,7 +110,7 @@ fn test_distinct_pair_shrinks_to_three_ops() {
                 next_id: 0,
                 trace,
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         },
         None,
     );
@@ -154,7 +154,7 @@ fn test_lifo_close_shrinks_to_three_ops() {
                 open: Vec::new(),
                 trace,
             };
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         },
         None,
     );
@@ -227,7 +227,7 @@ fn test_cycle_graph_shrinks_to_four_ops_across_seeds() {
                     edges: Vec::new(),
                     trace,
                 };
-                hegel::stateful::run(m, tc);
+                hegel::stateful::machine(m).run(tc);
             },
             Some(seed),
         );
@@ -291,7 +291,7 @@ fn test_noisy_triple_increment_shrinks_to_four_ops() {
                     scratch: 0,
                     trace,
                 };
-                hegel::stateful::run(m, tc);
+                hegel::stateful::machine(m).run(tc);
             },
             Some(seed),
         );
@@ -438,7 +438,7 @@ fn test_interval_map_shrinks_to_a_one_deletion_minimal_sequence() {
                     ops: Arc::clone(&ops_in_body),
                     trace,
                 };
-                hegel::stateful::run(m, tc);
+                hegel::stateful::machine(m).run(tc);
             },
             Some(seed),
         );
@@ -529,7 +529,7 @@ fn test_invariant_heavy_double_increment_shrinks_to_three_ops() {
                     counters: Vec::new(),
                     trace,
                 };
-                hegel::stateful::run(m, tc);
+                hegel::stateful::machine(m).run(tc);
             },
             Some(seed),
         );

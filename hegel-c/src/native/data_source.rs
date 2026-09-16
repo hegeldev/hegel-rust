@@ -293,6 +293,7 @@ impl DataSource for NativeDataSource {
         invariant_always_check: Vec<bool>,
         min_concurrency: i64,
         max_concurrency: i64,
+        step_count: i64,
     ) -> Result<NativeStateMachine, DataSourceError> {
         if rule_names.is_empty() {
             return Err(DataSourceError::InvalidArgument(
@@ -321,6 +322,17 @@ impl DataSource for NativeDataSource {
                  got [{min_concurrency}, {max_concurrency}]"
             )));
         }
+        #[cfg(target_family = "wasm")]
+        if max_concurrency > 1 {
+            return Err(DataSourceError::InvalidArgument(
+                "concurrent state machines are not supported in the WebAssembly build".to_string(),
+            ));
+        }
+        if step_count < 1 {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "state machine step count must be at least 1, got {step_count}"
+            )));
+        }
         self.with_ntc(|ntc| {
             if max_concurrency > 1 {
                 let family = ntc.family();
@@ -335,6 +347,7 @@ impl DataSource for NativeDataSource {
                 invariant_always_check,
                 min_concurrency,
                 max_concurrency,
+                step_count,
             )
         })
     }

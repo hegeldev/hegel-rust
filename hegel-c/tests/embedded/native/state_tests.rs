@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
 use crate::native::core::choices::BooleanChoice;
 use crate::native::rng::EngineRng;
@@ -1519,16 +1520,22 @@ fn draw_fresh_id_notifies_the_observer() {
 }
 
 #[test]
-fn smallest_unused_id_skips_gaps() {
-    let mut used = BTreeSet::new();
-    assert_eq!(smallest_unused_id(&used), 0);
+fn fresh_ids_track_the_smallest_unused_id_across_gaps() {
+    let mut used = FreshIds::default();
+    assert_eq!(used.smallest_unused(), 0);
+    assert_eq!(used.max_used(), -1);
     used.insert(1);
-    assert_eq!(smallest_unused_id(&used), 0);
+    assert_eq!(used.smallest_unused(), 0);
+    assert!(used.contains(1));
+    assert!(!used.contains(0));
     used.insert(0);
     used.insert(3);
-    assert_eq!(smallest_unused_id(&used), 2);
+    assert_eq!(used.smallest_unused(), 2);
+    assert_eq!(used.max_used(), 3);
     used.insert(2);
-    assert_eq!(smallest_unused_id(&used), 4);
+    assert_eq!(used.smallest_unused(), 4);
+    used.insert(2);
+    assert_eq!(used.smallest_unused(), 4);
 }
 
 #[test]

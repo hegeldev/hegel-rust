@@ -1,11 +1,16 @@
+#[cfg(not(target_family = "wasm"))]
 use alloc::borrow::ToOwned;
+#[cfg(not(target_family = "wasm"))]
 use alloc::format;
+#[cfg(not(target_family = "wasm"))]
 use alloc::string::String;
 use alloc::vec::Vec;
+#[cfg(not(target_family = "wasm"))]
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ChoiceValue, ChoiceValueRef};
+use crate::native::core::{ChoiceValue, ChoiceValueRef, CloneRecord, MAX_CLONE_DEPTH};
+#[cfg(not(target_family = "wasm"))]
 use crate::sys;
 
 /// Multi-value key/value store backing the native engine's replay phase.
@@ -37,6 +42,7 @@ pub trait TestCaseDatabase: Send + Sync {
 
 /// Name of the bookkeeping key under which every save() records its
 /// own key bytes.
+#[cfg(not(target_family = "wasm"))]
 pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 
 /// Prefix prepended to every key before it's hashed onto disk. Keeps
@@ -44,8 +50,10 @@ pub const METAKEYS_NAME: &[u8] = b".hegel-keys";
 /// store that happens to share `db_root` (e.g. a future hegel `core:`
 /// store): the formats aren't cross-compatible, so we never want their
 /// paths to coincide.
+#[cfg(not(target_family = "wasm"))]
 const KEY_PREFIX: &[u8] = b"native:";
 
+#[cfg(not(target_family = "wasm"))]
 fn key_hash(key: &[u8]) -> String {
     let mut buf = Vec::with_capacity(KEY_PREFIX.len() + key.len());
     buf.extend_from_slice(KEY_PREFIX);
@@ -53,11 +61,13 @@ fn key_hash(key: &[u8]) -> String {
     fnv_hex(&buf)
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub struct DirectoryTestCaseDatabase {
     db_root: String,
     metakeys_hash: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl DirectoryTestCaseDatabase {
     pub fn new(db_root: &str) -> Self {
         DirectoryTestCaseDatabase {
@@ -78,11 +88,13 @@ impl DirectoryTestCaseDatabase {
 /// Within-process discriminator for temporary file names, so concurrent
 /// saves in one process never collide (the process id keeps them unique
 /// across processes).
+#[cfg(not(target_family = "wasm"))]
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A `<path>.tmp.<pid>.<counter>` sibling name for [`atomic_write`]'s
 /// temporary file: the counter keeps concurrent saves in one process
 /// distinct, the process id keeps processes sharing a database distinct.
+#[cfg(not(target_family = "wasm"))]
 fn temp_path(path: &str) -> String {
     format!(
         "{path}.tmp.{}.{}",
@@ -95,6 +107,7 @@ fn temp_path(path: &str) -> String {
 /// sibling [`temp_path`] file, then rename over `path` (same-directory
 /// renames are atomic). Failures leave no partial file behind — the
 /// temporary is removed and `path` is untouched.
+#[cfg(not(target_family = "wasm"))]
 fn atomic_write(path: &str, value: &[u8]) {
     let tmp = temp_path(path);
     if sys::fs::write(&tmp, value).is_ok() && sys::fs::rename(&tmp, path).is_ok() {
@@ -103,6 +116,7 @@ fn atomic_write(path: &str, value: &[u8]) {
     let _ = sys::fs::remove_file(&tmp);
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl TestCaseDatabase for DirectoryTestCaseDatabase {
     fn fetch(&self, key: &[u8]) -> Vec<Vec<u8>> {
         let dir = self.key_path(key);
@@ -179,6 +193,7 @@ impl TestCaseDatabase for DirectoryTestCaseDatabase {
 /// `::` separators) and values are serialized choice sequences full
 /// of arbitrary bytes.  FNV-1a is fine here because we only need
 /// collision-avoidance, not cryptographic security.
+#[cfg(not(target_family = "wasm"))]
 pub(super) fn fnv_hex(s: &[u8]) -> String {
     format!("{:016x}", fnv1a(s))
 }
@@ -215,42 +230,65 @@ pub(super) fn fnv1a(s: &[u8]) -> u64 {
 ///     - Clone: the cloned stream's child choice values in this same
 ///       count-then-entries layout, recursively. Only the values are
 ///       persisted — spans and kinds are recreated on replay.
-pub fn serialize_choices(choices: &[ChoiceValue]) -> Vec<u8> {
+///
+/// Returns `None` if clone values nest deeper than [`MAX_CLONE_DEPTH`]: the
+/// engine never produces such a sequence (`clone_stream` rejects the clone
+/// that would exceed the depth), and [`deserialize_choices`] refuses it, so
+/// encoding one would only yield bytes that can never be read back.
+pub fn serialize_choices(choices: &[ChoiceValue]) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(4 + choices.len() * 17);
     serialize_choice_list(
         &mut buf,
         choices.len(),
         choices.iter().map(ChoiceValueRef::from),
-    );
-    buf
+        0,
+    )?;
+    Some(buf)
 }
 
 /// Serialize the realized values of `nodes` with the same encoding (and so
-/// the same key semantics) as [`serialize_choices`].
-pub(crate) fn serialize_nodes(nodes: &[crate::native::core::ChoiceNode]) -> Vec<u8> {
+/// the same key semantics and the same [`MAX_CLONE_DEPTH`] bound) as
+/// [`serialize_choices`].
+pub(crate) fn serialize_nodes(nodes: &[crate::native::core::ChoiceNode]) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(4 + nodes.len() * 17);
     serialize_choice_list(
         &mut buf,
         nodes.len(),
         nodes.iter().map(|n| n.data.value_ref()),
-    );
-    buf
+        0,
+    )?;
+    Some(buf)
 }
 
 fn serialize_choice_list<'a>(
     buf: &mut Vec<u8>,
     count: usize,
     choices: impl Iterator<Item = ChoiceValueRef<'a>>,
-) {
+    depth: usize,
+) -> Option<()> {
+    if depth > MAX_CLONE_DEPTH {
+        return None;
+    }
     buf.extend_from_slice(&(count as u32).to_le_bytes());
     for choice in choices {
-        serialize_one_choice(buf, choice);
+        serialize_one_choice_at(buf, choice, depth)?;
     }
+    Some(())
 }
 
-/// Serialize one value with its type tag — the per-position unit of the
-/// [`serialize_choices`] encoding, exposed for prefix-incremental hashing.
-pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>) {
+/// Serialize one top-level value with its type tag — the per-position unit
+/// of the [`serialize_choices`] encoding, exposed for prefix-incremental
+/// hashing. Returns `None` under the same [`MAX_CLONE_DEPTH`] bound as
+/// [`serialize_choices`].
+pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>) -> Option<()> {
+    serialize_one_choice_at(buf, choice, 0)
+}
+
+fn serialize_one_choice_at(
+    buf: &mut Vec<u8>,
+    choice: ChoiceValueRef<'_>,
+    depth: usize,
+) -> Option<()> {
     match choice {
         ChoiceValueRef::Integer(v) => {
             buf.push(0);
@@ -280,9 +318,10 @@ pub(crate) fn serialize_one_choice(buf: &mut Vec<u8>, choice: ChoiceValueRef<'_>
         }
         ChoiceValueRef::Clone(children) => {
             buf.push(5);
-            serialize_choice_list(buf, children.len(), children.values());
+            serialize_choice_list(buf, children.len(), children.values(), depth + 1)?;
         }
     }
+    Some(())
 }
 
 /// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
@@ -337,9 +376,9 @@ fn deserialize_any_integer(bytes: &[u8], pos: usize) -> Option<(BigInt, usize)> 
 /// Decode a byte slice produced by [`serialize_choices`].
 ///
 /// Returns `None` if the data is truncated, malformed, contains an unknown
-/// type tag, or nests clone values deeper than
-/// [`MAX_CLONE_DEPTH`](crate::native::core::MAX_CLONE_DEPTH) (defensive
-/// against filesystem corruption).
+/// type tag, or nests clone values deeper than [`MAX_CLONE_DEPTH`]
+/// (defensive against filesystem corruption; the same bound
+/// [`serialize_choices`] enforces, so every sequence it encodes decodes).
 pub fn deserialize_choices(bytes: &[u8]) -> Option<Vec<ChoiceValue>> {
     let (choices, _) = deserialize_choice_list(bytes, 0, 0)?;
     Some(choices)
@@ -350,7 +389,7 @@ fn deserialize_choice_list(
     start: usize,
     depth: usize,
 ) -> Option<(Vec<ChoiceValue>, usize)> {
-    if depth > crate::native::core::MAX_CLONE_DEPTH {
+    if depth > MAX_CLONE_DEPTH {
         return None;
     }
     if start + 4 > bytes.len() {
@@ -423,7 +462,7 @@ fn deserialize_choice_list(
                 let (children, new_pos) = deserialize_choice_list(bytes, pos, depth + 1)?;
                 pos = new_pos;
                 choices.push(ChoiceValue::Clone(alloc::sync::Arc::new(
-                    crate::native::core::CloneRecord::from_values(children),
+                    CloneRecord::from_values(children),
                 )));
             }
             _ => return None,
@@ -442,6 +481,6 @@ pub(crate) fn sub_key(database_key: &[u8], sub: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/database_tests.rs"]
 mod tests;

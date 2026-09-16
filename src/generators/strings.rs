@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use super::generators::draw_and_print_value;
-use super::{Generator, PrintableGenerator, TestCase, labels};
+use super::{Generator, PrintableGenerator, TestCase};
 use crate::control::hegel_internal_assert;
 use crate::ffi;
 use crate::ffi::sys as hegel_c;
@@ -573,7 +573,7 @@ impl IpAddressGenerator {
 
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
-        tc.start_span(labels::ONE_OF);
+        tc.start_span(self.label());
         let addr = if tc.generate_integer_i64(0, 1) == 0 {
             std::net::IpAddr::V4(tc.generate_ipv4())
         } else {

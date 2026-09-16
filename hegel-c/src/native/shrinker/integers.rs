@@ -27,12 +27,25 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::replace`], which range-checks it against the node's
     /// constraint (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
+    ///
+    /// An accepted replacement is followed by
+    /// [`Shrinker::lower_common_node_offset`], as in Hypothesis's
+    /// `try_shrinking_nodes`: two integers pinned together by the predicate
+    /// (`|m - n| <= 1`) can each move only one step at a time, and the
+    /// scheduler re-steps an improving pass indefinitely, so left to a
+    /// standalone pass the offset lowering would only get its turn after
+    /// the improvement cap had been spent one step at a time.
     pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
-        self.replace(&HashMap::from_iter([(
-            i,
-            ChoiceValue::Integer(candidate.clone()),
-        )]))
-        .await
+        let accepted = self
+            .replace(&HashMap::from_iter([(
+                i,
+                ChoiceValue::Integer(candidate.clone()),
+            )]))
+            .await?;
+        if accepted {
+            self.lower_common_node_offset().await?;
+        }
+        Ok(accepted)
     }
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
@@ -105,7 +118,12 @@ impl<'a> Shrinker<'a> {
     /// 1, `d - 1` and `d - 2`, plus `mask_high_bits` (drop the top bits of
     /// the distance — predicates like `x & 0xff == 0x77` stall without it),
     /// the squeeze-into-one-byte probes, the shift-right descent, and
-    /// multiple-subtraction, iterated to a fixpoint.
+    /// multiple-subtraction, iterated to a fixpoint. One move of Hegel's
+    /// own sits between the descent and the subtractions: dividing the
+    /// distance by 3, 5, 7 and 10. Halving stays inside a failing set of
+    /// multiples of 1000 only until the power of two runs out (from 10^9
+    /// it stops at 15_625_000); the odd divisors carry it the rest of the
+    /// way to 1000.
     pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -161,6 +179,13 @@ impl<'a> Shrinker<'a> {
                 let candidate = &before >> k.min(max_shift);
                 let ok = self.try_at_distance(i, &ic, &target, &candidate).await?;
                 search.record(ok);
+            }
+            for divisor in [3i32, 5, 7, 10] {
+                let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
+                let quotient = &base / divisor;
+                if quotient.sign() == Sign::Plus {
+                    self.try_at_distance(i, &ic, &target, &quotient).await?;
+                }
             }
             for step in [2u64, 1] {
                 let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;

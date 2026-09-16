@@ -204,10 +204,14 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
         }
 
         impl #impl_generics ::hegel::generators::Generator<#return_type> for #struct_name #ty_generics #generator_where {
-            fn do_draw(&self, tc: &::hegel::TestCase) -> #return_type {
+            fn label(&self) -> u64 {
                 const __HEGEL_COMPOSITE_LABEL: u64 =
-                    ::hegel::generators::fnv1a_hash(#label_source.as_bytes());
-                tc.start_span(__HEGEL_COMPOSITE_LABEL);
+                    ::hegel::generators::label_from_name(#label_source);
+                __HEGEL_COMPOSITE_LABEL
+            }
+
+            fn do_draw(&self, tc: &::hegel::TestCase) -> #return_type {
+                tc.start_span(self.label());
                 let __hegel_result =
                     Self::__hegel_body(tc, #(::core::clone::Clone::clone(&self.#field_idents)),*);
                 tc.stop_span(false);
