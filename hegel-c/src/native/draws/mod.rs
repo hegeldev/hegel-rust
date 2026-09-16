@@ -8,7 +8,8 @@ pub mod text;
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    EngineError, FloatChoice, ManyState, NativeTestCase, RecursionState, Status, float_clamp,
+    EngineError, FloatChoice, ManyState, NativeTestCase, RecursionState, Status,
+    float_restrict_and_redraw,
 };
 use crate::native::intervalsets::IntervalSet;
 use alloc::boxed::Box;
@@ -161,7 +162,7 @@ fn narrow_to_f32(min_value: f64, max_value: f64, snm: f64, v: f64) -> f64 {
         allow_infinity: false,
         smallest_nonzero_magnitude: snm,
     };
-    f64::from(float_clamp(&fc, v) as f32)
+    f64::from(float_restrict_and_redraw(&fc, v) as f32)
 }
 
 /// Draw an integer in `[min_value, max_value]`, validating the bounds.
