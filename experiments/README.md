@@ -28,6 +28,12 @@ below, and later API changes are expected to have broken some of them.
   against the branch through `__bench::replay_case` and the `ExternalReplay`
   hook — `TRIALS=20 R=50 cargo run --release -- results.jsonl`, then
   `python3 summarize.py results.jsonl` prints the tables in the notes.
+- `graph-shrink`: experiment 018 (shrinking the counterexample as a graph); a
+  prototype graph shrinker outside the engine, judged through the same hook —
+  `TRIALS=10 KS=20 R=50 WARMUP=0 cargo run --release -- results.jsonl` for
+  campaign 1 and the same without `WARMUP=0` for campaign 2
+  (`results-warmup.jsonl`), then `python3 summarize.py <file>` prints the
+  tables in the notes.
 - `concurrent-replay`: built against `7a4fd194` (experiment 007's full
   campaign); runs against the branch via its path dependency —
   `cargo build --release`, then `python3 drive.py [trials]`.
