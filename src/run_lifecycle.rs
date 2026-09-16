@@ -494,6 +494,9 @@ const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced differen
 /// non-final. The client owns the final replays: once the loop drains, it reads
 /// each discovered counterexample's reproduce blob from `hegel_run_result` and
 /// replays it via [`drive`]'s own `from_blob` path, marking it final itself.
+/// Those replays are part of the run, whose verdict libhegel has already
+/// reported to Antithesis, so they are built from settings without the test
+/// location and report nothing themselves.
 ///
 /// Because the failures (and their count) are known up front once the loop
 /// drains, the "N distinct failures" headline is printed before replaying, and
@@ -582,6 +585,7 @@ pub(crate) fn drive<F>(
                     "Property-based test failed with {count} distinct failures."
                 ));
             }
+            let replay_settings = SettingsHandle::build(settings, database_key, None);
             let mut last_payload: Option<Box<dyn std::any::Any + Send>> = None;
             for index in 0..count {
                 if multiple && !quiet {
@@ -591,7 +595,7 @@ pub(crate) fn drive<F>(
                 let blob = failure
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
-                let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
+                let c_tc = match CTestCase::from_blob(&replay_settings, &blob, output.sink()) {
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
