@@ -637,7 +637,9 @@ pub use hegel_macros::state_machine;
 /// A bare `#[rule]` with no `group = "..."` argument is assigned to a
 /// single shared anonymous group, so a machine with no group annotations
 /// is maximally concurrent: any rule may overlap with any other, and naming
-/// groups is how overlap gets restricted.
+/// groups is how overlap gets restricted. `#[rule(group = "name", weight =
+/// w)]` also hints how often a rule should be chosen compared to
+/// other rules in its group. This is not a distributional guarantee.
 ///
 /// The model is shared by reference across worker threads, so rules and
 /// invariants must take `&self` (mutable state needs interior mutability),

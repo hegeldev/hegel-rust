@@ -33,9 +33,19 @@ fn capturing_test_case() -> (RunHandle, TestCase, Captured) {
 /// on `tc` and return its handle.
 fn register_machine(tc: &TestCase, rules: &[&str], concurrency: i64) -> StateMachineHandle {
     let rule_groups = vec![0i64; rules.len()];
+    let rule_weights = vec![1.0f64; rules.len()];
     let (machine, level) = tc
         .with_ctc(|ctc| {
-            ctc.new_state_machine(rules, &rule_groups, &[], &[], concurrency, concurrency, 50)
+            ctc.new_state_machine(
+                rules,
+                &rule_groups,
+                &rule_weights,
+                &[],
+                &[],
+                concurrency,
+                concurrency,
+                50,
+            )
         })
         .unwrap();
     assert_eq!(level, concurrency);
@@ -194,9 +204,14 @@ struct HitCounter {
 
 impl ConcurrentStateMachine for HitCounter {
     fn rules(&self) -> Vec<ConcurrentRule<Self>> {
-        vec![ConcurrentRule::new("hit", ANONYMOUS_GROUP, |m, _tc| {
-            m.hits.fetch_add(1, Ordering::SeqCst);
-        })]
+        vec![ConcurrentRule::new(
+            "hit",
+            ANONYMOUS_GROUP,
+            1.0,
+            |m, _tc| {
+                m.hits.fetch_add(1, Ordering::SeqCst);
+            },
+        )]
     }
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>> {
         Vec::new()
@@ -207,9 +222,12 @@ struct AlwaysPanics;
 
 impl ConcurrentStateMachine for AlwaysPanics {
     fn rules(&self) -> Vec<ConcurrentRule<Self>> {
-        vec![ConcurrentRule::new("boom", ANONYMOUS_GROUP, |_m, _tc| {
-            panic!("rule boom")
-        })]
+        vec![ConcurrentRule::new(
+            "boom",
+            ANONYMOUS_GROUP,
+            1.0,
+            |_m, _tc| panic!("rule boom"),
+        )]
     }
     fn invariants(&self) -> Vec<ConcurrentInvariant<Self>> {
         Vec::new()
@@ -301,7 +319,9 @@ fn run_worker_round_reports_an_exhausted_budget_as_overrun() {
 fn machine_next_group_reports_an_exhausted_budget_as_overrun() {
     let (_run, tc, _lines) = capturing_test_case();
     let (machine, _) = tc
-        .with_ctc(|ctc| ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[], &[], 1, 1, 50))
+        .with_ctc(|ctc| {
+            ctc.new_state_machine(&["r0", "r1"], &[0, 1], &[1.0, 1.0], &[], &[], 1, 1, 50)
+        })
         .unwrap();
     let exhausted = with_test_context(|| {
         catch_unwind(AssertUnwindSafe(|| {

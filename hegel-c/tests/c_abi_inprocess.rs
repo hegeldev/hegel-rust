@@ -1275,6 +1275,7 @@ fn nondeterministic_run_failure_has_origin_but_no_blob() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1367,6 +1368,7 @@ fn primitives_after_overrun_all_report_stop_test() {
         let rule = CString::new("only").unwrap();
         let rules = [rule.as_ptr()];
         let rule_groups: [i64; 1] = [0];
+        let rule_weights: [f64; 1] = [2.5];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_concurrency = 0i64;
         ok(hegel_new_state_machine(
@@ -1374,6 +1376,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             tc,
             rules.as_ptr(),
             rule_groups.as_ptr(),
+            rule_weights.as_ptr(),
             1,
             ptr::null(),
             ptr::null(),
@@ -1431,6 +1434,7 @@ fn primitives_after_overrun_all_report_stop_test() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1510,6 +1514,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 null_tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1559,6 +1564,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1577,6 +1583,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1596,6 +1603,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 ptr::null(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1616,6 +1624,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 ptr::null(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1629,6 +1638,28 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_groups is null"));
+        let zero_weight: [f64; 1] = [0.0];
+        assert_eq!(
+            hegel_new_state_machine(
+                ctx,
+                tc,
+                rules.as_ptr(),
+                rule_groups.as_ptr(),
+                zero_weight.as_ptr(),
+                1,
+                ptr::null(),
+                ptr::null(),
+                0,
+                1,
+                1,
+                50,
+                &mut machine,
+                &mut out_concurrency,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("finite and positive"));
+        assert!(machine.is_null());
         let null_entry: [*const c_char; 1] = [ptr::null()];
         assert_eq!(
             hegel_new_state_machine(
@@ -1636,6 +1667,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 null_entry.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1656,6 +1688,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 bad_entry.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1676,6 +1709,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 bad_inv.as_ptr(),
                 ptr::null(),
@@ -1696,6 +1730,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 reserved_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1715,6 +1750,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1734,6 +1770,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1755,6 +1792,7 @@ fn state_machine_and_primitive_boolean_paths() {
                     tc,
                     rules.as_ptr(),
                     rule_groups.as_ptr(),
+                    ptr::null(),
                     1,
                     ptr::null(),
                     ptr::null(),
@@ -1776,6 +1814,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -1886,6 +1925,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 invariants.as_ptr(),
                 ptr::null(),
@@ -1940,6 +1980,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 invariants.as_ptr(),
                 always_check.as_ptr(),
@@ -1975,6 +2016,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -2019,6 +2061,7 @@ fn state_machine_and_primitive_boolean_paths() {
                 tc,
                 rules.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 1,
                 ptr::null(),
                 ptr::null(),
@@ -2627,6 +2670,7 @@ fn object_handles_are_freed_safely_after_the_run() {
             tc,
             rules.as_ptr(),
             rule_groups.as_ptr(),
+            ptr::null(),
             1,
             ptr::null(),
             ptr::null(),

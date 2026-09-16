@@ -289,6 +289,7 @@ impl DataSource for NativeDataSource {
         &self,
         rule_names: Vec<String>,
         rule_groups: Vec<i64>,
+        rule_weights: Vec<f64>,
         invariant_names: Vec<String>,
         invariant_always_check: Vec<bool>,
         min_concurrency: i64,
@@ -306,6 +307,24 @@ impl DataSource for NativeDataSource {
                  for {} rules",
                 rule_groups.len(),
                 rule_names.len()
+            )));
+        }
+        if rule_weights.len() != rule_names.len() {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "rule_weights must be parallel to rule_names: got {} weights for {} rules",
+                rule_weights.len(),
+                rule_names.len()
+            )));
+        }
+        if let Some((rule, weight)) = rule_weights
+            .iter()
+            .enumerate()
+            .find(|(_, w)| !(w.is_finite() && **w > 0.0))
+        {
+            return Err(DataSourceError::InvalidArgument(format!(
+                "rule weights must be finite and positive, but rule {rule} ({}) has weight \
+                 {weight}",
+                rule_names[rule]
             )));
         }
         if invariant_always_check.len() != invariant_names.len() {
@@ -344,6 +363,7 @@ impl DataSource for NativeDataSource {
             NativeStateMachine::new(
                 ntc,
                 rule_groups,
+                rule_weights,
                 invariant_always_check,
                 min_concurrency,
                 max_concurrency,
