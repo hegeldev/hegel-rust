@@ -1625,6 +1625,29 @@ impl NativeTestCase {
         .with_random(rng)
     }
 
+    /// Walk a counterexample stored as a graph (decision 78): every draw
+    /// served by the graph where its state and address have an edge, at
+    /// random where they do not, up to `max_size` choices in total. See
+    /// [`Replay::graph`].
+    #[allow(dead_code)]
+    pub(crate) fn for_graph(
+        graph: Arc<crate::native::graph::Graph>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        Self::new_stream(
+            Replay::graph(graph),
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
     /// Replay a shrink's candidate set as one test case (decision 77): the
     /// live-set semantics of [`Self::for_counterexample`], with the
     /// timelines flagged in `puns` — unrealized proposals, with their
@@ -1777,6 +1800,20 @@ impl NativeTestCase {
         self.replay.ran_out()
     }
 
+    /// Under a graph walk (decision 78), the graph edges this run settled
+    /// on, as `(node, edge index)`: see [`Replay::settled`].
+    #[allow(dead_code)]
+    pub fn settled_edges(&self) -> Vec<(usize, usize)> {
+        self.replay.settled()
+    }
+
+    /// Under a graph walk, whether the run ended where the graph ends: see
+    /// [`Replay::ended_on_end`].
+    #[allow(dead_code)]
+    pub fn ended_on_end(&self) -> bool {
+        self.replay.ended_on_end()
+    }
+
     /// Stamp this test case for capture.
     pub(crate) fn set_should_capture(&mut self) {
         self.should_capture = true;
@@ -1808,7 +1845,9 @@ impl NativeTestCase {
             return Err(EngineError::InvalidTestCase);
         }
         let idx = self.nodes.len();
-        let child_replay = self.replay.clone_child(&self.clone_id, idx);
+        let child_replay = self
+            .replay
+            .clone_child(&self.clone_id, idx, || self.open_span_frames());
         let child_rng = self.rng.as_mut().map(EngineRng::spawn);
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,

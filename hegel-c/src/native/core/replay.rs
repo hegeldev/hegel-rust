@@ -13,12 +13,18 @@
 //! [`Rescue`]. The live set is shared by every stream of the family, so a
 //! disagreement inside a cloned stream prunes the timeline for its parent
 //! too.
+//!
+//! A counterexample stored as a graph (decision 78, [`Graph`]) is replayed
+//! by [`Replay::graph`]: a walk that stands at the states the last draw may
+//! have led to, arrives at each draw by the identity its address reports,
+//! and serves the first fitting edge there. See [`GraphWalk`].
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::choices::{ChoiceNode, ChoiceValue};
+use crate::native::graph::{END, Frame, Graph, Ident, START, ident_before};
 use crate::sys::sync::Mutex;
 
 /// What a replay does once no stored timeline is live.
@@ -150,6 +156,149 @@ impl LiveSet {
     }
 }
 
+/// Where a graph walk stands between draws: the states the last served
+/// draw may have led to — its tie — or, after a clone, the clone edges of
+/// the tie together with the child stream's live set over their records,
+/// so that the states still possible are those of the records the child
+/// has agreed with so far.
+enum Pending {
+    Nodes(Vec<usize>),
+    Tie {
+        node: usize,
+        edges: Vec<usize>,
+    },
+    Clone {
+        node: usize,
+        edges: Vec<usize>,
+        shared: Arc<Mutex<LiveSet>>,
+    },
+}
+
+/// The root stream's walk of a [`Graph`] (decision 78). At each draw the
+/// walk computes the identity of the state the run is in from the draw's
+/// address and the previous draw's, and **arrives** at the pending state of
+/// that identity — settling the edge that led there. No pending state of
+/// that identity is a **misjoin**: a divergence, after which the walk is
+/// rescued by the graph's node of that identity if there is one. The draw
+/// is then served by the first edge at its address whose value fits, and
+/// the edges at that address with that value are the new tie. No fitting
+/// edge is a **misfit**: a divergence, and the run draws at random until
+/// an identity rescues it. A clone is served by the clone edges at its
+/// address, whose records the child stream replays as a live set; the
+/// child's divergence is the walk's.
+pub(crate) struct GraphWalk {
+    graph: Arc<Graph>,
+    prev: Option<Vec<Frame>>,
+    pending: Pending,
+    settled: Vec<(usize, usize)>,
+    divergence: Option<Divergence>,
+    children: Vec<Arc<Mutex<LiveSet>>>,
+}
+
+impl GraphWalk {
+    fn new(graph: Arc<Graph>) -> Self {
+        GraphWalk {
+            graph,
+            prev: None,
+            pending: Pending::Nodes(alloc::vec![START]),
+            settled: Vec::new(),
+            divergence: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// The states the run may be in, each with the edge that would have led
+    /// there.
+    fn candidates(&self) -> Vec<(Option<(usize, usize)>, usize)> {
+        let target = |node: usize, i: usize| self.graph.nodes()[node].edges[i].target;
+        match &self.pending {
+            Pending::Nodes(nodes) => nodes.iter().map(|&n| (None, n)).collect(),
+            Pending::Tie { node, edges } => edges
+                .iter()
+                .map(|&i| (Some((*node, i)), target(*node, i)))
+                .collect(),
+            Pending::Clone {
+                node,
+                edges,
+                shared,
+            } => {
+                let live = shared.lock().live.clone();
+                edges
+                    .iter()
+                    .zip(live)
+                    .filter(|(_, live)| *live)
+                    .map(|(&i, _)| (Some((*node, i)), target(*node, i)))
+                    .collect()
+            }
+        }
+    }
+
+    /// Arrive at the pending state of `ident`, settling the edge that led
+    /// there; a misjoin diverges and is rescued by the graph's node of that
+    /// identity, `None` when it has none.
+    fn arrive(&mut self, ident: &Ident, stream: &[usize], position: usize) -> Option<usize> {
+        let found = self
+            .candidates()
+            .into_iter()
+            .find(|&(_, n)| self.graph.nodes()[n].ident == *ident);
+        match found {
+            Some((edge, n)) => {
+                if let Some(edge) = edge {
+                    self.settled.push(edge);
+                }
+                Some(n)
+            }
+            None => {
+                self.diverge(stream, position);
+                self.graph.node(ident)
+            }
+        }
+    }
+
+    /// The identity the draw at `addr` reports, given the previous draw.
+    fn ident_at(&mut self, addr: Vec<Frame>) -> Ident {
+        let ident = ident_before(self.prev.as_deref(), &addr);
+        self.prev = Some(addr);
+        ident
+    }
+
+    fn diverge(&mut self, stream: &[usize], position: usize) {
+        if self.divergence().is_none() {
+            self.divergence = Some(Divergence {
+                stream: stream.to_vec(),
+                position,
+            });
+        }
+    }
+
+    /// The first divergence of the walk or of any child stream.
+    fn divergence(&self) -> Option<Divergence> {
+        self.divergence.clone().or_else(|| {
+            self.children
+                .iter()
+                .find_map(|c| c.lock().divergence.clone())
+        })
+    }
+
+    /// Whether the run, ending now, ends on [`Ident::End`].
+    fn ended_on_end(&self) -> bool {
+        self.candidates().iter().any(|&(_, n)| n == END)
+    }
+
+    /// The edges the run settled on, as `(node, edge index)`: those whose
+    /// target the next draw's identity picked, and the edge to `End` if the
+    /// run ends on it.
+    fn settled(&self) -> Vec<(usize, usize)> {
+        let mut out = self.settled.clone();
+        out.extend(
+            self.candidates()
+                .into_iter()
+                .filter_map(|(edge, n)| (n == END).then_some(edge).flatten()),
+        );
+        out
+    }
+}
+
 /// What a replay resolved a draw to.
 pub(crate) enum Resolved<'a, V> {
     /// A stored value fit the request.
@@ -178,6 +327,7 @@ pub(crate) struct Replay {
     rescue: Rescue,
     shared: Arc<Mutex<LiveSet>>,
     external: Option<External>,
+    graph: Option<Mutex<GraphWalk>>,
 }
 
 impl Replay {
@@ -199,6 +349,7 @@ impl Replay {
             rescue: Rescue::Continue,
             shared,
             external: Some(external),
+            graph: None,
         }
     }
 
@@ -212,11 +363,17 @@ impl Replay {
             rescue: Rescue::Pun,
             shared: Arc::new(Mutex::new(LiveSet::new(1))),
             external: None,
+            graph: None,
         }
     }
 
     /// A [`Rescue::Continue`] replay of a whole counterexample, in its order.
     pub(crate) fn counterexample(timelines: Vec<Vec<ChoiceValue>>) -> Self {
+        let count = timelines.len();
+        Self::live_set(timelines, Arc::new(Mutex::new(LiveSet::new(count))))
+    }
+
+    fn live_set(timelines: Vec<Vec<ChoiceValue>>, shared: Arc<Mutex<LiveSet>>) -> Self {
         let count = timelines.len();
         Replay {
             timelines: timelines.into_iter().map(Some).collect(),
@@ -224,8 +381,24 @@ impl Replay {
             puns: alloc::vec![false; count],
             insist: alloc::vec![false; count],
             rescue: Rescue::Continue,
-            shared: Arc::new(Mutex::new(LiveSet::new(count))),
+            shared,
             external: None,
+            graph: None,
+        }
+    }
+
+    /// The walk of a counterexample stored as a graph (decision 78): see
+    /// [`GraphWalk`].
+    pub(crate) fn graph(graph: Arc<Graph>) -> Self {
+        Replay {
+            timelines: Vec::new(),
+            nodes: Vec::new(),
+            puns: Vec::new(),
+            insist: Vec::new(),
+            rescue: Rescue::Continue,
+            shared: Arc::new(Mutex::new(LiveSet::new(0))),
+            external: None,
+            graph: Some(Mutex::new(GraphWalk::new(graph))),
         }
     }
 
@@ -257,6 +430,7 @@ impl Replay {
             rescue: Rescue::Continue,
             shared: Arc::new(Mutex::new(LiveSet::new(count))),
             external: None,
+            graph: None,
         }
     }
 
@@ -278,16 +452,19 @@ impl Replay {
     }
 
     /// Resolve the draw at `position` of stream `stream`, given the draw's
-    /// acceptance test over stored values and, for an external resolver
-    /// only, its structural address. A proposal's misfit under
-    /// [`Rescue::Pun`] is the shrink's own edit, never a divergence.
+    /// acceptance test over stored values and, for a graph walk or an
+    /// external resolver only, its structural address. A proposal's misfit
+    /// under [`Rescue::Pun`] is the shrink's own edit, never a divergence.
     pub(crate) fn resolve<V>(
         &self,
         stream: &[usize],
         position: usize,
-        frames: impl FnOnce() -> Vec<(u64, usize)>,
+        frames: impl FnOnce() -> Vec<Frame>,
         fits: impl Fn(&ChoiceValue) -> Option<V>,
     ) -> Resolved<'_, V> {
+        if let Some(walk) = &self.graph {
+            return Self::resolve_graph(&mut walk.lock(), stream, position, frames(), fits);
+        }
         if let Some(external) = &self.external {
             return match external
                 .lock()
@@ -309,6 +486,46 @@ impl Replay {
                 None => Resolved::Exhausted,
             },
             Rescue::Continue => self.resolve_live(stream, position, fits),
+        }
+    }
+
+    /// A graph walk's draw: arrive by identity, serve the first fitting
+    /// edge at the address, and stand at its tie (see [`GraphWalk`]).
+    fn resolve_graph<'a, V>(
+        walk: &mut GraphWalk,
+        stream: &[usize],
+        position: usize,
+        addr: Vec<Frame>,
+        fits: impl Fn(&ChoiceValue) -> Option<V>,
+    ) -> Resolved<'a, V> {
+        let ident = walk.ident_at(addr.clone());
+        let graph = Arc::clone(&walk.graph);
+        let Some(node) = walk.arrive(&ident, stream, position) else {
+            walk.pending = Pending::Nodes(Vec::new());
+            return Resolved::Exhausted;
+        };
+        let edges = &graph.nodes()[node].edges;
+        let hit = edges
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.addr == addr)
+            .find_map(|(i, e)| fits(&e.value).map(|v| (i, v)));
+        match hit {
+            Some((i, v)) => {
+                let value = &edges[i].value;
+                walk.pending = Pending::Tie {
+                    node,
+                    edges: (0..edges.len())
+                        .filter(|&j| edges[j].addr == addr && edges[j].value == *value)
+                        .collect(),
+                };
+                Resolved::Served(v)
+            }
+            None => {
+                walk.diverge(stream, position);
+                walk.pending = Pending::Nodes(Vec::new());
+                Resolved::Exhausted
+            }
         }
     }
 
@@ -382,8 +599,18 @@ impl Replay {
 
     /// The replay of the stream cloned at `position` of stream `stream`:
     /// each timeline's cloned sequence there, with the timelines that have
-    /// no clone at that position leaving the live set.
-    pub(crate) fn clone_child(&self, stream: &[usize], position: usize) -> Self {
+    /// no clone at that position leaving the live set. Under a graph walk,
+    /// the live-set replay of the records of the clone edges at the clone's
+    /// address (`frames`), whose targets the child's agreement decides.
+    pub(crate) fn clone_child(
+        &self,
+        stream: &[usize],
+        position: usize,
+        frames: impl FnOnce() -> Vec<Frame>,
+    ) -> Self {
+        if let Some(walk) = &self.graph {
+            return Self::clone_from_graph(&mut walk.lock(), stream, position, frames());
+        }
         if let Some(external) = &self.external {
             return Self::external_view(Arc::clone(external), Arc::clone(&self.shared));
         }
@@ -443,15 +670,78 @@ impl Replay {
             rescue: self.rescue,
             shared: Arc::clone(&self.shared),
             external: None,
+            graph: None,
         }
+    }
+
+    /// A graph walk's clone: arrive by identity, take the clone edges at
+    /// the address as the tie, and hand the child their records as a live
+    /// set; none is a divergence and an empty child that draws at random.
+    fn clone_from_graph(
+        walk: &mut GraphWalk,
+        stream: &[usize],
+        position: usize,
+        addr: Vec<Frame>,
+    ) -> Self {
+        let ident = walk.ident_at(addr.clone());
+        let graph = Arc::clone(&walk.graph);
+        let node = walk.arrive(&ident, stream, position);
+        let (edges, records): (Vec<usize>, Vec<Vec<ChoiceValue>>) = node
+            .map(|n| {
+                graph.nodes()[n]
+                    .edges
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| match &e.value {
+                        ChoiceValue::Clone(record) if e.addr == addr => {
+                            Some((i, record.owned_values()))
+                        }
+                        _ => None,
+                    })
+                    .unzip()
+            })
+            .unwrap_or_default();
+        let shared = Arc::new(Mutex::new(LiveSet::new(records.len())));
+        walk.children.push(Arc::clone(&shared));
+        walk.pending = match node {
+            Some(node) if !edges.is_empty() => Pending::Clone {
+                node,
+                edges,
+                shared: Arc::clone(&shared),
+            },
+            _ => {
+                walk.diverge(stream, position);
+                Pending::Nodes(Vec::new())
+            }
+        };
+        Self::live_set(records, shared)
     }
 
     /// The family's first divergence, if any.
     pub(crate) fn divergence(&self) -> Option<Divergence> {
+        if let Some(walk) = &self.graph {
+            return walk.lock().divergence();
+        }
         if let Some(external) = &self.external {
             return external.lock().divergence();
         }
         self.shared.lock().divergence.clone()
+    }
+
+    /// Under a graph walk, the edges the run settled on (see
+    /// [`GraphWalk::settled`]); empty otherwise.
+    pub(crate) fn settled(&self) -> Vec<(usize, usize)> {
+        self.graph
+            .as_ref()
+            .map_or_else(Vec::new, |walk| walk.lock().settled())
+    }
+
+    /// Under a graph walk, whether the run ending now ends on
+    /// [`Ident::End`]; false otherwise.
+    pub(crate) fn ended_on_end(&self) -> bool {
+        self.graph
+            .as_ref()
+            .is_some_and(|walk| walk.lock().ended_on_end())
     }
 
     /// Which timelines are live, in counterexample order.
@@ -497,3 +787,7 @@ impl Replay {
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/replay_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/replay_graph_tests.rs"]
+mod graph_tests;
