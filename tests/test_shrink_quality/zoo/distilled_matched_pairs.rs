@@ -57,12 +57,12 @@ fn list_balanced_with_payload(v: &[i64]) -> bool {
 
 #[test]
 fn the_ideals_fail_and_are_smallest() {
-    assert!(balanced_with_payload(&"x".to_string()));
-    assert!(!balanced_with_payload(&"(".to_string()));
-    assert!(!balanced_with_payload(&")".to_string()));
-    assert!(!balanced_with_payload(&String::new()));
-    assert!(balanced_with_payload(&"(x)".to_string()));
-    assert!(!balanced_with_payload(&"x)".to_string()));
+    assert!(balanced_with_payload("x"));
+    assert!(!balanced_with_payload("("));
+    assert!(!balanced_with_payload(")"));
+    assert!(!balanced_with_payload(""));
+    assert!(balanced_with_payload("(x)"));
+    assert!(!balanced_with_payload("x)"));
     assert!(list_balanced_with_payload(&[2]));
     assert!(!list_balanced_with_payload(&[0]));
     assert!(!list_balanced_with_payload(&[1]));
