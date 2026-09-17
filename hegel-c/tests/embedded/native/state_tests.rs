@@ -666,7 +666,7 @@ fn template_count_decrements_on_each_draw() {
 /// aggregate marginal a caller sees across many test cases (each of which draws
 /// its own parameters). Used by the distribution tests below.
 fn swarm_sample(min: i128, max: i128, rng: &mut EngineRng) -> i128 {
-    let params = GenerationParameters::draw(rng).unwrap();
+    let params = GenerationParameters::draw(rng).unwrap().integer;
     biased_i128_sample(min, max, rng, params).unwrap()
 }
 
@@ -789,7 +789,7 @@ fn biased_integer_sample_category_weights_control_the_mix() {
     let total = 200_000;
     let (lo, hi) = (i64::MIN as i128, i64::MAX as i128);
 
-    let measure = |params: GenerationParameters, seed: u64| -> (f64, f64) {
+    let measure = |params: IntegerGenerationParameters, seed: u64| -> (f64, f64) {
         let mut rng = EngineRng::seeded(seed);
         let (mut endpoint, mut small) = (0u64, 0u64);
         for _ in 0..total {
@@ -805,7 +805,7 @@ fn biased_integer_sample_category_weights_control_the_mix() {
     };
 
     // Endpoint-heavy: the range edges dominate.
-    let endpoint_heavy = GenerationParameters {
+    let endpoint_heavy = IntegerGenerationParameters {
         endpoint_probability: 0.7,
         interesting_probability: 0.1,
         diffuse_probability: 0.05,
@@ -817,7 +817,7 @@ fn biased_integer_sample_category_weights_control_the_mix() {
     );
 
     // Interesting-heavy: small magnitudes become common.
-    let interesting_heavy = GenerationParameters {
+    let interesting_heavy = IntegerGenerationParameters {
         endpoint_probability: 0.0,
         interesting_probability: 0.8,
         diffuse_probability: 0.0,
@@ -830,7 +830,7 @@ fn biased_integer_sample_category_weights_control_the_mix() {
 
     // All-middle: the `min + 1` / `max - 1` edges (unique to the endpoint
     // category) disappear.
-    let all_middle = GenerationParameters {
+    let all_middle = IntegerGenerationParameters {
         endpoint_probability: 0.0,
         interesting_probability: 0.0,
         diffuse_probability: 0.0,
@@ -880,7 +880,7 @@ fn swarm_shared_parameters_correlate_operand_extremeness() {
     let mut rng = EngineRng::seeded(2024);
     let (mut shared_both, mut independent_both) = (0u64, 0u64);
     for _ in 0..pairs {
-        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
         let a = biased_i128_sample(lo, hi, &mut rng, params).unwrap();
         let b = biased_i128_sample(lo, hi, &mut rng, params).unwrap();
         if interesting_hit(a) && interesting_hit(b) {
@@ -888,9 +888,9 @@ fn swarm_shared_parameters_correlate_operand_extremeness() {
         }
     }
     for _ in 0..pairs {
-        let pa = GenerationParameters::draw(&mut rng).unwrap();
+        let pa = GenerationParameters::draw(&mut rng).unwrap().integer;
         let a = biased_i128_sample(lo, hi, &mut rng, pa).unwrap();
-        let pb = GenerationParameters::draw(&mut rng).unwrap();
+        let pb = GenerationParameters::draw(&mut rng).unwrap().integer;
         let b = biased_i128_sample(lo, hi, &mut rng, pb).unwrap();
         if interesting_hit(a) && interesting_hit(b) {
             independent_both += 1;
@@ -917,7 +917,7 @@ fn generation_parameters_draw_is_valid_lumpy_and_mostly_normal() {
     let total = 100_000;
     let (mut endpoint_heavy, mut endpoint_negligible, mut middle_dominant) = (0u64, 0u64, 0u64);
     for _ in 0..total {
-        let p = GenerationParameters::draw(&mut rng).unwrap();
+        let p = GenerationParameters::draw(&mut rng).unwrap().integer;
         for (name, v) in [
             ("endpoint", p.endpoint_probability),
             ("interesting", p.interesting_probability),
@@ -956,6 +956,109 @@ fn generation_parameters_draw_is_valid_lumpy_and_mostly_normal() {
     );
 }
 
+fn float_weights(f: &FloatGenerationParameters) -> [f64; 18] {
+    [
+        f.endpoint_probability,
+        f.near_zero_probability,
+        f.subnormal_probability,
+        f.near_one_probability,
+        f.near_minus_one_probability,
+        f.integer_probability,
+        f.half_integer_probability,
+        f.near_max_for_add_probability,
+        f.near_max_for_mul_probability,
+        f.near_sqrt_min_positive_probability,
+        f.nan_probability,
+        f.infinity_probability,
+        f.max_magnitude_probability,
+        f.max_exact_integer_probability,
+        f.signed_zero_probability,
+        f.binade_edge_probability,
+        f.non_dyadic_probability,
+        f.uniform_probability,
+    ]
+}
+
+/// The float weights come from their own `DIRICHLET_ALPHA_FLOAT_*` concentrations
+/// — defaults at those means, draws on the simplex — and are drawn independently
+/// of the integer weights, so a case's float mix is not a copy of its integer mix.
+#[test]
+fn float_generation_parameters_follow_their_own_alphas_and_draw_independently() {
+    let int_default = IntegerGenerationParameters::default();
+    let float_default = FloatGenerationParameters::default();
+    let alphas = [
+        DIRICHLET_ALPHA_FLOAT_ENDPOINT,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+        DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MINUS_ONE,
+        DIRICHLET_ALPHA_FLOAT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE,
+        DIRICHLET_ALPHA_FLOAT_NAN,
+        DIRICHLET_ALPHA_FLOAT_INFINITY,
+        DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
+        DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+        DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
+        DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
+        DIRICHLET_ALPHA_FLOAT_UNIFORM,
+    ];
+    let alpha_total: f64 = alphas.iter().sum();
+    let defaults = float_weights(&float_default);
+    for (i, (&w, &alpha)) in defaults.iter().zip(alphas.iter()).enumerate() {
+        assert_eq!(w, alpha / alpha_total, "float default weight {i}");
+    }
+    assert_eq!(
+        GenerationParameters::default(),
+        GenerationParameters {
+            integer: int_default,
+            float: float_default,
+        }
+    );
+
+    let mut rng = EngineRng::seeded(78);
+    let total = 10_000;
+    let mut differ = 0u64;
+    let mut float_endpoint_sum = 0.0;
+    for _ in 0..total {
+        let p = GenerationParameters::draw(&mut rng).unwrap();
+        let f = p.float;
+        let weights = float_weights(&f);
+        for (i, &v) in weights.iter().enumerate() {
+            assert!(
+                (0.0..=1.0).contains(&v),
+                "float weight {i} = {v} out of [0, 1]"
+            );
+        }
+        let mass: f64 = weights.iter().sum();
+        assert!(
+            (mass - 1.0).abs() <= 1e-9,
+            "float weights sum to {mass}, expected 1"
+        );
+        if f.endpoint_probability != p.integer.endpoint_probability {
+            differ += 1;
+        }
+        float_endpoint_sum += f.endpoint_probability;
+    }
+    assert_eq!(
+        differ,
+        total,
+        "float and integer endpoint weights coincided in {} cases; expected \
+         independent draws",
+        total - differ
+    );
+    let float_endpoint_mean = float_endpoint_sum / total as f64;
+    assert!(
+        (float_endpoint_mean - float_default.endpoint_probability).abs() < 0.01,
+        "float endpoint mean {float_endpoint_mean:.4} far from the Dirichlet mean \
+         {:.4}",
+        float_default.endpoint_probability
+    );
+}
+
 /// `sample_gamma` must have the Gamma distribution's mean and variance (both
 /// equal to the shape), across both the `shape >= 1` path and the `shape < 1`
 /// boost path.
@@ -985,17 +1088,17 @@ fn sample_gamma_matches_distribution_moments() {
     }
 }
 
-/// `sample_dirichlet4` must return a point on the simplex (weights in `[0, 1]`
+/// `sample_dirichlet` must return a point on the simplex (weights in `[0, 1]`
 /// summing to 1) whose component means match the normalised concentrations.
 #[test]
-fn sample_dirichlet4_lands_on_simplex_with_right_means() {
+fn sample_dirichlet_lands_on_simplex_with_right_means() {
     let alphas = [0.08_f64, 0.8, 0.12, 2.2];
     let total_alpha: f64 = alphas.iter().sum();
     let n = 200_000;
     let mut rng = EngineRng::seeded(9999);
     let mut sums = [0.0_f64; 4];
     for _ in 0..n {
-        let w = sample_dirichlet4(alphas, &mut rng).unwrap();
+        let w = sample_dirichlet(alphas, &mut rng).unwrap();
         let s: f64 = w.iter().sum();
         assert!((s - 1.0).abs() < 1e-9, "weights sum to {s}, not 1");
         for (acc, &wi) in sums.iter_mut().zip(w.iter()) {
@@ -1110,7 +1213,7 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let mut at_max = 0;
     let mut integral = 0;
     for _ in 0..total {
-        let v = biased_float_sample(&fc, &mut rng).unwrap();
+        let v = biased_float_sample(&fc, &mut rng, FloatGenerationParameters::default()).unwrap();
         assert!(v.is_finite(), "drew non-finite {v}");
         if v.abs() == f64::MAX {
             at_max += 1;
@@ -1137,7 +1240,7 @@ fn biased_integer_sample_narrow_range_uses_uniform_fallback() {
     let mut seen_zero = false;
     let mut seen_one = false;
     for _ in 0..200 {
-        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
         let v = biased_i128_sample(0, 1, &mut rng, params).unwrap();
         assert!((0..=1).contains(&v), "out of range: {v}");
         match v {
@@ -1163,7 +1266,7 @@ fn biased_integer_sample_erased_small_width_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(21);
     for _ in 0..500 {
-        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
         let v = biased_integer_sample(&kind, &mut rng, params).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
@@ -1182,7 +1285,7 @@ fn biased_integer_sample_erased_bigint_beyond_i128_stays_in_range() {
     };
     let mut rng = EngineRng::seeded(22);
     for _ in 0..500 {
-        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
         let v = biased_integer_sample(&kind, &mut rng, params).unwrap();
         assert!(kind.validate(&v), "out of range: {v:?}");
     }
@@ -1219,7 +1322,7 @@ fn biased_integer_sample_erased_bigint_single_value() {
     };
     let mut rng = EngineRng::seeded(23);
     for _ in 0..20 {
-        let params = GenerationParameters::draw(&mut rng).unwrap();
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
         assert_eq!(
             biased_integer_sample(&kind, &mut rng, params).unwrap(),
             fixed.clone()

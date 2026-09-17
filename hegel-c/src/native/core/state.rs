@@ -24,7 +24,16 @@ use super::choices::{
 use super::float_index::index_to_float;
 use super::{
     BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
-    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_ENDPOINT,
+    DIRICHLET_ALPHA_FLOAT_HALF_INTEGER, DIRICHLET_ALPHA_FLOAT_INFINITY,
+    DIRICHLET_ALPHA_FLOAT_INTEGER, DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER,
+    DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE, DIRICHLET_ALPHA_FLOAT_NAN,
+    DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD, DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL,
+    DIRICHLET_ALPHA_FLOAT_NEAR_MINUS_ONE, DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+    DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE, DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+    DIRICHLET_ALPHA_FLOAT_NON_DYADIC, DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+    DIRICHLET_ALPHA_FLOAT_SUBNORMAL, DIRICHLET_ALPHA_FLOAT_UNIFORM, DIRICHLET_ALPHA_INTERESTING,
+    DIRICHLET_ALPHA_MIDDLE,
 };
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
@@ -416,10 +425,14 @@ fn sample_gamma(shape: f64, rng: &mut EngineRng) -> Result<f64, InternalError> {
     }
 }
 
-/// Draw a point on the 4-simplex from a Dirichlet with the given concentrations
-/// (via normalised independent Gamma variates). Returns weights that sum to 1.
-fn sample_dirichlet4(alphas: [f64; 4], rng: &mut EngineRng) -> Result<[f64; 4], InternalError> {
-    let mut g = [0.0f64; 4];
+/// Draw a point on the `N`-simplex from a Dirichlet with the given
+/// concentrations (via normalised independent Gamma variates). Returns weights
+/// that sum to 1.
+fn sample_dirichlet<const N: usize>(
+    alphas: [f64; N],
+    rng: &mut EngineRng,
+) -> Result<[f64; N], InternalError> {
+    let mut g = [0.0f64; N];
     for (slot, &alpha) in g.iter_mut().zip(alphas.iter()) {
         *slot = sample_gamma(alpha, rng)?;
     }
@@ -428,12 +441,12 @@ fn sample_dirichlet4(alphas: [f64; 4], rng: &mut EngineRng) -> Result<[f64; 4], 
 
 /// Normalise non-negative weights so they sum to 1. If every weight is zero
 /// (all Gammas underflowed — only possible when every concentration is below 1,
-/// which the caller's do not do), falls back to an even split rather than
+/// which the callers' do not do), falls back to an even split rather than
 /// dividing by zero.
-fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
+fn normalize_to_simplex<const N: usize>(mut g: [f64; N]) -> [f64; N] {
     let sum: f64 = g.iter().sum();
     if sum <= 0.0 {
-        return [0.25; 4];
+        return [1.0 / N as f64; N];
     }
     for slot in &mut g {
         *slot /= sum;
@@ -441,13 +454,196 @@ fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
     g
 }
 
-/// Per-test-case *swarm* parameters: the mixture weights of the four value
-/// categories a wide-range integer draw chooses between — endpoints, curated
-/// interesting values, the diffuse large-constant pool, and the ordinary middle
-/// distribution. Drawn once at the start of each generated test case (see
-/// [`Self::draw`]) and held constant across every draw and every clone-stream of
-/// that case. The middle weight is implicit: `1 - endpoint - interesting -
-/// diffuse`.
+/// The mean of [`sample_dirichlet`] with these concentrations: each over their
+/// total.
+fn dirichlet_mean<const N: usize>(alphas: [f64; N]) -> [f64; N] {
+    let total: f64 = alphas.iter().sum();
+    alphas.map(|alpha| alpha / total)
+}
+
+/// The mixture weights of the four value categories a wide-range integer draw
+/// chooses between — endpoints, curated interesting values, the diffuse
+/// large-constant pool, and the ordinary middle distribution. The middle weight
+/// is implicit: `1 - endpoint - interesting - diffuse`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntegerGenerationParameters {
+    /// Probability a wide-range draw returns a range endpoint (`min`, `max`,
+    /// `min + 1`, `max - 1`).
+    pub endpoint_probability: f64,
+    /// Probability a wide-range draw returns a curated `INTERESTING_INTEGERS`
+    /// value in range (zero, ±1, small magnitudes, powers of two, type limits).
+    pub interesting_probability: f64,
+    /// Probability a wide-range draw returns a diffuse large constant.
+    pub diffuse_probability: f64,
+}
+
+impl IntegerGenerationParameters {
+    /// Dirichlet concentrations, in the order the categories are destructured
+    /// by [`Self::draw`]: endpoint, interesting, diffuse, middle.
+    const ALPHAS: [f64; 4] = [
+        DIRICHLET_ALPHA_ENDPOINT,
+        DIRICHLET_ALPHA_INTERESTING,
+        DIRICHLET_ALPHA_DIFFUSE,
+        DIRICHLET_ALPHA_MIDDLE,
+    ];
+
+    /// Draw a fresh set of integer weights from the Dirichlet over the four
+    /// value categories.
+    pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
+        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet(Self::ALPHAS, rng)?;
+        Ok(IntegerGenerationParameters {
+            endpoint_probability: endpoint,
+            interesting_probability: interesting,
+            diffuse_probability: diffuse,
+        })
+    }
+}
+
+impl Default for IntegerGenerationParameters {
+    /// The mean of [`Self::draw`]; see [`GenerationParameters::default`].
+    fn default() -> Self {
+        let [endpoint, interesting, diffuse, _middle] = dirichlet_mean(Self::ALPHAS);
+        IntegerGenerationParameters {
+            endpoint_probability: endpoint,
+            interesting_probability: interesting,
+            diffuse_probability: diffuse,
+        }
+    }
+}
+
+/// The mixture weights of the value categories a float draw chooses between.
+/// Drawn from the `DIRICHLET_ALPHA_FLOAT_*` concentrations, independently of
+/// [`IntegerGenerationParameters`], so the float categories and their
+/// weightings evolve on their own. Unlike the integer weights there is no
+/// implicit remainder: every category, the continuous uniform included, has its
+/// own field, and the fields sum to 1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatGenerationParameters {
+    /// A range endpoint (`min`, `max` and their neighbours).
+    pub endpoint_probability: f64,
+    /// A value in `(-0.1, 0.1)`, without over-weighting its larger magnitudes.
+    pub near_zero_probability: f64,
+    /// A subnormal: nonzero with magnitude below `MIN_POSITIVE`.
+    pub subnormal_probability: f64,
+    /// A value within a few ulps of `1`.
+    pub near_one_probability: f64,
+    /// A value within a few ulps of `-1`.
+    pub near_minus_one_probability: f64,
+    /// An integer-valued float, uniformly.
+    pub integer_probability: f64,
+    /// A half-integer (`0.5`, `1.5`, …), uniformly.
+    pub half_integer_probability: f64,
+    /// A magnitude in `[2^1023, MAX]`, so that adding two overflows.
+    pub near_max_for_add_probability: f64,
+    /// A magnitude near `sqrt(MAX)`, so that multiplying two overflows.
+    pub near_max_for_mul_probability: f64,
+    /// A magnitude near `sqrt(MIN_POSITIVE)`, so that multiplying two underflows.
+    pub near_sqrt_min_positive_probability: f64,
+    /// Any NaN.
+    pub nan_probability: f64,
+    /// `±INFINITY`.
+    pub infinity_probability: f64,
+    /// `±MAX`.
+    pub max_magnitude_probability: f64,
+    /// The largest exactly-representable integer, `±2^53`.
+    pub max_exact_integer_probability: f64,
+    /// `±0`.
+    pub signed_zero_probability: f64,
+    /// A power of two or its predecessor: the edges of a binade.
+    pub binade_edge_probability: f64,
+    /// A value with no finite binary expansion, such as `0.1`.
+    pub non_dyadic_probability: f64,
+    /// The continuous uniform distribution over the range.
+    pub uniform_probability: f64,
+}
+
+impl FloatGenerationParameters {
+    /// Dirichlet concentrations, in the field order of the struct, which is also
+    /// the order [`Self::from_weights`] destructures. A new category is a new
+    /// constant, a new slot here, a new field above, and a line in that
+    /// conversion.
+    const ALPHAS: [f64; 18] = [
+        DIRICHLET_ALPHA_FLOAT_ENDPOINT,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+        DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MINUS_ONE,
+        DIRICHLET_ALPHA_FLOAT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE,
+        DIRICHLET_ALPHA_FLOAT_NAN,
+        DIRICHLET_ALPHA_FLOAT_INFINITY,
+        DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
+        DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+        DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
+        DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
+        DIRICHLET_ALPHA_FLOAT_UNIFORM,
+    ];
+
+    /// Draw a fresh set of float weights from the Dirichlet over the float
+    /// value categories.
+    pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
+        Ok(Self::from_weights(sample_dirichlet(Self::ALPHAS, rng)?))
+    }
+
+    fn from_weights(weights: [f64; 18]) -> Self {
+        let [
+            endpoint,
+            near_zero,
+            subnormal,
+            near_one,
+            near_minus_one,
+            integer,
+            half_integer,
+            near_max_for_add,
+            near_max_for_mul,
+            near_sqrt_min_positive,
+            nan,
+            infinity,
+            max_magnitude,
+            max_exact_integer,
+            signed_zero,
+            binade_edge,
+            non_dyadic,
+            uniform,
+        ] = weights;
+        FloatGenerationParameters {
+            endpoint_probability: endpoint,
+            near_zero_probability: near_zero,
+            subnormal_probability: subnormal,
+            near_one_probability: near_one,
+            near_minus_one_probability: near_minus_one,
+            integer_probability: integer,
+            half_integer_probability: half_integer,
+            near_max_for_add_probability: near_max_for_add,
+            near_max_for_mul_probability: near_max_for_mul,
+            near_sqrt_min_positive_probability: near_sqrt_min_positive,
+            nan_probability: nan,
+            infinity_probability: infinity,
+            max_magnitude_probability: max_magnitude,
+            max_exact_integer_probability: max_exact_integer,
+            signed_zero_probability: signed_zero,
+            binade_edge_probability: binade_edge,
+            non_dyadic_probability: non_dyadic,
+            uniform_probability: uniform,
+        }
+    }
+}
+
+impl Default for FloatGenerationParameters {
+    /// The mean of [`Self::draw`]; see [`GenerationParameters::default`].
+    fn default() -> Self {
+        Self::from_weights(dirichlet_mean(Self::ALPHAS))
+    }
+}
+
+/// Per-test-case *swarm* parameters: one set of category weights for integer
+/// draws and one for float draws. Drawn once at the start of each generated
+/// test case (see [`Self::draw`]) and held constant across every draw and every
+/// clone-stream of that case.
 ///
 /// They only ever change *how likely* each category is, never *which* values are
 /// reachable. Because hegel records typed choice *values* and the samplers are
@@ -460,53 +656,28 @@ fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
 /// concentrates on one special category. An endpoint-heavy case draws both
 /// operands of `x + y` from `{min, max, …}`, so their sum overflows about half
 /// the time — the correlation a fixed per-value probability can't produce.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct GenerationParameters {
-    /// Probability a wide-range draw returns a range endpoint (`min`, `max`,
-    /// `min + 1`, `max - 1`).
-    pub endpoint_probability: f64,
-    /// Probability a wide-range draw returns a curated `INTERESTING_INTEGERS`
-    /// value in range (zero, ±1, small magnitudes, powers of two, type limits).
-    pub interesting_probability: f64,
-    /// Probability a wide-range draw returns a diffuse large constant.
-    pub diffuse_probability: f64,
+    /// Category weights for wide-range integer draws.
+    pub integer: IntegerGenerationParameters,
+    /// Category weights for float draws.
+    pub float: FloatGenerationParameters,
 }
 
 impl GenerationParameters {
-    /// Draw a fresh set of parameters for one test case from the Dirichlet over
-    /// the four value categories.
+    /// Draw a fresh set of parameters for one test case: independent Dirichlet
+    /// draws for the integer and float weights.
+    ///
+    /// [`Self::default`] is the fixed fallback used only when no test-case
+    /// parameters have been drawn (a replay-only test case never samples, so it
+    /// never consults these). Its values are the mean of this draw, so any
+    /// accidental use still produces a reasonable distribution rather than a
+    /// degenerate one.
     pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
-        let alphas = [
-            DIRICHLET_ALPHA_ENDPOINT,
-            DIRICHLET_ALPHA_INTERESTING,
-            DIRICHLET_ALPHA_DIFFUSE,
-            DIRICHLET_ALPHA_MIDDLE,
-        ];
-        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet4(alphas, rng)?;
         Ok(GenerationParameters {
-            endpoint_probability: endpoint,
-            interesting_probability: interesting,
-            diffuse_probability: diffuse,
+            integer: IntegerGenerationParameters::draw(rng)?,
+            float: FloatGenerationParameters::draw(rng)?,
         })
-    }
-}
-
-impl Default for GenerationParameters {
-    /// A fixed fallback used only when no test-case parameters have been drawn
-    /// (a replay-only test case never samples, so it never consults these). The
-    /// values are the mean of [`Self::draw`] — each category's Dirichlet
-    /// concentration over their total — so any accidental use still produces a
-    /// reasonable distribution rather than a degenerate one.
-    fn default() -> Self {
-        let total = DIRICHLET_ALPHA_ENDPOINT
-            + DIRICHLET_ALPHA_INTERESTING
-            + DIRICHLET_ALPHA_DIFFUSE
-            + DIRICHLET_ALPHA_MIDDLE;
-        GenerationParameters {
-            endpoint_probability: DIRICHLET_ALPHA_ENDPOINT / total,
-            interesting_probability: DIRICHLET_ALPHA_INTERESTING / total,
-            diffuse_probability: DIRICHLET_ALPHA_DIFFUSE / total,
-        }
     }
 }
 
@@ -523,7 +694,7 @@ impl Default for GenerationParameters {
 pub(crate) fn biased_integer_sample(
     ic: &IntegerChoice,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> Result<BigInt, InternalError> {
     Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
         (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng, params)?),
@@ -566,7 +737,7 @@ fn narrow_nasty_sample(
 /// Narrow ranges use [`narrow_nasty_sample`]. Wide ranges (width at least
 /// [`CURATED_MIN_WIDTH`], or wider than `i128`) choose one of four value
 /// categories from a single decision draw `u`, weighted by this case's
-/// [`GenerationParameters`]:
+/// [`IntegerGenerationParameters`]:
 ///
 ///   * *endpoints* — `{min, max, min + 1, max - 1}`;
 ///   * *interesting* — `INTERESTING_INTEGERS` in range;
@@ -579,7 +750,7 @@ fn biased_i128_sample(
     min_value: i128,
     max_value: i128,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> Result<i128, InternalError> {
     if min_value == max_value {
         return Ok(min_value);
@@ -645,13 +816,13 @@ fn biased_i128_sample(
 /// Boundary-biased sample for an integer range too wide for `i128` (a `BigInt`
 /// choice, or a `u128` range past `i128::MAX`). Uses the same four-category
 /// mixture as [`biased_i128_sample`] (endpoints, interesting, diffuse, middle),
-/// weighted by this case's [`GenerationParameters`]; the middle draws a
+/// weighted by this case's [`IntegerGenerationParameters`]; the middle draws a
 /// roughly-uniform value via rejection sampling over the span's bit length.
 fn biguint_sample_in_range(
     min: &BigInt,
     max: &BigInt,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> BigInt {
     if min == max {
         return min.clone();
@@ -752,9 +923,13 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// plus the user's `min_value`/`max_value`) with probability proportional to
 /// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
 /// otherwise.
+///
+/// The case's [`FloatGenerationParameters`] are accepted for parity with the
+/// integer sampler; the mixture they describe is not applied yet.
 pub(crate) fn biased_float_sample(
     fc: &FloatChoice,
     rng: &mut EngineRng,
+    _params: FloatGenerationParameters,
 ) -> Result<f64, InternalError> {
     const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
     let candidates = [
@@ -1946,7 +2121,7 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let params = self.family.generation_parameters();
+        let params = self.family.generation_parameters().integer;
         let v =
             self.draw_integer_from(&kind, |kind, rng| biased_integer_sample(kind, rng, params))?;
 
@@ -2208,6 +2383,7 @@ impl NativeTestCase {
             smallest_nonzero_magnitude,
         };
 
+        let params = self.family.generation_parameters().float;
         let (v, was_forced) = self.resolve_choice(
             || kind.simplest(),
             || kind.unit(),
@@ -2215,7 +2391,7 @@ impl NativeTestCase {
                 ChoiceValue::Float(f) if kind.validate(*f) => Some(*f),
                 _ => None,
             },
-            |rng| biased_float_sample(&kind, rng),
+            |rng| biased_float_sample(&kind, rng, params),
         )?;
 
         self.nodes.push(ChoiceNode::float(kind, v, was_forced));

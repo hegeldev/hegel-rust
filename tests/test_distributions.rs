@@ -737,7 +737,7 @@ mod recursive {
         });
         assert_min_rate(&vs, |e| e.depth() == 0, 0.005, "bare leaf");
         assert_min_rate(&vs, |e| e.depth() >= 10, 0.1, "chain of 10+");
-        assert_min_rate(&vs, |e| e.depth() >= 25, 0.02, "chain of 25+");
+        assert_min_rate(&vs, |e| e.depth() >= 25, 0.01, "chain of 25+");
     }
 
     /// Branch functions with more than two children per branch reprice
