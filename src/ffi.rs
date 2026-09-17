@@ -983,6 +983,8 @@ impl CTestCase {
     /// Register a state machine. Each rule is assigned to a concurrency
     /// group by `rule_groups` (parallel to `rule_names`); group ids are
     /// arbitrary and the machine has one group per distinct value. Each
+    /// rule is given a selection weight by `rule_weights` (parallel to
+    /// `rule_names`; finite and strictly positive). Each
     /// invariant is flagged always-check or sampled by
     /// `invariant_always_check` (parallel to `invariant_names`). The
     /// engine draws the concurrency level in
@@ -994,6 +996,7 @@ impl CTestCase {
         &self,
         rule_names: &[&str],
         rule_groups: &[i64],
+        rule_weights: &[f64],
         invariant_names: &[&str],
         invariant_always_check: &[bool],
         min_concurrency: i64,
@@ -1014,6 +1017,7 @@ impl CTestCase {
                 self.raw,
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
+                rule_weights.as_ptr(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_always_check.as_ptr(),

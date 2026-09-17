@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.46.0 - 2026-09-16
+
+This release adds rule weights to stateful testing. `#[rule(weight = ...)]` hints that a rule should be executed more often than the machine's other rules. It is not a distributional guarantee. `#[rule]` has weight 1. Integer and float literals are both accepted, and the weight must be finite and positive:
+
+```rust
+#[hegel::state_machine]
+impl Cache {
+    #[rule(weight = 5)]
+    fn get(&mut self, tc: TestCase) { /* ... */ }
+
+    #[rule]
+    fn evict_everything(&mut self, _: TestCase) { /* ... */ }
+}
+```
+
+`Rule::new` and `ConcurrentRule::new` take the weight as an argument.
+
+Arguments to `#[rule]` on a sequential state machine are now checked, so `#[rule(bad_arg = "...")]` on a `#[hegel::state_machine]` is a compile error.
+
+## 0.45.6 - 2026-09-16
+
+This patch fixes a failing test being reported to Antithesis twice. Once the engine had found and shrunk a counterexample, the final replay that re-raises the failure was reported as its own verdict, so `sdk.jsonl` carried the test's assertion twice (three or more times when `report_multiple_failures` found several distinct failures). Inside Antithesis a run now writes its assertion exactly once, whatever its outcome. `#[hegel::reproduce_failure]` still reports the replay it runs, since that replay is the whole test.
+
 ## 0.45.5 - 2026-09-15
 
 This release updates the `hegeltest-c` dependency to 0.42.4.

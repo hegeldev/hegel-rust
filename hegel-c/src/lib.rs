@@ -3326,7 +3326,10 @@ unsafe fn state_machine_ref<'a>(
 /// Register a *state machine* for engine-owned stateful (rule-based)
 /// testing, sequential or concurrent: `num_rules` rules — each assigned to
 /// a concurrency group by `rule_groups`, an array of group ids parallel to
-/// `rule_names` — and `num_invariants` invariants, with names as
+/// `rule_names`, and given a selection weight by `rule_weights`, an array
+/// of `num_rules` finite, strictly positive doubles parallel to
+/// `rule_names` (NULL for all-equal weights) — and `num_invariants`
+/// invariants, with names as
 /// NUL-terminated UTF-8, plus concurrency bounds. `invariant_always_check`
 /// is an array of `num_invariants` flags parallel to `invariant_names`
 /// (NULL for all-false): `hegel_state_machine_should_check_invariant`
@@ -3352,7 +3355,11 @@ unsafe fn state_machine_ref<'a>(
 ///
 /// The engine owns rule selection — including swarm testing, where each
 /// worker enables a random subset of rules (at least one per group) and
-/// selection draws only from that subset. The caller drives execution in
+/// selection draws only from that subset, with probability proportional
+/// to `rule_weights` among the enabled rules of the current group. A
+/// rule's realized frequency therefore depends on which other rules its
+/// worker has enabled: the weights are a guide, not a guarantee. The
+/// caller drives execution in
 /// rounds: on the root test-case handle it asks
 /// `hegel_state_machine_next_group` whether another round should run, then
 /// each worker asks `hegel_state_machine_next_rule` which rule to run and
@@ -3400,15 +3407,16 @@ unsafe fn state_machine_ref<'a>(
 /// exhausted (the caller should abort the body and call
 /// `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
 /// `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
-/// is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
-/// `max_concurrency < min_concurrency`, `step_count < 1`, or on null /
-/// non-UTF-8 names.
+/// is `HEGEL_STATE_MACHINE_DONE`, an entry of `rule_weights` is not finite
+/// and positive, `min_concurrency < 1`, `max_concurrency < min_concurrency`,
+/// `step_count < 1`, or on null / non-UTF-8 names.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_new_state_machine(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     rule_names: *const *const c_char,
     rule_groups: *const i64,
+    rule_weights: *const f64,
     num_rules: usize,
     invariant_names: *const *const c_char,
     invariant_always_check: *const bool,
@@ -3464,6 +3472,11 @@ pub unsafe extern "C" fn hegel_new_state_machine(
         );
         return HEGEL_E_INVALID_ARG;
     }
+    let rule_weights: Vec<f64> = if num_rules == 0 || rule_weights.is_null() {
+        vec![1.0; num_rules]
+    } else {
+        unsafe { core::slice::from_raw_parts(rule_weights, num_rules) }.to_vec()
+    };
     let invariants = match unsafe {
         names_from_c_array(
             ctx,
@@ -3485,6 +3498,7 @@ pub unsafe extern "C" fn hegel_new_state_machine(
     match tc.stream.new_state_machine(
         rules,
         rule_groups,
+        rule_weights,
         invariants,
         invariant_always_check,
         min_concurrency,
