@@ -151,11 +151,13 @@ impl<'a> Shrinker<'a> {
     /// admits one step usually admits many — the value passes that ran
     /// earlier in the iteration saw a target another pass has since
     /// changed — and taking them one per pass step would spend the
-    /// improvement cap on unit moves before those passes run again.
+    /// improvement cap on unit moves before those passes run again. A
+    /// node the accepted run left without an index descends nowhere.
     async fn descend_index(&mut self, i: usize) -> ShrinkResult<()> {
-        let Some(base) = self.current_nodes[i].data.to_index()? else {
-            return Ok(());
-        };
+        let base = self.current_nodes[i]
+            .data
+            .to_index()?
+            .unwrap_or_else(BigUint::zero);
         let mut search = FindInteger::new();
         while let Some(n) = search.probe() {
             let step = BigUint::from(n as u64);
