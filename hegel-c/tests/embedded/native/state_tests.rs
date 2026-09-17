@@ -1262,7 +1262,7 @@ fn weighted_boolean_sample_respects_probability() {
 }
 
 #[test]
-fn float_clamp_reroutes_excluded_magnitude_band() {
+fn float_restrict_and_redraw_reroutes_excluded_magnitude_band() {
     let fc = FloatChoice {
         min_value: -1e-307,
         max_value: 1e-307,
@@ -1271,7 +1271,7 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
     let raw = f64::from_bits(((1u64 << 52) - 1) / 2);
-    let clamped = float_clamp(&fc, raw);
+    let clamped = float_restrict_and_redraw(&fc, raw);
     assert_eq!(clamped, f64::MIN_POSITIVE);
 
     let fc_neg = FloatChoice {
@@ -1282,12 +1282,12 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
     let raw_neg = f64::from_bits((((1u64 << 52) - 1) / 10) * 9);
-    let clamped_neg = float_clamp(&fc_neg, raw_neg);
+    let clamped_neg = float_restrict_and_redraw(&fc_neg, raw_neg);
     assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
 }
 
 #[test]
-fn float_clamp_with_infinite_bounds_stays_finite() {
+fn float_restrict_and_redraw_with_infinite_bounds_stays_finite() {
     let fc = FloatChoice {
         min_value: f64::NEG_INFINITY,
         max_value: f64::INFINITY,
@@ -1296,10 +1296,10 @@ fn float_clamp_with_infinite_bounds_stays_finite() {
         smallest_nonzero_magnitude: f64::from(f32::from_bits(1)),
     };
     for raw in [5e-324, 1e-100, -3e-320, f64::from_bits(12345)] {
-        let clamped = float_clamp(&fc, raw);
+        let clamped = float_restrict_and_redraw(&fc, raw);
         assert!(
             clamped.is_finite(),
-            "float_clamp({raw:e}) produced {clamped}"
+            "float_restrict_and_redraw({raw:e}) produced {clamped}"
         );
     }
 }
