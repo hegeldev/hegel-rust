@@ -3,11 +3,12 @@
 //! `tokens = vecs((kind ∈ [0, 2], k ∈ [0, 3])).max_size(10)`: kind 0 is `Begin(k)`, 1 is `End(k)`,
 //! 2 is `Payload(k)`. The property fails iff the list is well-formed (every `End(k)` closes the
 //! innermost open `Begin(k)`, nothing stays open) and some non-zero payload sits inside a block.
-//! Shortlex ideal `[Begin(0), Payload(1), End(0)]`. The dead enclosing blocks are deleted; what
-//! stalls is the surviving block's label, which can only be lowered together with its partner,
-//! and the `End` kind `1` / `Payload` kind `2` share the labels' values so `shrink_duplicates`'
-//! value-keyed group turns the payload into a `Begin` and is rejected. `distilled_labels_with_tag`
-//! is the same stall in six draws. A human writes the same.
+//! Shortlex ideal `[Begin(0), Payload(1), End(0)]`. The dead enclosing blocks are deleted; the
+//! surviving block's label can only be lowered together with its partner, and other nodes share
+//! its value: at `2` the `Payload`'s kind, which has other bounds, and at `1` the `End`'s kind
+//! and the payload value itself, which has the labels' own bounds — so `shrink_duplicates` has
+//! to retry the group with a member left out, not just split by constraints.
+//! `distilled_labels_with_tag` is the same shape in six draws. A human writes the same.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -94,7 +95,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: duplicate groups are keyed by value alone and the pair pass reaches only three integer entries"]
 fn surviving_block_label_is_lowered_to_zero() {
     assert_shrinks_to(
         &vec![Token::Begin(0), Token::Payload(1), Token::End(0)],

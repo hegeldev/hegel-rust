@@ -3,11 +3,11 @@
 //! Triple: `a ∈ [0, 3]`, `x ∈ [0, 100]`, `b ∈ [0, 3]`, `y ∈ [0, 100]`, `c ∈ [0, 3]`; fails iff
 //! `a == b == c` and `x != 0`; ideal `(0, 1, 0, 0, 0)`. `lower_integers_together` moves pairs,
 //! so only `shrink_duplicates` can lower a triple, and the payload `1` joins its value-keyed
-//! group when the labels sit at `1`. Flagged: `a ∈ [0, 3]`, `flag: bool`, `x, y, z ∈ [0, 100]`,
-//! `b ∈ [0, 3]`; fails iff `a == b`, `flag` and `x >= 2`; ideal `(0, true, 2, 0, 0, 0)`. The
-//! `true` does not join an integer group (kinds are compared), so labels that start at `1` get
-//! through; those at `2` stall on the payload `2`. The contamination is strictly same-kind,
-//! same-value. A human writes the same.
+//! group when the labels sit at `1` until the group is retried split by constraints. Flagged:
+//! `a ∈ [0, 3]`, `flag: bool`, `x, y, z ∈ [0, 100]`, `b ∈ [0, 3]`; fails iff `a == b`, `flag`
+//! and `x >= 2`; ideal `(0, true, 2, 0, 0, 0)`. The `true` does not join an integer group
+//! (kinds are compared), so only labels that start at `2` meet a decoy, the payload `2`. A human
+//! writes the same.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -67,7 +67,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: duplicate groups are keyed by value alone and the pair pass reaches only three integer entries"]
 fn three_labels_are_lowered_to_zero() {
     assert_shrinks_to(
         &(0, 1, 0, 0, 0),
@@ -79,7 +78,6 @@ fn three_labels_are_lowered_to_zero() {
 }
 
 #[test]
-#[ignore = "shrinker: duplicate groups are keyed by value alone and the pair pass reaches only three integer entries"]
 fn labels_with_a_boolean_between_are_lowered_past_the_payload() {
     assert_shrinks_to(
         &(0, true, 2, 0, 0, 0),

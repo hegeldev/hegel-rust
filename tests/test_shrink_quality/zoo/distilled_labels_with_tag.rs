@@ -3,11 +3,13 @@
 //!
 //! `tag ∈ [0, 2]`, `open ∈ [0, 3]`, three fields `payload, a, b ∈ [0, 100]`, `close ∈ [0, 3]`;
 //! the property fails iff `tag == 2`, `open == close` and the payload is non-zero. Shortlex ideal
-//! `(2, 0, 1, 0, 0, 0)`. Two passes lower pinned labels together and each has a blind spot here:
-//! `shrink_duplicates` groups nodes by value alone, so with the labels at `2` the tag joins the
-//! group (at `1`, the payload does) and the all-or-nothing replacement is rejected;
-//! `lower_integers_together` only pairs integer nodes at most three entries apart, and these are
-//! four. `distilled_matching_labels` is the control without the decoy. A human writes the same.
+//! `(2, 0, 1, 0, 0, 0)`. The labels can only be lowered together, and `shrink_duplicates`
+//! groups nodes by value: with the labels at `2` the tag joins the group (at `1`, the payload
+//! does), so the whole-group replacement is rejected and the group has to be retried without
+//! the decoy — split by constraints here, since the tag and the payload have other bounds.
+//! `lower_integers_together` does not reach the pair: it pairs integer nodes at most three
+//! entries apart, and these are four. `distilled_matching_labels` is the control without the
+//! decoy. A human writes the same.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -43,7 +45,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: duplicate groups are keyed by value alone and the pair pass reaches only three integer entries"]
 fn labels_are_lowered_past_the_tag_value() {
     assert_shrinks_to(
         &(2, 0, 1, 0, 0, 0),

@@ -3,10 +3,10 @@
 //! `open ∈ [0, 3]`, then `children = vecs((name ∈ [0, 3], value ∈ [0, 100])).max_size(6)`, then
 //! `close ∈ [0, 3]`; the property fails iff `open == close` and at least two children carry a
 //! non-zero value. Shortlex ideal `(0, [(0, 1), (0, 1)], 0)`. With the labels at `1` the two
-//! payload `1`s join `shrink_duplicates`' value-keyed group, and with two children between them
-//! the labels are five integer entries apart, beyond `lower_integers_together`'s reach of three.
-//! The one-child control (ideal `(0, [(0, 1)], 0)`) passes: the labels are then three apart. A
-//! human writes the same.
+//! payload `1`s join `shrink_duplicates`' value-keyed group, so the labels come down only when
+//! the group is retried split by constraints; with two children between them the labels are five
+//! integer entries apart, beyond `lower_integers_together`'s reach of three. The one-child
+//! control (ideal `(0, [(0, 1)], 0)`) has the labels three apart. A human writes the same.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -66,7 +66,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: duplicate groups are keyed by value alone and the pair pass reaches only three integer entries"]
 fn labels_around_two_children_are_lowered_to_zero() {
     assert_shrinks_to(
         &(0, vec![(0, 1), (0, 1)], 0),

@@ -9,6 +9,10 @@ use super::search::{BinSearchDownBig, FindInteger};
 use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_unwrap};
 
+/// The largest stalled duplicate group `shrink_duplicates` retries with
+/// each member left out in turn; a group of `n` costs `n` more attempts.
+const MAX_LEAVE_ONE_OUT_GROUP: usize = 8;
+
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
 fn low_bits(v: &BigInt, keep: usize) -> BigInt {
     v - &BigInt::from((v >> keep).magnitude() << keep)
@@ -438,6 +442,58 @@ impl<'a> Shrinker<'a> {
             let ic = alloc::sync::Arc::clone(&members[0].1);
 
             absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
+            if self.int_value_bigint(valid[0]) != Some(value.clone()) {
+                continue;
+            }
+            self.shrink_stalled_duplicate_subgroups(&value, &members)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// A duplicate group that would not move as a whole may be two groups
+    /// sharing a value by coincidence: a pair of labels that must stay equal
+    /// and an unrelated node — a tag, a payload — that happens to hold the
+    /// same number. Retry the group split by the members' constraints, and a
+    /// stalled same-constraints group with each member left out in turn.
+    async fn shrink_stalled_duplicate_subgroups(
+        &mut self,
+        value: &BigInt,
+        members: &[(usize, alloc::sync::Arc<IntegerChoice>)],
+    ) -> ShrinkResult<()> {
+        let mut partitions: Vec<(alloc::sync::Arc<IntegerChoice>, Vec<usize>)> = Vec::new();
+        for (i, ic) in members {
+            match partitions.iter_mut().find(|(p_ic, _)| **p_ic == **ic) {
+                Some((_, indices)) => indices.push(*i),
+                None => partitions.push((alloc::sync::Arc::clone(ic), alloc::vec![*i])),
+            }
+        }
+        for (ic, mut indices) in partitions {
+            indices.retain(|&i| self.int_value_bigint(i).as_ref() == Some(value));
+            if indices.len() < 2 {
+                continue;
+            }
+            if indices.len() < members.len() {
+                absorb_node_gone(self.shrink_int_duplicate_group(value, &indices, &ic).await)?;
+                if self.int_value_bigint(indices[0]).as_ref() != Some(value) {
+                    continue;
+                }
+            }
+            if indices.len() < 3 || indices.len() > MAX_LEAVE_ONE_OUT_GROUP {
+                continue;
+            }
+            for left_out in 0..indices.len() {
+                let subset: Vec<usize> = indices
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| k != left_out)
+                    .map(|(_, &i)| i)
+                    .collect();
+                absorb_node_gone(self.shrink_int_duplicate_group(value, &subset, &ic).await)?;
+                if self.int_value_bigint(subset[0]).as_ref() != Some(value) {
+                    break;
+                }
+            }
         }
         Ok(())
     }
