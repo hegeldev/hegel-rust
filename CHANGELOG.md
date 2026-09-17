@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.46.1 - 2026-09-17
+
+This release updates the `hegeltest-c` dependency to 0.43.1.
+
 ## 0.46.0 - 2026-09-16
 
 This release adds rule weights to stateful testing. `#[rule(weight = ...)]` hints that a rule should be executed more often than the machine's other rules. It is not a distributional guarantee. `#[rule]` has weight 1. Integer and float literals are both accepted, and the weight must be finite and positive:

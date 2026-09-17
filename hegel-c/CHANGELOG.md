@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.43.1 - 2026-09-17
+
+Internal refactoring of the engine's float draw code.
+
 ## 0.43.0 - 2026-09-16
 
 This release adds rule weights to state machines. `hegel_new_state_machine` takes a new `rule_weights` parallel to `rule_names`:
