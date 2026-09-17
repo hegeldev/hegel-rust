@@ -956,7 +956,7 @@ fn generation_parameters_draw_is_valid_lumpy_and_mostly_normal() {
     );
 }
 
-fn float_weights(f: &FloatGenerationParameters) -> [f64; 17] {
+fn float_weights(f: &FloatGenerationParameters) -> [f64; 18] {
     [
         f.endpoint_probability,
         f.near_zero_probability,
@@ -974,6 +974,7 @@ fn float_weights(f: &FloatGenerationParameters) -> [f64; 17] {
         f.signed_zero_probability,
         f.binade_edge_probability,
         f.non_dyadic_probability,
+        f.log_uniform_probability,
         f.uniform_probability,
     ]
 }
@@ -1002,6 +1003,7 @@ fn float_generation_parameters_follow_their_own_alphas_and_draw_independently() 
         DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
         DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
         DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
+        DIRICHLET_ALPHA_FLOAT_LOG_UNIFORM,
         DIRICHLET_ALPHA_FLOAT_UNIFORM,
     ];
     let alpha_total: f64 = alphas.iter().sum();
@@ -1794,7 +1796,8 @@ mod float_categories {
     const SIGNED_ZERO: usize = 13;
     const BINADE_EDGE: usize = 14;
     const NON_DYADIC: usize = 15;
-    const UNIFORM: usize = 16;
+    const LOG_UNIFORM: usize = 16;
+    const UNIFORM: usize = 17;
 
     const F32_MAX: f64 = f32::MAX as f64;
     const F32_MIN_POSITIVE: f64 = f32::MIN_POSITIVE as f64;
@@ -1838,7 +1841,7 @@ mod float_categories {
     /// All the mass on one category, so a draw exercises exactly that sampler
     /// or, when it has nothing valid to offer, the fall-through to the uniform.
     fn only(category: usize) -> FloatGenerationParameters {
-        let mut weights = [0.0; 17];
+        let mut weights = [0.0; 18];
         weights[category] = 1.0;
         FloatGenerationParameters::from_weights(weights)
     }
@@ -1909,7 +1912,7 @@ mod float_categories {
     #[test]
     fn every_category_stays_valid_on_every_range() {
         for fc in all_choices() {
-            for category in 0..17 {
+            for category in 0..18 {
                 draws(&fc, only(category), 7 + category as u64, 300);
             }
             draws(&fc, FloatGenerationParameters::default(), 99, 300);
@@ -1924,7 +1927,7 @@ mod float_categories {
     #[test]
     fn singleton_range_only_ever_draws_its_value() {
         let fc = choice(3.5, 3.5);
-        for category in 0..17 {
+        for category in 0..18 {
             for v in category_draws(&fc, category) {
                 assert_eq!(v, 3.5);
             }
@@ -2266,6 +2269,54 @@ mod float_categories {
     }
 
     #[test]
+    fn log_uniform_category_weights_every_binade_above_the_top_ulp() {
+        let vs = category_draws(&choice(0.0, 10.0), LOG_UNIFORM);
+        let ulp_of_ten = 10.0 - float_below(10.0);
+        let mut small = 0;
+        for &v in &vs {
+            assert!((ulp_of_ten..=10.0).contains(&v), "{v:e}");
+            if v < 1e-6 {
+                small += 1;
+            }
+        }
+        let small_fraction = small as f64 / vs.len() as f64;
+        assert!(
+            small_fraction > 0.3,
+            "only {small_fraction} of draws on [0, 10] were below 1e-6"
+        );
+
+        let vs = category_draws(&choice(1e-8, 2e4), LOG_UNIFORM);
+        let below_one = vs.iter().filter(|&&v| v < 1.0).count() as f64 / vs.len() as f64;
+        assert!(below_one > 0.4, "{below_one}");
+        let uniform_below_one = category_draws(&choice(1e-8, 2e4), UNIFORM)
+            .iter()
+            .filter(|&&v| v < 1.0)
+            .count();
+        assert!(uniform_below_one < 5, "{uniform_below_one}");
+
+        let vs = category_draws(&unbounded(), LOG_UNIFORM);
+        let (mut positive, mut negative, mut tiny) = (0, 0, 0);
+        for &v in &vs {
+            assert!(v.is_finite() && v != 0.0, "{v:e}");
+            if v > 0.0 {
+                positive += 1;
+            } else {
+                negative += 1;
+            }
+            if v.abs() < 1e-200 {
+                tiny += 1;
+            }
+        }
+        assert!(positive > 500 && negative > 500, "{positive} / {negative}");
+        assert!(tiny > 200, "{tiny}");
+
+        let ulp_of_one = 1.0 - float_below(1.0);
+        for v in category_draws(&choice(-1.0, 1.0), LOG_UNIFORM) {
+            assert!((ulp_of_one..=1.0).contains(&v.abs()), "{v:e}");
+        }
+    }
+
+    #[test]
     fn uniform_category_is_continuous_on_finite_ranges_and_overflow_safe() {
         let unit = category_draws(&choice(0.0, 1.0), UNIFORM);
         let mean = unit.iter().sum::<f64>() / unit.len() as f64;
@@ -2325,7 +2376,7 @@ mod float_categories {
     #[test]
     fn category_weights_control_the_mix() {
         let fc = choice(0.0, 1.0);
-        let mut weights = [0.0; 17];
+        let mut weights = [0.0; 18];
         weights[INTEGER] = 0.5;
         weights[UNIFORM] = 0.5;
         let half_integers = draws(
@@ -2338,7 +2389,7 @@ mod float_categories {
             / half_integers.len() as f64;
         assert!((integral - 0.5).abs() < 0.03, "{integral}");
 
-        let mut weights = [0.0; 17];
+        let mut weights = [0.0; 18];
         weights[NAN] = 0.25;
         weights[SIGNED_ZERO] = 0.25;
         weights[UNIFORM] = 0.5;

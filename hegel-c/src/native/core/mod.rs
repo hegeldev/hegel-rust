@@ -65,7 +65,7 @@ pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 /// The float categories' Dirichlet concentrations, one per field of
 /// `FloatGenerationParameters`. They all start at the same, deliberately high,
 /// value: with equal concentrations the mean weight of every category is
-/// `1 / 17`, and at 10 the draws sit tightly around that mean rather than
+/// `1 / 18`, and at 10 the draws sit tightly around that mean rather than
 /// spiking on one category the way the integer set does. A new float category
 /// needs a concentration here, a field on `FloatGenerationParameters`, and a
 /// slot in its `ALPHAS`.
@@ -85,6 +85,7 @@ pub const DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_BINADE_EDGE: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_NON_DYADIC: f64 = 10.0;
+pub const DIRICHLET_ALPHA_FLOAT_LOG_UNIFORM: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_UNIFORM: f64 = 10.0;
 
 /// Minimum range width (`max_value - min_value`) at which the category mixture

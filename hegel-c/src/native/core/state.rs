@@ -26,13 +26,14 @@ use super::{
     BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
     DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_ENDPOINT,
     DIRICHLET_ALPHA_FLOAT_HALF_INTEGER, DIRICHLET_ALPHA_FLOAT_INFINITY,
-    DIRICHLET_ALPHA_FLOAT_INTEGER, DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER,
-    DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE, DIRICHLET_ALPHA_FLOAT_NAN,
-    DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD, DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL,
-    DIRICHLET_ALPHA_FLOAT_NEAR_ONE, DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE,
-    DIRICHLET_ALPHA_FLOAT_NEAR_ZERO, DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
-    DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO, DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
-    DIRICHLET_ALPHA_FLOAT_UNIFORM, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+    DIRICHLET_ALPHA_FLOAT_INTEGER, DIRICHLET_ALPHA_FLOAT_LOG_UNIFORM,
+    DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER, DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
+    DIRICHLET_ALPHA_FLOAT_NAN, DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
+    DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL, DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+    DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE, DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+    DIRICHLET_ALPHA_FLOAT_NON_DYADIC, DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+    DIRICHLET_ALPHA_FLOAT_SUBNORMAL, DIRICHLET_ALPHA_FLOAT_UNIFORM, DIRICHLET_ALPHA_INTERESTING,
+    DIRICHLET_ALPHA_MIDDLE,
 };
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
@@ -550,6 +551,8 @@ pub struct FloatGenerationParameters {
     pub binade_edge_probability: f64,
     /// A value with no finite binary expansion, such as `0.1`.
     pub non_dyadic_probability: f64,
+    /// A magnitude with every binade of the range equally likely.
+    pub log_uniform_probability: f64,
     /// The continuous uniform distribution over the range.
     pub uniform_probability: f64,
 }
@@ -559,7 +562,7 @@ impl FloatGenerationParameters {
     /// the order [`Self::from_weights`] destructures. A new category is a new
     /// constant, a new slot here, a new field above, and a line in that
     /// conversion.
-    const ALPHAS: [f64; 17] = [
+    const ALPHAS: [f64; 18] = [
         DIRICHLET_ALPHA_FLOAT_ENDPOINT,
         DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
         DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
@@ -576,6 +579,7 @@ impl FloatGenerationParameters {
         DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
         DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
         DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
+        DIRICHLET_ALPHA_FLOAT_LOG_UNIFORM,
         DIRICHLET_ALPHA_FLOAT_UNIFORM,
     ];
 
@@ -585,7 +589,7 @@ impl FloatGenerationParameters {
         Ok(Self::from_weights(sample_dirichlet(Self::ALPHAS, rng)?))
     }
 
-    fn from_weights(weights: [f64; 17]) -> Self {
+    fn from_weights(weights: [f64; 18]) -> Self {
         let [
             endpoint,
             near_zero,
@@ -603,6 +607,7 @@ impl FloatGenerationParameters {
             signed_zero,
             binade_edge,
             non_dyadic,
+            log_uniform,
             uniform,
         ] = weights;
         FloatGenerationParameters {
@@ -622,6 +627,7 @@ impl FloatGenerationParameters {
             signed_zero_probability: signed_zero,
             binade_edge_probability: binade_edge,
             non_dyadic_probability: non_dyadic,
+            log_uniform_probability: log_uniform,
             uniform_probability: uniform,
         }
     }
@@ -918,8 +924,8 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
 /// value. The categories, in weight order, are the fields of that struct:
 /// endpoints, near zero, subnormals, near `±1`, integers, half-integers, the
 /// overflow / underflow bands for `+` and `×`, NaN, `±∞`, `±MAX`, the largest
-/// exact integers, `±0`, binade edges, non-dyadic values, and finally the
-/// continuous uniform.
+/// exact integers, `±0`, binade edges, non-dyadic values, a log-uniform over
+/// the range's binades, and finally the continuous uniform.
 ///
 /// Every category sampler restricts itself to the choice's valid values, so
 /// the weights are a pure reweighting of which valid values appear. A
@@ -937,7 +943,7 @@ pub(crate) fn biased_float_sample(
     params: FloatGenerationParameters,
 ) -> Result<f64, InternalError> {
     type Category = fn(&FloatChoice, &mut EngineRng) -> Option<f64>;
-    let categories: [(f64, Category); 16] = [
+    let categories: [(f64, Category); 17] = [
         (params.endpoint_probability, float_endpoint_sample),
         (params.near_zero_probability, float_near_zero_sample),
         (params.subnormal_probability, float_subnormal_sample),
@@ -966,6 +972,7 @@ pub(crate) fn biased_float_sample(
         (params.signed_zero_probability, float_signed_zero_sample),
         (params.binade_edge_probability, float_binade_edge_sample),
         (params.non_dyadic_probability, float_non_dyadic_sample),
+        (params.log_uniform_probability, float_log_uniform_sample),
     ];
     let u = rng.random::<f64>();
     let mut acc = 0.0;
@@ -1333,6 +1340,25 @@ fn odd_fraction(rng: &mut EngineRng) -> f64 {
 fn unit_odd_fraction(rng: &mut EngineRng) -> f64 {
     let q = 2 * rng.random_range(1..=500u64) + 1;
     rng.random_range(1..q) as f64 / q as f64
+}
+
+/// A magnitude with every binade the admitted range touches equally likely,
+/// as [`log_uniform_magnitude`] draws it, under a coin-flipped sign: the
+/// scale-spread counterpart of the continuous uniform, which on a wide range
+/// puts half its mass in the top binade and almost none below a thousandth
+/// of the top. Where a side's top is a user bound (below `MAX`), magnitudes
+/// under one ulp of that bound are left out: they vanish against any value
+/// near it, and on a range reaching down to zero they would otherwise take
+/// nearly all the mass.
+fn float_log_uniform_sample(fc: &FloatChoice, rng: &mut EngineRng) -> Option<f64> {
+    signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+        let floor = if hi < f64::MAX {
+            hi - float_below(hi)
+        } else {
+            lo
+        };
+        Some(log_uniform_magnitude(lo.max(floor), hi, rng))
+    })
 }
 
 /// The remaining mass. On a finite range, `U(min, max)`, interpolated as
