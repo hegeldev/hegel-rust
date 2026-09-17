@@ -48,6 +48,7 @@ pub mod __bench {
 
     pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
+    pub use crate::native::core::state::FloatGenerationParameters;
     pub use crate::native::intervalsets::IntervalSet;
     pub use crate::native::rng::EngineRng;
 
@@ -69,12 +70,17 @@ pub mod __bench {
     }
 
     pub fn biased_float_sample(fc: &FloatChoice, rng: &mut EngineRng) -> f64 {
-        crate::native::core::state::biased_float_sample(
-            fc,
-            rng,
-            crate::native::core::state::FloatGenerationParameters::default(),
-        )
-        .unwrap()
+        biased_float_sample_with(fc, rng, FloatGenerationParameters::default())
+    }
+
+    /// [`biased_float_sample`] under an explicit set of per-case category
+    /// weights, e.g. one drawn with [`FloatGenerationParameters::draw`].
+    pub fn biased_float_sample_with(
+        fc: &FloatChoice,
+        rng: &mut EngineRng,
+        params: FloatGenerationParameters,
+    ) -> f64 {
+        crate::native::core::state::biased_float_sample(fc, rng, params).unwrap()
     }
 }
 

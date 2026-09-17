@@ -25,8 +25,9 @@ pub const BUFFER_SIZE: usize = 8 * 1024;
 pub const MAX_CLONE_DEPTH: usize = 100;
 
 /// Probability of drawing a boundary/special value per special candidate. Used
-/// by the narrow-range, float, string and bytes samplers (the wide-range integer
-/// sampler uses the per-category Dirichlet weights below instead).
+/// by the narrow-range integer, string and bytes samplers (the wide-range
+/// integer and float samplers use the per-category Dirichlet weights below
+/// instead).
 pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 
 /// How a wide-range integer draw is split between four *categories* of value is
@@ -64,7 +65,7 @@ pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 /// The float categories' Dirichlet concentrations, one per field of
 /// `FloatGenerationParameters`. They all start at the same, deliberately high,
 /// value: with equal concentrations the mean weight of every category is
-/// `1 / 18`, and at 10 the draws sit tightly around that mean rather than
+/// `1 / 17`, and at 10 the draws sit tightly around that mean rather than
 /// spiking on one category the way the integer set does. A new float category
 /// needs a concentration here, a field on `FloatGenerationParameters`, and a
 /// slot in its `ALPHAS`.
@@ -72,7 +73,6 @@ pub const DIRICHLET_ALPHA_FLOAT_ENDPOINT: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_NEAR_ZERO: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_SUBNORMAL: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_NEAR_ONE: f64 = 10.0;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_MINUS_ONE: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_INTEGER: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_HALF_INTEGER: f64 = 10.0;
 pub const DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD: f64 = 10.0;

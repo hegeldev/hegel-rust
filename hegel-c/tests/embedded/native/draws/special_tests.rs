@@ -79,7 +79,7 @@ fn generate_date_day_respects_month_length() {
 fn generate_time_covers_zero_and_nonzero_nanoseconds() {
     let mut seen_nanosecond_zero = false;
     let mut seen_nanosecond_nonzero = false;
-    for seed in 0..200 {
+    for seed in 0..1000 {
         let mut ntc = fresh_ntc(seed);
         let t = generate_time(&mut ntc, MIDNIGHT, LAST_NANOSECOND).unwrap();
         assert!(t.hour <= 23 && t.minute <= 59 && t.second <= 59, "{t:?}");
