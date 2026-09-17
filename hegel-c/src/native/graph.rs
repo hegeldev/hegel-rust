@@ -30,7 +30,7 @@ use alloc::vec::Vec;
 
 use crate::native::HashMap;
 use crate::native::bignum::ToPrimitive;
-use crate::native::core::{ChoiceNode, ChoiceValue, Span};
+use crate::native::core::{ChoiceNode, ChoiceValue, Span, float_to_index};
 use crate::native::database::{deserialize_choices_exact, serialize_choices};
 
 /// One open span at a draw: its label and the number of earlier siblings
@@ -385,24 +385,48 @@ impl Graph {
         g
     }
 
-    pub(crate) fn set_value(&self, n: usize, i: usize, value: ChoiceValue) -> Graph {
+    /// The graph with `value` in place of `old` on every edge of `n` at
+    /// `addr`: a tie's edges are one draw, so its value changes together.
+    pub(crate) fn set_value(
+        &self,
+        n: usize,
+        addr: &[Frame],
+        old: &ChoiceValue,
+        value: ChoiceValue,
+    ) -> Graph {
         let mut g = self.clone();
-        g.nodes[n].edges[i].value = value;
+        for e in &mut g.nodes[n].edges {
+            if e.addr == addr && e.value == *old {
+                e.value = value.clone();
+            }
+        }
         g
     }
 
-    /// Remove every edge of `n` at `addr` with `value` whose target is not
-    /// in `keep`: the tie alternatives no replay settled on.
-    pub(crate) fn retain_targets(
-        &mut self,
-        n: usize,
-        addr: &[Frame],
-        value: &ChoiceValue,
-        keep: &[usize],
-    ) {
-        self.nodes[n]
-            .edges
-            .retain(|e| e.addr != addr || e.value != *value || keep.contains(&e.target));
+    /// Remove every tie alternative no replay settled on: an edge whose
+    /// node has another edge with the same address and value in `settled`
+    /// (as `(node, edge index)`) while it is not there itself. Ties none of
+    /// whose edges were settled are kept whole.
+    pub(crate) fn retain_settled(&mut self, settled: &[(usize, usize)]) {
+        for (n, node) in self.nodes.iter_mut().enumerate() {
+            let edges = &node.edges;
+            let keep: Vec<bool> = (0..edges.len())
+                .map(|i| {
+                    settled.contains(&(n, i))
+                        || !(0..edges.len()).any(|j| {
+                            j != i
+                                && edges[j].addr == edges[i].addr
+                                && edges[j].value == edges[i].value
+                                && settled.contains(&(n, j))
+                        })
+                })
+                .collect();
+            let mut i = 0;
+            node.edges.retain(|_| {
+                i += 1;
+                keep[i - 1]
+            });
+        }
     }
 
     /// The wire form: a node count, then per node its identity and edges,
@@ -544,7 +568,7 @@ fn take_frames(rest: &mut &[u8]) -> Option<Vec<Frame>> {
 pub(crate) struct GraphKey {
     edges: usize,
     nodes: usize,
-    values: Vec<(u8, u64)>,
+    values: Vec<ValueRank>,
 }
 
 /// The kind of a value, as a tag: what a draw's acceptance test is about
@@ -562,17 +586,21 @@ pub(crate) fn value_kind(v: &ChoiceValue) -> u8 {
 
 /// A coarse shrink order on single values for the graph's key: booleans
 /// before integers before everything else, `false` before `true`, integers
-/// by magnitude, sequences by length.
-pub(crate) fn shrink_rank(v: &ChoiceValue) -> (u8, u64) {
+/// by magnitude, floats by the engine's float shrink index, sequences by
+/// length then element by element, clones by flattened length.
+pub(crate) fn shrink_rank(v: &ChoiceValue) -> ValueRank {
     match v {
-        ChoiceValue::Boolean(b) => (0, *b as u64),
-        ChoiceValue::Integer(n) => (1, n.magnitude().to_u64().unwrap_or(u64::MAX)),
-        ChoiceValue::Float(f) => (2, libm::fabs(*f) as u64),
-        ChoiceValue::Bytes(b) => (3, b.len() as u64),
-        ChoiceValue::String(s) => (3, s.len() as u64),
-        ChoiceValue::Clone(c) => (4, c.flat_len() as u64),
+        ChoiceValue::Boolean(b) => (0, *b as u64, Vec::new()),
+        ChoiceValue::Integer(n) => (1, n.magnitude().to_u64().unwrap_or(u64::MAX), Vec::new()),
+        ChoiceValue::Float(f) => (2, float_to_index(libm::fabs(*f)), Vec::new()),
+        ChoiceValue::Bytes(b) => (3, b.len() as u64, b.iter().map(|&x| x as u64).collect()),
+        ChoiceValue::String(s) => (3, s.len() as u64, s.iter().map(|&x| x as u64).collect()),
+        ChoiceValue::Clone(c) => (4, c.flat_len() as u64, Vec::new()),
     }
 }
+
+/// The rank of one value under [`shrink_rank`]: kind, size, elements.
+pub(crate) type ValueRank = (u8, u64, Vec<u64>);
 
 #[cfg(test)]
 #[path = "../../tests/embedded/native/graph_tests.rs"]

@@ -235,12 +235,25 @@ fn key_orders_by_edges_then_nodes_then_values() {
     let mut two = one.clone();
     two.insert(&right_run(false, 5));
     assert!(one.key() < two.key());
-    let smaller = one.set_value(START, 0, ChoiceValue::Boolean(false));
+    let coin = ChoiceValue::Boolean(false);
+    let smaller = one.set_value(START, COIN, &coin, ChoiceValue::Boolean(false));
     assert_eq!(smaller.key(), one.key());
     let left = one.node(&at(&[(2, 0)])).unwrap();
-    assert!(one.set_value(left, 0, int(2)).key() < one.key());
-    assert!(one.set_value(left, 0, int(-2)).key() < one.key());
-    assert!(one.set_value(left, 0, ChoiceValue::Boolean(true)).key() < one.key());
+    assert!(one.set_value(left, LEFT, &int(3), int(2)).key() < one.key());
+    assert!(one.set_value(left, LEFT, &int(3), int(-2)).key() < one.key());
+    assert!(
+        one.set_value(left, LEFT, &int(3), ChoiceValue::Boolean(true))
+            .key()
+            < one.key()
+    );
+    let tied = two.set_value(START, COIN, &coin, ChoiceValue::Boolean(true));
+    assert!(
+        tied.nodes()[START]
+            .edges
+            .iter()
+            .all(|e| e.value == ChoiceValue::Boolean(true))
+    );
+    assert_eq!(two.set_value(START, LEFT, &coin, int(1)).key(), two.key());
     let mut chain = Graph::from_run(&run(vec![step(COIN, int(1)), step(LEFT, int(1))]));
     chain.insert(&run(vec![step(COIN, int(1)), step(RIGHT, int(1))]));
     let mut flat = Graph::from_run(&run(vec![step(COIN, int(1)), step(LEFT, int(1))]));
@@ -275,18 +288,21 @@ fn pruned_drops_unreachable_nodes_and_keeps_end() {
 }
 
 #[test]
-fn retain_targets_prunes_a_tie() {
+fn retain_settled_prunes_the_unsettled_alternatives_of_settled_ties() {
     let mut g = Graph::from_run(&left_run(false, 3));
     g.insert(&right_run(false, 5));
-    g.insert(&left_run(true, 3));
+    g.insert(&left_run(false, 7));
     let right = g.node(&at(&[(3, 0)])).unwrap();
     let left = g.node(&at(&[(2, 0)])).unwrap();
-    g.retain_targets(START, COIN, &ChoiceValue::Boolean(false), &[right]);
+    let mut untouched = g.clone();
+    untouched.retain_settled(&[(left, 0)]);
+    assert_eq!(untouched.edge_count(), g.edge_count());
+    g.retain_settled(&[(START, 1), (right, 0)]);
     let start = &g.nodes()[START].edges;
-    assert_eq!(start.len(), 2);
+    assert_eq!(start.len(), 1);
     assert_eq!(start[0].target, right);
-    assert_eq!(start[1].value, ChoiceValue::Boolean(true));
-    assert_eq!(start[1].target, left);
+    assert_eq!(g.nodes()[left].edges.len(), 2);
+    assert_eq!(g.edge_count(), 2);
 }
 
 fn clone_value(children: Vec<ChoiceValue>) -> ChoiceValue {
@@ -512,11 +528,25 @@ fn value_kinds_and_ranks() {
     ];
     let kinds: Vec<u8> = values.iter().map(value_kind).collect();
     assert_eq!(kinds, vec![0, 1, 2, 3, 4, 5]);
-    let ranks: Vec<(u8, u64)> = values.iter().map(shrink_rank).collect();
-    assert_eq!(ranks, vec![(0, 1), (1, 3), (2, 2), (3, 4), (3, 5), (4, 4)]);
-    assert_eq!(shrink_rank(&ChoiceValue::Boolean(false)), (0, 0));
+    let ranks: Vec<ValueRank> = values.iter().map(shrink_rank).collect();
+    assert_eq!(
+        ranks,
+        vec![
+            (0, 1, vec![]),
+            (1, 3, vec![]),
+            (2, float_to_index(2.5), vec![]),
+            (3, 4, vec![0; 4]),
+            (3, 5, vec![0; 5]),
+            (4, 4, vec![])
+        ]
+    );
+    assert!(shrink_rank(&ChoiceValue::Float(7.0)) < shrink_rank(&ChoiceValue::Float(7.5)));
+    assert!(
+        shrink_rank(&ChoiceValue::Bytes(vec![0, 4])) < shrink_rank(&ChoiceValue::Bytes(vec![3, 4]))
+    );
+    assert_eq!(shrink_rank(&ChoiceValue::Boolean(false)), (0, 0, vec![]));
     assert_eq!(
         shrink_rank(&ChoiceValue::Integer(BigInt::from(u128::MAX))),
-        (1, u64::MAX)
+        (1, u64::MAX, vec![])
     );
 }
