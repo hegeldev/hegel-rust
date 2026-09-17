@@ -49,12 +49,15 @@ pub struct Divergence {
 /// (experiment 017: the counterexample as a graph, walked by the
 /// harness). `resolve` returns the stored value to serve at `position` of
 /// `stream`, or `None` to draw randomly; `fits` is the draw's acceptance
-/// test over stored values.
+/// test over stored values; `frames` is the draw's structural address
+/// (experiment 019): the spans open at the draw, outermost first, each as
+/// its label and the number of earlier siblings with that label.
 pub trait ExternalReplay: Send {
     fn resolve(
         &mut self,
         stream: &[usize],
         position: usize,
+        frames: &[(u64, usize)],
         fits: &dyn Fn(&ChoiceValue) -> bool,
     ) -> Option<ChoiceValue>;
     fn divergence(&self) -> Option<Divergence>;
@@ -275,18 +278,20 @@ impl Replay {
     }
 
     /// Resolve the draw at `position` of stream `stream`, given the draw's
-    /// acceptance test over stored values. A proposal's misfit under
+    /// acceptance test over stored values and, for an external resolver
+    /// only, its structural address. A proposal's misfit under
     /// [`Rescue::Pun`] is the shrink's own edit, never a divergence.
     pub(crate) fn resolve<V>(
         &self,
         stream: &[usize],
         position: usize,
+        frames: impl FnOnce() -> Vec<(u64, usize)>,
         fits: impl Fn(&ChoiceValue) -> Option<V>,
     ) -> Resolved<'_, V> {
         if let Some(external) = &self.external {
             return match external
                 .lock()
-                .resolve(stream, position, &|v| fits(v).is_some())
+                .resolve(stream, position, &frames(), &|v| fits(v).is_some())
             {
                 Some(stored) => match fits(&stored) {
                     Some(v) => Resolved::Served(v),

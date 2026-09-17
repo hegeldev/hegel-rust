@@ -1903,6 +1903,23 @@ impl NativeTestCase {
         self.span_stack.len()
     }
 
+    /// The structural address of the next draw (experiment 019): the open
+    /// spans outermost first, each as its label and the number of earlier
+    /// siblings under the same parent with that label.
+    pub fn open_span_frames(&self) -> Vec<(u64, usize)> {
+        self.span_stack
+            .iter()
+            .map(|&idx| {
+                let span = &self.spans[idx];
+                let ordinal = self.spans.as_slice()[..idx]
+                    .iter()
+                    .filter(|s| s.parent == span.parent && s.label == span.label)
+                    .count();
+                (span.label.parse().unwrap_or(0), ordinal)
+            })
+            .collect()
+    }
+
     /// Close the innermost currently-open span.
     ///
     /// `discard=true` marks the span as discarded (used by filter retries
@@ -2437,7 +2454,10 @@ impl NativeTestCase {
 
         let idx = self.nodes.len();
 
-        match self.replay.resolve(&self.clone_id, idx, from_prefix) {
+        match self
+            .replay
+            .resolve(&self.clone_id, idx, || self.open_span_frames(), from_prefix)
+        {
             Resolved::Served(v) => return Ok((v, false)),
             Resolved::Misfit(stored, timeline) => {
                 let is_simplest = match self.replay.proposal_node(timeline, idx) {

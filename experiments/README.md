@@ -27,13 +27,21 @@ below, and later API changes are expected to have broken some of them.
 - `graph-replay`: experiment 017 part B (the counterexample as a graph); runs
   against the branch through `__bench::replay_case` and the `ExternalReplay`
   hook — `TRIALS=20 R=50 cargo run --release -- results.jsonl`, then
-  `python3 summarize.py results.jsonl` prints the tables in the notes.
+  `python3 summarize.py results.jsonl` prints the tables in the notes. Built
+  against `e08d1000`; experiment 019 added a parameter to the hook's
+  `resolve`, so it no longer builds as checked in.
 - `graph-shrink`: experiment 018 (shrinking the counterexample as a graph); a
   prototype graph shrinker outside the engine, judged through the same hook —
   `TRIALS=10 KS=20 R=50 WARMUP=0 cargo run --release -- results.jsonl` for
   campaign 1 and the same without `WARMUP=0` for campaign 2
   (`results-warmup.jsonl`), then `python3 summarize.py <file>` prints the
-  tables in the notes.
+  tables in the notes. Built against `e08d1000`; broken by the same hook
+  change as `graph-replay`.
+- `graph-identity`: experiment 019 (state identity from the span structure);
+  018's shrinker with node identity from the draw addresses the engine now
+  passes through `ExternalReplay::resolve`, plus tied edges and the `list` and
+  `loop` bodies — `TRIALS=10 KS=20 R=50 cargo run --release -- results.jsonl`,
+  then `python3 summarize.py results.jsonl` prints the tables in the notes.
 - `concurrent-replay`: built against `7a4fd194` (experiment 007's full
   campaign); runs against the branch via its path dependency —
   `cargo build --release`, then `python3 drive.py [trials]`.

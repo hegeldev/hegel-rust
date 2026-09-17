@@ -424,9 +424,12 @@ fn a_proposal_that_runs_out_at_a_clone_leaves_the_child_stream_random() {
     assert_eq!(tc.live_timelines(), vec![false, false]);
 }
 
+type Frames = Arc<Mutex<Vec<Vec<(u64, usize)>>>>;
+
 struct Scripted {
     values: Vec<ChoiceValue>,
     seen: Vec<(Vec<usize>, usize)>,
+    frames: Frames,
     divergence: Option<Divergence>,
 }
 
@@ -435,9 +438,11 @@ impl ExternalReplay for Scripted {
         &mut self,
         stream: &[usize],
         position: usize,
+        frames: &[(u64, usize)],
         fits: &dyn Fn(&ChoiceValue) -> bool,
     ) -> Option<ChoiceValue> {
         self.seen.push((stream.to_vec(), position));
+        self.frames.lock().push(frames.to_vec());
         let stored = self.values.get(self.seen.len() - 1)?.clone();
         if !fits(&stored) && self.divergence.is_none() {
             self.divergence = Some(Divergence {
@@ -457,13 +462,44 @@ impl ExternalReplay for Scripted {
     }
 }
 
-fn scripted(values: Vec<ChoiceValue>) -> NativeTestCase {
+fn scripted_with_frames(values: Vec<ChoiceValue>) -> (NativeTestCase, Frames) {
+    let frames = Arc::new(Mutex::new(Vec::new()));
     let resolver = Scripted {
         values,
         seen: Vec::new(),
+        frames: Arc::clone(&frames),
         divergence: None,
     };
-    NativeTestCase::for_external(Box::new(resolver), EngineRng::seeded(5), 8).unwrap()
+    let tc = NativeTestCase::for_external(Box::new(resolver), EngineRng::seeded(5), 8).unwrap();
+    (tc, frames)
+}
+
+fn scripted(values: Vec<ChoiceValue>) -> NativeTestCase {
+    scripted_with_frames(values).0
+}
+
+#[test]
+fn an_external_resolver_is_told_the_open_spans_and_their_sibling_ordinals() {
+    let (mut tc, frames) = scripted_with_frames(vec![int(1), int(2), int(3), int(4)]);
+    tc.start_span(7);
+    draw_int(&mut tc);
+    tc.stop_span(false);
+    tc.start_span(7);
+    tc.start_span(9);
+    draw_int(&mut tc);
+    tc.stop_span(false);
+    tc.start_span(9);
+    draw_int(&mut tc);
+    draw_int(&mut tc);
+    assert_eq!(
+        *frames.lock(),
+        vec![
+            vec![(7, 0)],
+            vec![(7, 1), (9, 0)],
+            vec![(7, 1), (9, 1)],
+            vec![(7, 1), (9, 1)],
+        ]
+    );
 }
 
 #[test]
