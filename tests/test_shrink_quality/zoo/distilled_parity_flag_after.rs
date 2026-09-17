@@ -4,8 +4,9 @@
 //! checked when `even == (v.len() % 2 == 0)` and fails iff some element is non-zero. Shortlex
 //! ideal `([1], false)`. Deleting one element flips the parity, so it has to go with the flag
 //! flipped — a change behind the list; deleting two keeps the parity, so dead zeros go in pairs
-//! and an even list is left one deletion short at `([0, 1], true)`. The cheapest paired change
-//! there is. A human writes `([1], false)` too.
+//! and an even list would be left one deletion short at `([0, 1], true)` without `delete_spans`
+//! flipping the boolean after the list. The cheapest paired change there is. A human writes
+//! `([1], false)` too.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -34,7 +35,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass pairs a deletion with a value change behind it"]
 fn the_last_dead_element_is_deleted_with_the_flag_flipped() {
     assert_shrinks_to(&(vec![1], false), 30, 200, draw, parity_flag_with_payload);
 }

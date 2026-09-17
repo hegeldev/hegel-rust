@@ -3,11 +3,12 @@
 //! `v = vecs(integers 0..=1000).max_size(20)`, then `i ∈ [0, 19]` with a fixed range; the
 //! property fails iff `i < v.len() && v[i] != 0`. Shortlex ideal `([1], 0)`. The shrinker deletes
 //! everything after `i` and zeroes everything else, leaving `[0, …, 0, 1], i`: each zero in front
-//! of the indexed element goes only together with `i − 1`, and `i` sits behind the list, where no
-//! deletion pass looks (`delete_chunks` decrements the node just *before* a rejected chunk). Two
-//! controls pass: the index drawn first with the list sized `min_size(i + 1)`, and the index
-//! drawn after the list with a range that depends on it (the deletion pushes the recorded index
-//! out of range and the engine redraws it). A human writes `([1], 0)` too.
+//! of the indexed element goes only together with `i − 1`, and `i` sits behind the list, where
+//! `delete_chunks` (which decrements the node just *before* a rejected chunk) never looks;
+//! `delete_spans` retries a rejected element deletion with the draw after the list nudged. Two
+//! controls: the index drawn first with the list sized `min_size(i + 1)`, and the index drawn
+//! after the list with a range that depends on it (the deletion pushes the recorded index out of
+//! range and the engine redraws it). A human writes `([1], 0)` too.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -49,7 +50,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass pairs a deletion with a value change behind it"]
 fn prefix_before_the_indexed_element_is_deleted() {
     assert_shrinks_to(
         &(vec![1], 0),

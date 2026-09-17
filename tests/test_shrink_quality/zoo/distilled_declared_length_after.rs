@@ -4,8 +4,8 @@
 //! when `n == v.len()` and fails iff some element is non-zero. Shortlex ideal `([1], 1)`. Deleting
 //! an element is accepted only together with `n − 1`; `delete_chunks` pairs a deletion with a
 //! decrement of the node just *before* the chunk, and `bind_deletion` lowers a count that comes
-//! before what it counts, so nothing pairs a deletion with a change behind it. A human writes
-//! `([1], 1)` too.
+//! before what it counts, so the move has to come from `delete_spans` nudging the draw after
+//! the list when the plain element deletion is rejected. A human writes `([1], 1)` too.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -32,7 +32,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass pairs a deletion with a value change behind it"]
 fn elements_are_deleted_and_the_length_lowered() {
     assert_shrinks_to(&(vec![1], 1), 30, 200, draw, declared_length_with_payload);
 }

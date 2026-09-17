@@ -4,8 +4,8 @@
 //! only checked when `s.chars().count() == v.len()` and fails iff some element is non-zero.
 //! Shortlex ideal `[1]` with a one-character string. `distilled_declared_length_after` with the
 //! length carried by a string: deleting an element needs one character deleted from `s` in the
-//! same move, and the string sits behind the list. Seeds that stall end at `([0, 1], "00")`. A
-//! human writes `[1]` and any one character.
+//! same move, and the string sits behind the list, so `delete_spans`' nudge has to shorten a
+//! string, not just step an integer. A human writes `[1]` and any one character.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -41,7 +41,6 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass pairs a deletion with a value change behind it"]
 fn elements_and_characters_are_deleted_together() {
     assert_shrinks_to(
         &(vec![1], "0".to_string()),

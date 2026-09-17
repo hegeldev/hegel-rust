@@ -64,7 +64,7 @@ fn the_ideal_fails_and_is_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass pairs a deletion with a value change behind it"]
+#[ignore = "shrinker: no pass pairs a deletion with a value change inside a later list element"]
 fn dead_pushes_before_the_read_one_are_deleted() {
     assert_shrinks_to(&vec![Op::Push(1), Op::Get(0)], 30, 200, draw, |ops| {
         a_get_reads_nonzero(ops)
