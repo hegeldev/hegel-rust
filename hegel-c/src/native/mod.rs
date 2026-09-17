@@ -12,6 +12,7 @@ pub mod draws;
 pub(crate) mod events;
 pub(crate) mod exec_cache;
 pub mod floats;
+pub(crate) mod graph;
 pub mod intervalsets;
 pub(crate) mod nd;
 pub mod printer;
