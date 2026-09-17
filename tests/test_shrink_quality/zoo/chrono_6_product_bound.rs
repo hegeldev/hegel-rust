@@ -7,8 +7,10 @@
 //!
 //! Draws: `arb_delta` (a five-way branch, then that branch's values), then `k ∈ -1000..=1000`.
 //! Shortlex ideal: branch 2 (`try_milliseconds`), the smallest ms whose `× 1000` exceeds `MAX`,
-//! `ms = MAX.secs + 1 = 9_223_372_036_854_776`, `k = 1000`. A human would write `MAX × 2`
-//! (branch 4's table has `MAX` at index 2, but its first draw is 4 > 2).
+//! `ms = MAX.secs + 1 = 9_223_372_036_854_776`, `k = 1000`. `scale_numeric_pairs` takes `k` to
+//! `1000` (mirroring a negative `a` on the way) while scaling `a` down to keep the product, and
+//! the bisection then finishes `a`. A human would write `MAX × 2` (branch 4's table has `MAX` at
+//! index 2, but its first draw is 4 > 2).
 
 use super::assert_shrinks_to;
 use super::chrono_delta::{TimeDelta, arb_delta};
@@ -59,7 +61,6 @@ fn the_ideals_do_fail() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass lowers one draw while raising another along a product bound"]
 fn a_and_k_must_be_traded_against_each_other() {
     assert_shrinks_to(&ideal(), 20, 100, draw, checked_mul_disagrees_with_range);
 }

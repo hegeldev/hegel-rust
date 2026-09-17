@@ -6,9 +6,9 @@
 //! such as `10^9`) halves while the half is still a multiple of 1000 and stops at the first half
 //! that is not (`10^9 / 2^6 = 15_625_000`). Dividing the distance by 5 and 10 carries on from
 //! there, but a start such as `976_000_000` bottoms out at `61_000`, where the remaining factor
-//! is a prime the shrinker has no move for. The dense periodic set `m % 1000 ≥ 500` is the
-//! control: once the search is inside `[0, 1000)` the set is an interval. A human would write
-//! `1000`.
+//! is a prime no divisor step removes; dropping every digit but the trailing zeros takes it to
+//! `1000` in one move. The dense periodic set `m % 1000 ≥ 500` is the control: once the search
+//! is inside `[0, 1000)` the set is an interval. A human would write `1000`.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -35,7 +35,6 @@ fn the_ideal_is_the_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: integer bisection and small divisors leave a prime multiple (61_000) behind"]
 fn sparse_multiples_shrink_to_the_first_one() {
     assert_shrinks_to(&1000, 30, 1000, draw, is_positive_multiple_of_1000);
 }

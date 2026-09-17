@@ -76,7 +76,7 @@ fn the_ideal_is_the_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass lowers one draw while raising another along a product bound"]
+#[ignore = "shrinker: the failing (a, k) pairs along a × k ≥ 1 s are sparse; the product move lands between them"]
 fn a_and_k_must_be_traded_against_each_other() {
     assert_shrinks_to(&ideal(), 20, 100, draw, division_is_inexact);
 }

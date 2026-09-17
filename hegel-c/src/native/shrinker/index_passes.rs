@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use crate::native::bignum::{BigUint, Zero};
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, flattened_len};
 
+use super::search::FindInteger;
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 
 /// How many choices after a raised node
@@ -90,7 +91,9 @@ impl<'a> Shrinker<'a> {
                         let mut attempt = self.current_nodes.clone();
                         if let Some(lowered) = attempt[i].with_value(new_val) {
                             attempt[i] = lowered;
-                            self.consider(&attempt).await?;
+                            if self.consider(&attempt).await? {
+                                self.descend_index(i).await?;
+                            }
 
                             let mut zeroed = attempt;
                             for node in &mut zeroed[i + 1..] {
@@ -139,6 +142,37 @@ impl<'a> Shrinker<'a> {
                 }
                 idx += 1;
             }
+        }
+        Ok(())
+    }
+
+    /// Keep lowering node `i`'s index by geometrically growing amounts
+    /// after a step of one was accepted on its own. A predicate that
+    /// admits one step usually admits many — the value passes that ran
+    /// earlier in the iteration saw a target another pass has since
+    /// changed — and taking them one per pass step would spend the
+    /// improvement cap on unit moves before those passes run again.
+    async fn descend_index(&mut self, i: usize) -> ShrinkResult<()> {
+        let Some(base) = self.current_nodes[i].data.to_index()? else {
+            return Ok(());
+        };
+        let mut search = FindInteger::new();
+        while let Some(n) = search.probe() {
+            let step = BigUint::from(n as u64);
+            let lowered = if step > base || i >= self.current_nodes.len() {
+                None
+            } else {
+                self.current_nodes[i].data.from_index(&base - &step)?
+            };
+            let ok = match lowered.and_then(|value| self.current_nodes[i].with_value(&value)) {
+                Some(node) => {
+                    let mut attempt = self.current_nodes.clone();
+                    attempt[i] = node;
+                    self.consider(&attempt).await?
+                }
+                None => false,
+            };
+            search.record(ok);
         }
         Ok(())
     }
@@ -286,6 +320,10 @@ pub(super) async fn try_bump_ij(
         .collect();
     shrinker.replace(&replacements).await
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_lower_and_bump_tests.rs"]
+mod lower_and_bump_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_try_shortening_via_increment_tests.rs"]

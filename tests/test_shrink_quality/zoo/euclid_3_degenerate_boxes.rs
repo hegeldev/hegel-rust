@@ -6,11 +6,13 @@
 //! another box "intersects" without having an intersection.
 //!
 //! Draws per box: `x0`, `y0`, `bool` (x1 = x0?), `[x1]`, `bool` (y1 = y0?), `[y1]`, all
-//! coordinates `i32`. Shortlex ideal, 10 draws: `a = (0,0)-(2,0)` (zero height; x1 = 2 so that
-//! x = 1 lies strictly inside) and `b = (1,-1)-(1,1)` (zero width, straddling y = 0). The zoo
-//! also saw the same boxes through an 11th, redundant draw, and coordinates in the thousands
-//! where one coordinate must move with another to keep the crossing. A human would write the
-//! same boxes.
+//! coordinates `i32`. Shortlex ideal, 10 draws: `a = (0,0)-(2,2)` (both booleans `false`, the
+//! simpler value) and `b` the point `(1,1)` (both `true`), strictly inside `a`: `intersects` is
+//! true, the intersection is the empty box `(1,1)-(1,1)`. The workbench's `a = (0,0)-(2,0)`,
+//! `b = (1,-1)-(1,1)` also fails in 10 draws but has `true` at its fifth draw where the ideal
+//! has `false`, so it is the larger of the two; the shrinker ends there from most seeds, and
+//! getting from it to the ideal means flipping that boolean (which draws `a.y1`) while
+//! dropping `b.y1` — a shape change no pass proposes. A human would write either pair.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -92,8 +94,8 @@ fn intersects_disagrees_with_intersection(c: &Case) -> bool {
 
 fn ideal() -> Case {
     Case {
-        a: Box2D::new((0, 0), (2, 0)),
-        b: Box2D::new((1, 1), (1, -1)),
+        a: Box2D::new((0, 0), (2, 2)),
+        b: Box2D::new((1, 1), (1, 1)),
         draws: 10,
     }
 }
@@ -101,10 +103,15 @@ fn ideal() -> Case {
 #[test]
 fn the_ideal_does_fail() {
     assert!(intersects_disagrees_with_intersection(&ideal()));
+    assert!(intersects_disagrees_with_intersection(&Case {
+        a: Box2D::new((0, 0), (2, 0)),
+        b: Box2D::new((1, 1), (1, -1)),
+        draws: 10,
+    }));
 }
 
 #[test]
-#[ignore = "shrinker: no pass lowers one draw while raising another along a product bound"]
+#[ignore = "shrinker: no pass flips a boolean that adds a draw while deleting a later one"]
 fn crossing_degenerate_boxes_shrink_to_the_origin() {
     assert_shrinks_to(
         &ideal(),
