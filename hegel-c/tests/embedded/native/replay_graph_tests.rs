@@ -88,8 +88,6 @@ fn a_tie_is_settled_by_the_identity_the_next_draw_reports() {
     let right = g.node(&at(3)).unwrap();
     assert_eq!(tc.settled_edges(), vec![(START, 1), (right, 0)]);
     assert!(tc.live_timelines().is_empty());
-    assert!(tc.realized_timelines().is_empty());
-    assert!(!tc.ran_out());
 }
 
 #[test]

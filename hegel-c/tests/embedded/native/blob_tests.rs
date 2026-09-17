@@ -2,6 +2,7 @@ use super::*;
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceValue, CloneRecord, MAX_CLONE_DEPTH};
+use crate::native::graph::{Run, Step};
 use alloc::vec;
 
 fn nested_clones(depth: usize) -> Vec<ChoiceValue> {
@@ -145,29 +146,42 @@ fn blob_roundtrips_clone_values() {
     assert_eq!(decode_failure(&blob), Some(choices));
 }
 
+fn graph_of(values: Vec<ChoiceValue>) -> Graph {
+    Graph::from_run(&Run {
+        steps: values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| Step {
+                addr: vec![(28, i)],
+                value,
+            })
+            .collect(),
+    })
+}
+
 fn sample_nd_state() -> NdReproState {
     NdReproState {
-        timelines: vec![
-            sample_choices(),
-            vec![ChoiceValue::Boolean(true)],
-            vec![ChoiceValue::Boolean(false), ChoiceValue::Float(1.5)],
-        ],
+        graph: graph_of(sample_choices()),
         entropy: 0xDEAD_BEEF_CAFE_F00D,
-        extension: 12,
+        longest: 12,
     }
 }
 
+fn same_graph(a: &Graph, b: &Graph) -> bool {
+    a.encode().unwrap() == b.encode().unwrap()
+}
+
 #[test]
-fn nd_blob_round_trips_pool_entropy_and_extension() {
+fn nd_blob_round_trips_graph_entropy_and_longest() {
     let state = sample_nd_state();
     let blob = encode_nd_failure(&state).unwrap();
     let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
         panic!("expected nd state");
     };
-    assert_eq!(decoded.timelines, state.timelines);
-    assert_eq!(decoded.incumbent(), state.timelines[0].as_slice());
+    assert!(same_graph(&decoded.graph, &state.graph));
+    assert_eq!(decoded.graph.edge_count(), sample_choices().len());
     assert_eq!(decoded.entropy, state.entropy);
-    assert_eq!(decoded.extension, state.extension);
+    assert_eq!(decoded.longest, state.longest);
 }
 
 #[test]
@@ -176,9 +190,9 @@ fn incompressible_nd_state_uses_the_raw_prefix() {
         .map(|i| (i.wrapping_mul(197).wrapping_add(i * i * 31) % 251) as u8)
         .collect();
     let state = NdReproState {
-        timelines: vec![vec![ChoiceValue::Bytes(noise)]],
+        graph: graph_of(vec![ChoiceValue::Bytes(noise)]),
         entropy: 1,
-        extension: 4,
+        longest: 4,
     };
     let blob = encode_nd_failure(&state).unwrap();
     let bytes = base64_decode(&blob).unwrap();
@@ -189,13 +203,13 @@ fn incompressible_nd_state_uses_the_raw_prefix() {
 #[test]
 fn long_nd_state_uses_the_zlib_prefix_and_round_trips() {
     let state = NdReproState {
-        timelines: vec![
+        graph: graph_of(
             (0..500)
                 .map(|_| ChoiceValue::Integer(BigInt::from(1)))
                 .collect(),
-        ],
+        ),
         entropy: 7,
-        extension: 4,
+        longest: 4,
     };
     let blob = encode_nd_failure(&state).unwrap();
     let bytes = base64_decode(&blob).unwrap();
@@ -203,7 +217,7 @@ fn long_nd_state_uses_the_zlib_prefix_and_round_trips() {
     let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
         panic!("expected nd state");
     };
-    assert_eq!(decoded.timelines, state.timelines);
+    assert!(same_graph(&decoded.graph, &state.graph));
 }
 
 #[test]
@@ -218,9 +232,11 @@ fn nd_state_decode_rejects_malformed_bytes() {
     assert!(decode_nd_state(&good).is_some());
     assert!(decode_nd_state(&[]).is_none());
     assert!(decode_nd_state(&good[1..]).is_none(), "wrong magic");
+    assert!(decode_nd_state(&good[..5]).is_none(), "no entropy");
+    assert!(decode_nd_state(&good[..13]).is_none(), "no longest");
     assert!(
         decode_nd_state(&good[..good.len() - 1]).is_none(),
-        "truncated timeline"
+        "truncated graph"
     );
     let mut wrong_version = good.clone();
     wrong_version[4] = 9;
@@ -229,34 +245,40 @@ fn nd_state_decode_rejects_malformed_bytes() {
     zero_count[17..21].copy_from_slice(&0u32.to_le_bytes());
     assert!(decode_nd_state(&zero_count).is_none());
     let mut absurd_count = good.clone();
-    absurd_count[17..21].copy_from_slice(&1_000u32.to_le_bytes());
+    absurd_count[17..21].copy_from_slice(&2_000_000u32.to_le_bytes());
     assert!(decode_nd_state(&absurd_count).is_none());
-    let mut corrupt_timeline = good.clone();
-    corrupt_timeline[29] = 9;
+    let mut corrupt_value = good.clone();
+    assert_eq!(corrupt_value[21], 0, "node 0 is Start");
+    assert_eq!(
+        u32::from_le_bytes(corrupt_value[26..30].try_into().unwrap()),
+        1,
+        "one frame"
+    );
+    corrupt_value[50] = 9;
     assert!(
-        decode_nd_state(&corrupt_timeline).is_none(),
-        "an unknown choice tag inside a timeline is rejected"
+        decode_nd_state(&corrupt_value).is_none(),
+        "an unknown choice tag inside an edge is rejected"
     );
 }
 
 #[test]
-fn nd_state_decode_rejects_trailing_bytes_after_the_last_timeline() {
+fn nd_state_decode_rejects_trailing_bytes_after_the_graph() {
     let mut bytes = encode_nd_state(&sample_nd_state()).unwrap();
     bytes.push(0);
     assert!(decode_nd_state(&bytes).is_none());
 }
 
 #[test]
-fn nd_state_decode_rejects_a_timeline_body_with_trailing_bytes() {
+fn nd_state_decode_rejects_an_edge_value_with_trailing_bytes() {
     let state = NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+        graph: graph_of(vec![ChoiceValue::Boolean(true)]),
         entropy: 1,
-        extension: 0,
+        longest: 0,
     };
     let mut bytes = encode_nd_state(&state).unwrap();
-    let len = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
-    bytes[21..25].copy_from_slice(&(len + 1).to_le_bytes());
-    bytes.push(0);
+    let len = u32::from_le_bytes(bytes[42..46].try_into().unwrap()) as usize;
+    bytes[42..46].copy_from_slice(&(len as u32 + 1).to_le_bytes());
+    bytes.insert(46 + len, 0);
     assert!(decode_nd_state(&bytes).is_none());
 }
 
@@ -282,14 +304,17 @@ fn decode_blob_rejects_zlib_bomb_v1() {
     assert!(decode_blob(&blob).is_none());
 }
 
+fn over_bound_nd_state() -> NdReproState {
+    NdReproState {
+        graph: graph_of(vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]),
+        entropy: 1,
+        longest: 0,
+    }
+}
+
 #[test]
 fn decode_blob_rejects_zlib_bomb_nd() {
-    let state = NdReproState {
-        timelines: vec![vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]],
-        entropy: 1,
-        extension: 0,
-    };
-    let raw = encode_nd_state(&state).unwrap();
+    let raw = encode_nd_state(&over_bound_nd_state()).unwrap();
     assert!(raw.len() > MAX_DECOMPRESSED_LEN);
     let blob = hand_built_zlib_blob(PREFIX_ND_ZLIB, &raw);
     assert!(decode_blob(&blob).is_none());
@@ -297,18 +322,25 @@ fn decode_blob_rejects_zlib_bomb_nd() {
 
 #[test]
 fn over_bound_nd_state_takes_the_raw_prefix_and_round_trips() {
-    let state = NdReproState {
-        timelines: vec![vec![ChoiceValue::Bytes(vec![0u8; MAX_DECOMPRESSED_LEN])]],
-        entropy: 1,
-        extension: 0,
-    };
+    let state = over_bound_nd_state();
     let blob = encode_nd_failure(&state).unwrap();
     let bytes = base64_decode(&blob).unwrap();
     assert_eq!(bytes[0], PREFIX_ND_RAW);
     let Some(DecodedBlob::Nd(decoded)) = decode_blob(&blob) else {
         panic!("expected nd state");
     };
-    assert_eq!(decoded.timelines, state.timelines);
+    assert!(same_graph(&decoded.graph, &state.graph));
+}
+
+#[test]
+fn nd_encoders_refuse_a_graph_whose_values_nest_too_deep() {
+    let state = NdReproState {
+        graph: graph_of(nested_clones(MAX_CLONE_DEPTH + 1)),
+        entropy: 1,
+        longest: 0,
+    };
+    assert!(encode_nd_state(&state).is_none());
+    assert!(encode_nd_failure(&state).is_none());
 }
 
 #[test]
@@ -330,4 +362,10 @@ fn blob_round_trips_clones_nested_to_max_depth() {
 #[test]
 fn encode_refuses_clones_nested_beyond_max_depth() {
     assert!(encode_failure(&nested_clones(MAX_CLONE_DEPTH + 1)).is_none());
+}
+
+#[test]
+fn an_nd_blob_is_not_a_choice_sequence() {
+    let blob = encode_nd_failure(&sample_nd_state()).unwrap();
+    assert!(decode_failure(&blob).is_none());
 }

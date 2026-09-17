@@ -3,11 +3,12 @@
 //! A [`Counterexample`] is everything the engine knows about one failure
 //! origin (a panic site, `file:line:col`) during a run:
 //!
-//! - the **incumbent**, the best failing execution it holds — the shrinker's
-//!   subject, the reported example, and the first stored timeline;
-//! - the **pool**, other realized executions of the same failure captured
-//!   when it was confirmed or reproduced, replayed when the incumbent alone
-//!   does not reproduce (decision 25);
+//! - the **incumbent**, the best failing execution it holds — the reported
+//!   example and the graph shrinker's witness — with the spans it was
+//!   realized under, which give its draws their addresses;
+//! - the **graph** ([`Graph`], decision 78): the origin's failing executions
+//!   captured when it was confirmed, reproduced, or shrunk, merged by the
+//!   state each draw was made in and replayed as one test case;
 //! - its [`Standing`] — how far the failure is believed — and the replay
 //!   evidence behind that belief, which the report's caveat quotes
 //!   (decision 3);
@@ -17,7 +18,7 @@
 //!   (decision 72).
 //!
 //! One value per origin lives in `Engine::origins`. The stored form of a
-//! counterexample under nondeterministic handling — a version-2 database
+//! counterexample under nondeterministic handling — a version-3 database
 //! entry or an ND reproduce blob — is [`NdReproState`], built by
 //! [`Counterexample::repro_state`]; a deterministic run stores the
 //! incumbent's values alone, as it always has.
@@ -29,35 +30,35 @@
 //! deterministic or the origin is vacant; a rejection evicts the incumbent
 //! without forgetting the origin, so a re-sighting resumes against the same
 //! evidence and budgets and the caveat-only report can quote what was
-//! measured. And the stored pool has two writers: [`Counterexample::confirm`]
-//! and [`Counterexample::trust`] set it, truncated to [`nd::POOL_CAP`], and
-//! [`Counterexample::install_set`] is the multiverse passes' result, which
-//! only ever removes or reorders; no timeline joins the pool once a shrink
-//! has begun (decision 76). [`Counterexample::timelines`] composes the pool
-//! with the current incumbent.
+//! measured. And the graph has three writers: [`Counterexample::confirm`]
+//! and [`Counterexample::trust`] set it, and [`Counterexample::install`] is
+//! the graph shrinker's accepted candidate. Before any of them an
+//! unconfirmed origin replays as its incumbent's run alone
+//! ([`Counterexample::replay_graph`]).
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cmp::Ordering;
 
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::native::HashSet;
 use crate::native::blob::NdReproState;
-use crate::native::core::{ChoiceNode, ChoiceValue, sort_key};
-use crate::native::database::{serialize_choices, serialize_nodes};
+use crate::native::core::{ChoiceNode, Span, flattened_len, sort_key};
+use crate::native::database::{fnv1a, serialize_nodes};
+use crate::native::graph::{Graph, Run};
 use crate::native::nd::{self, Evidence, GauntletSpend};
 use crate::native::test_runner::RunResult;
 
 /// How far a counterexample is believed. The only transitions are the ones
 /// [`Counterexample`]'s methods implement: `Unconfirmed → Confirmed` is a
 /// discovery-bar accept (the post-generation sweep, shrink admission, a
-/// backtrack, or the final replay's pooled review handing its reproducing
-/// run to a fresh batch — decision 72); `Unconfirmed → Trusted` is
-/// database or blob reproduction; `Trusted → Confirmed` is promotion by a
-/// failing evidence batch. Rejection never demotes and never removes state.
+/// backtrack, or the final replay's review handing its reproducing run to
+/// a fresh batch — decision 72); `Unconfirmed → Trusted` is database or
+/// blob reproduction; `Trusted → Confirmed` is promotion by a failing
+/// evidence batch. Rejection never demotes and never removes state.
 #[derive(Default)]
 pub(crate) enum Standing {
     /// Observed interesting; hasn't passed the discovery bar. A
@@ -66,7 +67,7 @@ pub(crate) enum Standing {
     #[default]
     Unconfirmed,
     /// Reproduced from stored state: exempt from the bar's verdict and from
-    /// eviction (decision 24). Carries the stored pool but no anchor until
+    /// eviction (decision 24). Carries the stored graph but no anchor until
     /// an evidence batch promotes it.
     Trusted,
     /// Past the discovery bar, or promoted from `Trusted` by a failing
@@ -84,6 +85,7 @@ pub(crate) enum Standing {
 /// One pre-flip interesting execution retained for the backtrack scan.
 pub(crate) struct HistoryEntry {
     pub(crate) nodes: Vec<ChoiceNode>,
+    pub(crate) spans: Vec<Span>,
     /// Whether this entry became the incumbent when recorded (founding
     /// sighting or shortlex displacement). Accepts strictly shrink, so the
     /// accept entries form the shortlex-sorted segment the scan probes
@@ -91,12 +93,18 @@ pub(crate) struct HistoryEntry {
     pub(crate) accept: bool,
 }
 
+impl HistoryEntry {
+    pub(crate) fn run(&self) -> Run {
+        Run::from_nodes(&self.nodes, &self.spans)
+    }
+}
+
 /// Everything a never-confirmed origin failed with before any flip: raw
 /// sightings and shrink accepts alike, in execution order, deduplicated by
 /// serialized choices, unbounded (gate G24: a recency bound evicts exactly
 /// the entries an early slip-in needs). A late flip backtracks over these
 /// to find the reproduction boundary. Dropped when the origin confirms —
-/// the pool takes over — which also keeps the accept segment sorted: no
+/// the graph takes over — which also keeps the accept segment sorted: no
 /// post-restore accept is ever recorded.
 #[derive(Default)]
 pub(crate) struct History {
@@ -105,7 +113,12 @@ pub(crate) struct History {
 }
 
 impl History {
-    fn record(&mut self, nodes: &[ChoiceNode], accept: bool) -> Result<(), InternalError> {
+    fn record(
+        &mut self,
+        nodes: &[ChoiceNode],
+        spans: &[Span],
+        accept: bool,
+    ) -> Result<(), InternalError> {
         let key = hegel_internal_unwrap!(
             serialize_nodes(nodes),
             "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
@@ -113,6 +126,7 @@ impl History {
         if self.seen.insert(key) {
             self.entries.push(HistoryEntry {
                 nodes: nodes.to_vec(),
+                spans: spans.to_vec(),
                 accept,
             });
         }
@@ -128,23 +142,6 @@ impl History {
     }
 }
 
-/// The stored-timeline set for one counterexample: the incumbent first,
-/// then deduplicated pool entries, capped at [`nd::POOL_CAP`] timelines in
-/// total, incumbent included. Every pool the engine stores, persists, or
-/// replays is built here, so the cap comparison is written once.
-pub(crate) fn pooled_timelines(
-    incumbent: Vec<ChoiceValue>,
-    rest: impl IntoIterator<Item = Vec<ChoiceValue>>,
-) -> Vec<Vec<ChoiceValue>> {
-    let mut timelines = Vec::from([incumbent]);
-    for timeline in rest {
-        if timelines.len() < nd::POOL_CAP && !timelines.contains(&timeline) {
-            timelines.push(timeline);
-        }
-    }
-    timelines
-}
-
 /// A failing test case, as the engine holds it for one origin. See the
 /// module docs.
 #[derive(Default)]
@@ -155,12 +152,16 @@ pub(crate) struct Counterexample {
     /// budgets, so a re-sighting resumes where it left off and the
     /// caveat-only report can quote what was measured.
     incumbent: Option<Vec<ChoiceNode>>,
-    /// The timelines captured when the origin was confirmed or trusted, the
-    /// confirm-time incumbent first, truncated to [`nd::POOL_CAP`]. Kept as
-    /// captured: after shrinking moves the incumbent, the confirm-time
-    /// example stays here as a replay fallback. [`Self::timelines`] puts the
-    /// current incumbent ahead of it.
-    pool: Vec<Vec<ChoiceValue>>,
+    /// The spans the incumbent was realized under: what gives its draws
+    /// their addresses in the graph.
+    incumbent_spans: Vec<Span>,
+    /// The counterexample graph, once confirmed or trusted (decision 78);
+    /// the graph shrinker moves it.
+    graph: Option<Arc<Graph>>,
+    /// The flattened length of the longest failing run the graph holds:
+    /// replays draw at random past the graph up to
+    /// [`nd::continuation_budget`] of it.
+    longest: usize,
     standing: Standing,
     /// Physical replay evidence behind the standing: confirmation batches,
     /// reuse reproductions, and shrink-time batches (report-time replays
@@ -183,7 +184,8 @@ pub(crate) struct Counterexample {
     /// already replayed once.
     first_checked: bool,
     /// Bar batches spent this run by the sweep, shrink admission, and the
-    /// pooled review, capped at [`nd::BAR_ATTEMPTS_PER_RUN`] (decision 72).
+    /// final replay's review, capped at [`nd::BAR_ATTEMPTS_PER_RUN`]
+    /// (decision 72).
     bar_attempts: u64,
     /// Bar batches spent across this origin's backtracks, capped at
     /// [`nd::BACKTRACK_BAR_ATTEMPTS`] — a budget separate from
@@ -195,38 +197,6 @@ pub(crate) struct Counterexample {
     pub(crate) gauntlet_spend: GauntletSpend,
 }
 
-/// The order of two timelines within a counterexample (decision 74): the
-/// database's shortlex over serialized values — fewer flattened choices
-/// first, then the bytes. Timelines that cannot be serialized compare equal.
-pub(crate) fn timeline_order(a: &[ChoiceValue], b: &[ChoiceValue]) -> Ordering {
-    match crate::native::core::flattened_values_len(a)
-        .cmp(&crate::native::core::flattened_values_len(b))
-    {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-    match (serialize_choices(a), serialize_choices(b)) {
-        (Some(a), Some(b)) => a.cmp(&b),
-        _ => Ordering::Equal,
-    }
-}
-
-/// The order of two counterexamples (decision 74): fewer timelines first,
-/// then the timelines lexicographically under [`timeline_order`].
-pub(crate) fn set_order(a: &[Vec<ChoiceValue>], b: &[Vec<ChoiceValue>]) -> Ordering {
-    match a.len().cmp(&b.len()) {
-        Ordering::Equal => {}
-        ord => return ord,
-    }
-    for (x, y) in a.iter().zip(b) {
-        match timeline_order(x, y) {
-            Ordering::Equal => {}
-            ord => return ord,
-        }
-    }
-    Ordering::Equal
-}
-
 impl Counterexample {
     /// The confirmation anchor, once confirmed.
     pub(crate) fn anchor(&self) -> Option<f64> {
@@ -236,37 +206,32 @@ impl Counterexample {
         }
     }
 
-    /// Install a structurally shrunk counterexample (decision 74's
-    /// multiverse passes): `set[0]` becomes the incumbent — as `nodes` when
-    /// it changed, which must be a run that stayed live on it — and the
-    /// rest becomes the pool, in order.
-    pub(crate) fn install_set(&mut self, set: &[Vec<ChoiceValue>], nodes: Option<Vec<ChoiceNode>>) {
-        if let Some(nodes) = nodes {
-            self.incumbent = Some(nodes);
-        }
-        self.pool = set.iter().skip(1).cloned().collect();
-    }
     /// The best failing execution held, if any.
     pub(crate) fn incumbent(&self) -> Option<&[ChoiceNode]> {
         self.incumbent.as_deref()
     }
 
-    /// The incumbent's realized values — the deterministic stored form and
-    /// the first stored timeline.
-    pub(crate) fn incumbent_values(&self) -> Option<Vec<ChoiceValue>> {
+    /// The spans the incumbent was realized under.
+    pub(crate) fn incumbent_spans(&self) -> &[Span] {
+        &self.incumbent_spans
+    }
+
+    /// The incumbent as a run with the address of every draw.
+    pub(crate) fn incumbent_run(&self) -> Option<Run> {
         self.incumbent
             .as_ref()
-            .map(|nodes| nodes.iter().map(|n| n.value()).collect())
+            .map(|nodes| Run::from_nodes(nodes, &self.incumbent_spans))
     }
 
     /// A raw interesting execution: found the incumbent if the origin is
     /// vacant, or displace it if `nodes` shortlex-precedes it. Returns
     /// whether `nodes` became the incumbent.
-    pub(crate) fn adopt(&mut self, nodes: Vec<ChoiceNode>) -> bool {
+    pub(crate) fn adopt(&mut self, nodes: Vec<ChoiceNode>, spans: Vec<Span>) -> bool {
         match &self.incumbent {
             Some(current) if sort_key(&nodes) >= sort_key(current) => false,
             _ => {
                 self.incumbent = Some(nodes);
+                self.incumbent_spans = spans;
                 true
             }
         }
@@ -275,61 +240,61 @@ impl Counterexample {
     /// Install `nodes` as the incumbent unconditionally — a shrink result,
     /// a backtrack restore, or a flip that returns a deterministic shrink's
     /// starting point.
-    pub(crate) fn replace(&mut self, nodes: Vec<ChoiceNode>) {
+    pub(crate) fn replace(&mut self, nodes: Vec<ChoiceNode>, spans: Vec<Span>) {
         self.incumbent = Some(nodes);
+        self.incumbent_spans = spans;
     }
 
     /// Remove the incumbent, keeping everything else known about the
     /// origin. Returns what was evicted.
     pub(crate) fn evict(&mut self) -> Option<Vec<ChoiceNode>> {
+        self.incumbent_spans = Vec::new();
         self.incumbent.take()
     }
 
-    /// The captured timeline pool; empty unless confirmed or trusted from a
-    /// v2 entry.
-    pub(crate) fn pool(&self) -> &[Vec<ChoiceValue>] {
-        &self.pool
+    /// The stored counterexample graph; `None` unless confirmed or trusted
+    /// from a version-3 entry.
+    #[cfg(test)]
+    pub(crate) fn graph(&self) -> Option<&Arc<Graph>> {
+        self.graph.as_ref()
     }
 
-    /// The timelines to replay for this counterexample with `incumbent` in
-    /// front of the captured pool: see [`pooled_timelines`].
-    pub(crate) fn timelines_from(&self, incumbent: Vec<ChoiceValue>) -> Vec<Vec<ChoiceValue>> {
-        pooled_timelines(incumbent, self.pool.iter().cloned())
-    }
-
-    /// The timelines to replay for this counterexample: the current
-    /// incumbent's values first, then the captured pool. Empty with no
-    /// incumbent.
-    pub(crate) fn timelines(&self) -> Vec<Vec<ChoiceValue>> {
-        match self.incumbent_values() {
-            Some(incumbent) => self.timelines_from(incumbent),
-            None => Vec::new(),
+    /// The graph to replay this counterexample by: the stored graph, or —
+    /// before the origin is confirmed or trusted — the incumbent's own run.
+    /// `None` with neither.
+    pub(crate) fn replay_graph(&self) -> Option<Arc<Graph>> {
+        match &self.graph {
+            Some(graph) => Some(Arc::clone(graph)),
+            None => self
+                .incumbent_run()
+                .map(|run| Arc::new(Graph::from_run(&run))),
         }
     }
 
-    /// The stored form under nondeterministic handling for `incumbent` (the
-    /// current one, or a candidate the shrinker has adopted but not yet
-    /// handed back): the timelines incumbent-first, content-hash entropy
-    /// (so identical state re-encodes identically across runs), and the
-    /// standard continuation extension.
-    pub(crate) fn repro_state(
-        &self,
-        incumbent: Vec<ChoiceValue>,
-    ) -> Result<NdReproState, InternalError> {
-        let len = crate::native::core::flattened_values_len(&incumbent);
-        let timelines = self.timelines_from(incumbent);
-        let mut content = Vec::new();
-        for timeline in &timelines {
-            let bytes = hegel_internal_unwrap!(
-                serialize_choices(timeline),
-                "a stored timeline's clone values nest deeper than MAX_CLONE_DEPTH"
-            );
-            content.extend_from_slice(&bytes);
-        }
+    /// The flattened length of the longest failing run known: the stored
+    /// graph's, floored at the incumbent's.
+    pub(crate) fn longest(&self) -> usize {
+        self.longest
+            .max(self.incumbent.as_deref().map_or(0, flattened_len))
+    }
+
+    /// The stored form under nondeterministic handling: the replay graph,
+    /// content-hash entropy (so identical state re-encodes identically
+    /// across runs), and the longest run's length for the continuation
+    /// budget. Needs an incumbent or a graph.
+    pub(crate) fn repro_state(&self) -> Result<NdReproState, InternalError> {
+        let graph = hegel_internal_unwrap!(
+            self.replay_graph(),
+            "Counterexample::repro_state: the origin holds nothing to store"
+        );
+        let bytes = hegel_internal_unwrap!(
+            graph.encode(),
+            "a stored counterexample's clone values nest deeper than MAX_CLONE_DEPTH"
+        );
         Ok(NdReproState {
-            timelines,
-            entropy: crate::native::database::fnv1a(&content),
-            extension: (nd::continuation_budget(len) - len) as u32,
+            graph: (*graph).clone(),
+            entropy: fnv1a(&bytes),
+            longest: self.longest() as u32,
         })
     }
 
@@ -340,31 +305,30 @@ impl Counterexample {
     }
 
     /// Stored state reproduced this origin: trusted without re-running the
-    /// bar (decision 24). `pool` carries the reproducing entry's stored
-    /// timelines (empty for v1 entries), truncated to [`nd::POOL_CAP`] — a
-    /// decoded entry can carry up to the looser format bound. `evidence`
-    /// is the reproducing replay batch's physical (fails, replays), folded
-    /// into the trusted counts. Never demotes `Confirmed`, and never
-    /// replaces an existing pool with an empty one.
-    pub(crate) fn trust(&mut self, mut pool: Vec<Vec<ChoiceValue>>, evidence: (u64, u64)) {
-        pool.truncate(nd::POOL_CAP);
+    /// bar (decision 24). `stored` is the reproducing entry's graph and
+    /// longest-run length (`None` for a version-1 entry, which carries no
+    /// structure: the origin then replays as its incumbent's run).
+    /// `evidence` is the reproducing replay batch's physical (fails,
+    /// replays), folded into the trusted counts. Never demotes `Confirmed`,
+    /// and never replaces a stored graph with nothing.
+    pub(crate) fn trust(&mut self, stored: Option<(Arc<Graph>, usize)>, evidence: (u64, u64)) {
         match self.standing {
-            Standing::Confirmed { .. } => {}
+            Standing::Confirmed { .. } => return,
             Standing::Trusted => {
-                if !pool.is_empty() {
-                    self.pool = pool;
-                }
                 self.fails += evidence.0;
                 self.replays += evidence.1;
             }
             Standing::Unconfirmed => {
                 self.standing = Standing::Trusted;
-                self.pool = pool;
                 self.fails = evidence.0;
                 self.replays = evidence.1;
                 self.report_fails = 0;
                 self.report_replays = 0;
             }
+        }
+        if let Some((graph, longest)) = stored {
+            self.graph = Some(graph);
+            self.longest = longest;
         }
     }
 
@@ -380,40 +344,62 @@ impl Counterexample {
     }
 
     /// The discovery bar accepted this origin, or a failing evidence batch
-    /// promoted it from `Trusted`: store its replay state and drop the
-    /// pre-flip history, whose job the pool takes over. `evidence` is the
-    /// batch's physical (fails, replays), folded into the cumulative
-    /// counts. The pool is truncated to [`nd::POOL_CAP`]. Confirming a
-    /// confirmed origin is a violated invariant: every caller sits behind
-    /// a `needs_confirmation`/`take_witness` check.
+    /// promoted it from `Trusted`: store its replay state — `graph`, with
+    /// the batch's failing runs grafted in, and `longest`, the longest of
+    /// them — and drop the pre-flip history, whose job the graph takes
+    /// over. `evidence` is the batch's physical (fails, replays), folded
+    /// into the cumulative counts. Confirming a confirmed origin is a
+    /// violated invariant: every caller sits behind a
+    /// `needs_confirmation`/`take_witness` check.
     pub(crate) fn confirm(
         &mut self,
         anchor: f64,
         witness: Option<RunResult>,
-        mut pool: Vec<Vec<ChoiceValue>>,
+        graph: Graph,
+        longest: usize,
         evidence: (u64, u64),
-    ) -> Result<(), crate::control::InternalError> {
+    ) -> Result<(), InternalError> {
         if matches!(self.standing, Standing::Confirmed { .. }) {
             crate::control::hegel_internal_error!(
                 "Counterexample::confirm: the origin is already confirmed"
             );
         }
-        pool.truncate(nd::POOL_CAP);
         self.standing = Standing::Confirmed {
             anchor,
             witness: witness.map(Box::new),
         };
-        self.pool = pool;
+        self.graph = Some(Arc::new(graph));
+        self.longest = longest;
         self.fails += evidence.0;
         self.replays += evidence.1;
         self.history = History::default();
         Ok(())
     }
 
+    /// A validated move of the whole counterexample (decision 78): the
+    /// graph shrinker accepted `graph`, whose witness `nodes` (realized
+    /// under `spans`) is the new incumbent, measured at `anchor` — which
+    /// raises the stored anchor, never lowers it — with `longest` the
+    /// longest failing run it holds.
+    pub(crate) fn install(
+        &mut self,
+        graph: Graph,
+        nodes: Vec<ChoiceNode>,
+        spans: Vec<Span>,
+        anchor: f64,
+        longest: usize,
+    ) {
+        self.incumbent = Some(nodes);
+        self.incumbent_spans = spans;
+        self.graph = Some(Arc::new(graph));
+        self.longest = longest;
+        self.raise_anchor(anchor);
+    }
+
     /// A validated accept measured the failure rate at `anchor` (a gauntlet
-    /// first-accept or a boost holdout). Monotone: never lowers the stored
-    /// anchor (decision 19), and a no-op unless confirmed — an anchor only
-    /// exists past the bar.
+    /// accept or a boost holdout). Monotone: never lowers the stored anchor
+    /// (decision 19), and a no-op unless confirmed — an anchor only exists
+    /// past the bar.
     pub(crate) fn raise_anchor(&mut self, anchor: f64) {
         if let Standing::Confirmed { anchor: stored, .. } = &mut self.standing {
             if anchor > *stored {
@@ -471,9 +457,10 @@ impl Counterexample {
     pub(crate) fn record_sighting(
         &mut self,
         nodes: &[ChoiceNode],
+        spans: &[Span],
         accept: bool,
     ) -> Result<(), InternalError> {
-        self.history.record(nodes, accept)
+        self.history.record(nodes, spans, accept)
     }
 
     pub(crate) fn history(&self) -> &History {
@@ -562,7 +549,7 @@ impl Counterexample {
                 if *report_replays > 0 && *report_fails == 0 {
                     format!(
                         "nondeterministic failure, reproduced from stored \
-                         timelines earlier this run (failed {fails} of {replays} \
+                         state earlier this run (failed {fails} of {replays} \
                          replays) but not reproduced at report time — a rare \
                          failure, or something in the environment changed after \
                          discovery"
@@ -570,13 +557,13 @@ impl Counterexample {
                 } else if *report_replays > 0 {
                     format!(
                         "nondeterministic failure, reproduced from stored \
-                         timelines: failed {fails} of {replays} replays at reuse \
+                         state: failed {fails} of {replays} replays at reuse \
                          and {report_fails} of {report_replays} at report time"
                     )
                 } else {
                     format!(
                         "nondeterministic failure, reproduced from stored \
-                         timelines: failed {fails} of {replays} replays this run"
+                         state: failed {fails} of {replays} replays this run"
                     )
                 }
             }

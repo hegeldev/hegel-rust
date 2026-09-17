@@ -20,11 +20,9 @@
 //! different states in different runs the node holds one edge per target —
 //! a **tie**, settled at replay by the identity the next draw reports.
 //!
-//! The graph is walked by [`crate::native::core::Replay`] (`Replay::graph`)
-//! and shrunk by [`crate::native::graph_shrink`]. Nothing here assumes the
+//! The graph is walked by `Replay::graph` (`core/replay.rs`) and shrunk by
+//! [`crate::native::graph_shrink`]. Nothing here assumes the
 //! graph is acyclic: two runs may order sibling spans differently.
-
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 
@@ -116,6 +114,7 @@ impl Run {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn values(&self) -> Vec<ChoiceValue> {
         self.steps.iter().map(|s| s.value.clone()).collect()
     }
@@ -269,6 +268,27 @@ impl Graph {
         added
     }
 
+    /// Graft a failing run the graph could not produce into it: insert it
+    /// when the walk has a gap for it, and leave the graph alone when the
+    /// run is foreign — the walk would serve another value somewhere, so
+    /// no replay of the graph produces it and its edges would be dead.
+    /// Returns whether anything was added.
+    pub(crate) fn graft(&mut self, run: &Run) -> bool {
+        self.walk_verdict(run) == Walked::Gap && self.insert(run)
+    }
+
+    /// The graph with `run` grafted, or — when `run` is foreign to it — the
+    /// run's own graph: the counterexample a failing run the graph cannot
+    /// produce belongs to.
+    pub(crate) fn with_run(&self, run: &Run) -> Graph {
+        if self.walk_verdict(run) == Walked::Foreign {
+            return Graph::from_run(run);
+        }
+        let mut g = self.clone();
+        g.insert(run);
+        g
+    }
+
     /// Whether the first-fit walk — the value served is the first edge at
     /// the draw's address whose kind fits, ties settled by the identity the
     /// run reached — produces the whole run, would serve another value
@@ -276,9 +296,6 @@ impl Graph {
     pub(crate) fn walk_verdict(&self, run: &Run) -> Walked {
         let mut n = START;
         for (step, ident) in run.steps.iter().zip(run.idents()) {
-            let Some(want) = self.node(&ident) else {
-                return Walked::Gap;
-            };
             let Some(first) = self.nodes[n]
                 .edges
                 .iter()
@@ -289,6 +306,9 @@ impl Graph {
             if first.value != step.value {
                 return Walked::Foreign;
             }
+            let Some(want) = self.node(&ident) else {
+                return Walked::Gap;
+            };
             if self.edge_to(n, step, want).is_none() {
                 return Walked::Gap;
             }
@@ -325,7 +345,7 @@ impl Graph {
 
     /// The shrink order on graphs: fewer edges, then fewer reachable nodes,
     /// then the edge values in breadth-first order, each by
-    /// [`ChoiceValue::shrink_rank`]. Strictly smaller is better.
+    /// [`shrink_rank`]. Strictly smaller is better.
     pub(crate) fn key(&self) -> GraphKey {
         let order = self.reachable();
         let mut values = Vec::new();
@@ -379,9 +399,26 @@ impl Graph {
         g
     }
 
+    /// The graph without edge `i` of node `n`. A node left without edges
+    /// is where a run ends: the edges into it lead to `End` instead (one
+    /// of any two made identical), and it goes with the next pruning.
     pub(crate) fn delete_edge(&self, n: usize, i: usize) -> Graph {
         let mut g = self.clone();
         g.nodes[n].edges.remove(i);
+        if g.nodes[n].edges.is_empty() {
+            for node in &mut g.nodes {
+                let mut kept: Vec<Edge> = Vec::with_capacity(node.edges.len());
+                for mut e in node.edges.drain(..) {
+                    if e.target == n {
+                        e.target = END;
+                    }
+                    if !kept.contains(&e) {
+                        kept.push(e);
+                    }
+                }
+                node.edges = kept;
+            }
+        }
         g
     }
 

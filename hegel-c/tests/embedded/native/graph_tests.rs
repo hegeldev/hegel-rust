@@ -192,6 +192,14 @@ fn walk_verdicts() {
         Walked::Gap
     );
     assert_eq!(g.walk_verdict(&Run::default()), Walked::Gap);
+    assert_eq!(
+        g.walk_verdict(&run(vec![
+            step(COIN, ChoiceValue::Boolean(true)),
+            step(&[(4, 0)], int(3)),
+        ])),
+        Walked::Foreign,
+        "the walk serves false before it reaches the state the run has and the graph lacks"
+    );
 }
 
 #[test]
@@ -278,13 +286,45 @@ fn pruned_drops_unreachable_nodes_and_keeps_end() {
 
     let left = g.node(&at(&[(2, 0)])).unwrap();
     let dead = g.delete_edge(START, 1).delete_edge(left, 0);
+    assert_eq!(
+        dead.nodes()[START].edges[0].target,
+        END,
+        "a node left without edges is where the run ends"
+    );
     let p = dead.pruned();
-    assert_eq!(p.nodes().len(), 3);
+    assert_eq!(p.nodes().len(), 2);
     assert_eq!(p.nodes()[START].ident, Ident::Start);
     assert_eq!(p.nodes()[END].ident, Ident::End);
     assert!(p.nodes()[END].edges.is_empty());
-    assert_eq!(p.nodes()[2].ident, at(&[(2, 0)]));
     assert_eq!(p.edge_count(), 1);
+    assert_eq!(
+        p.walk_verdict(&run(vec![step(COIN, ChoiceValue::Boolean(false))])),
+        Walked::Whole
+    );
+}
+
+#[test]
+fn pruning_keeps_end_when_nothing_reaches_it() {
+    let p = Graph::new().pruned();
+    assert_eq!(p.nodes().len(), 2);
+    assert_eq!(p.nodes()[END].ident, Ident::End);
+    assert_eq!(p.edge_count(), 0);
+}
+
+#[test]
+fn deleting_a_last_edge_merges_the_redirected_edge_with_an_existing_one() {
+    let mut g = Graph::from_run(&left_run(false, 3));
+    g.insert(&run(vec![step(COIN, ChoiceValue::Boolean(false))]));
+    assert_eq!(
+        g.nodes()[START].edges.len(),
+        2,
+        "a tie: on to LEFT, or the end"
+    );
+    let left = g.node(&at(&[(2, 0)])).unwrap();
+    let cut = g.delete_edge(left, 0);
+    assert_eq!(cut.nodes()[START].edges.len(), 1);
+    assert_eq!(cut.nodes()[START].edges[0].target, END);
+    assert_eq!(cut.pruned().edge_count(), 1);
 }
 
 #[test]

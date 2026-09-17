@@ -421,12 +421,18 @@ fn data_source_for_blob_rejects_an_undecodable_blob() {
 fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budget() {
     use crate::native::blob::{NdReproState, encode_nd_failure};
     use crate::native::core::ChoiceValue;
+    use crate::native::graph::{Graph, Run, Step};
     use crate::settings::{Output, Verbosity};
     use std::sync::{Arc, Mutex};
     let state = NdReproState {
-        timelines: alloc::vec![alloc::vec![ChoiceValue::Boolean(true)]],
+        graph: Graph::from_run(&Run {
+            steps: alloc::vec![Step {
+                addr: alloc::vec![(28, 0)],
+                value: ChoiceValue::Boolean(true),
+            }],
+        }),
         entropy: 7,
-        extension: 4,
+        longest: 1,
     };
     let blob = encode_nd_failure(&state).unwrap();
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -447,7 +453,7 @@ fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budge
     );
     assert!(
         ds.generate_boolean(0.5, None).unwrap(),
-        "the incumbent timeline replays verbatim"
+        "the stored graph serves the draw"
     );
     ds.generate_boolean(0.5, None).unwrap();
     ds.mark_complete(&TestCaseResult::Valid);

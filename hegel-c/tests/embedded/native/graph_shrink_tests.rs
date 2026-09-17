@@ -92,12 +92,18 @@ impl GraphProbe for Probe {
         Box::pin(async move { Ok(self.run(graph, max_size)) })
     }
 
-    fn charge(&mut self, drive: bool) -> u64 {
+    fn charge(&mut self, _: f64, drive: bool) -> u64 {
         self.charges.push(drive);
         self.min_fails
     }
 
-    fn adopted(&mut self, graph: &Graph, _: &[ChoiceNode], anchor: f64) -> Result<(), RunError> {
+    fn adopted(
+        &mut self,
+        graph: &Graph,
+        _: (&[ChoiceNode], &[Span]),
+        anchor: f64,
+        _: usize,
+    ) -> Result<(), RunError> {
         self.adopted.push((graph.edge_count(), anchor));
         Ok(())
     }
@@ -218,7 +224,7 @@ fn list(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
 }
 
 #[test]
-fn a_structure_determining_value_shrinks_by_warm_up_and_pruning() {
+fn a_list_shrinks_to_the_one_element_that_fails() {
     let (mut shrinker, mut probe) = start(
         list,
         &[run(&[
@@ -230,9 +236,9 @@ fn a_structure_determining_value_shrinks_by_warm_up_and_pruning() {
         0.5,
     );
     shrink(&mut shrinker, &mut probe);
-    assert_eq!(ints(shrinker.witness().0), vec![2, 0, 5]);
-    assert_eq!(shrinker.graph().edge_count(), 3);
-    assert_eq!(shrinker.graph().nodes().len(), 4);
+    assert_eq!(ints(shrinker.witness().0), vec![1, 5]);
+    assert_eq!(shrinker.graph().edge_count(), 2);
+    assert_eq!(shrinker.graph().nodes().len(), 3);
 }
 
 fn flaky(tc: &mut NativeTestCase, lcg: &mut Lcg) -> Option<bool> {
@@ -270,18 +276,46 @@ fn early_exit(tc: &mut NativeTestCase, lcg: &mut Lcg) -> Option<bool> {
 
 #[test]
 fn a_failing_run_the_graph_cannot_produce_is_grafted_unless_foreign() {
-    let (mut shrinker, mut probe) = start(early_exit, &[run(&[(A, value(5)), (B, value(4))])], 0.5);
+    let (mut shrinker, _) = start(early_exit, &[run(&[(A, value(5)), (B, value(4))])], 0.5);
     assert_eq!(shrinker.graph().edge_count(), 2);
+    shrinker.graft(&run(&[(A, value(9)), (B, value(2))]));
+    assert_eq!(
+        shrinker.graph().edge_count(),
+        2,
+        "foreign at the first draw: the walk serves 5 there"
+    );
+    shrinker.graft(&run(&[(A, value(5)), (B, value(1))]));
+    assert_eq!(
+        shrinker.graph().edge_count(),
+        2,
+        "foreign at the second draw"
+    );
+    shrinker.graft(&run(&[(A, value(5))]));
+    assert_eq!(
+        shrinker.graph().edge_count(),
+        3,
+        "the early exit is a gap: a tie at the start"
+    );
+    let start = &shrinker.graph().nodes()[START].edges;
+    assert!(start.iter().all(|e| e.value == value(5)));
+    assert!(start.iter().any(|e| e.target == crate::native::graph::END));
+}
+
+#[test]
+fn an_early_exits_shrink_keeps_no_value_the_walk_never_serves() {
+    let (mut shrinker, mut probe) = start(early_exit, &[run(&[(A, value(5)), (B, value(4))])], 0.5);
     shrink(&mut shrinker, &mut probe);
     let witness = ints(shrinker.witness().0);
     assert_eq!(witness[0], 3);
-    assert!(witness == vec![3] || witness == vec![3, 0]);
+    assert!(witness.len() <= 2);
     let graph = shrinker.graph();
-    assert_eq!(graph.edge_count(), 3);
+    assert!(graph.edge_count() <= 3);
     let start = &graph.nodes()[START].edges;
-    assert_eq!(start.len(), 2);
-    assert!(start.iter().all(|e| e.value == value(3)));
-    assert!(start.iter().any(|e| e.target == crate::native::graph::END));
+    assert!(
+        start.iter().all(|e| e.value == value(3)),
+        "every start edge is the shrunk value: {:?}",
+        graph.nodes()
+    );
 }
 
 fn float_body(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
@@ -453,4 +487,183 @@ fn constraints_are_learned_for_every_draw_but_clones() {
     };
     shrinker.learn_constraints(&[clone], &[span]);
     assert_eq!(shrinker.constraints.len(), 2);
+}
+
+fn counted_list(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    let n = int(tc, 1, 5)?;
+    let mut bug = false;
+    for _ in 0..n {
+        bug |= int(tc, 2, 20)? >= 10;
+    }
+    Some(bug)
+}
+
+#[test]
+fn a_counted_list_shrinks_by_deleting_elements_and_lowering_the_count() {
+    let (mut shrinker, mut probe) = start(
+        counted_list,
+        &[run(&[
+            (A, value(3)),
+            (&[(2, 0)], value(0)),
+            (&[(2, 1)], value(0)),
+            (&[(2, 2)], value(10)),
+        ])],
+        0.5,
+    );
+    shrink(&mut shrinker, &mut probe);
+    assert_eq!(ints(shrinker.witness().0), vec![1, 10]);
+    assert_eq!(shrinker.graph().edge_count(), 2);
+}
+
+fn pairs(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    let n = int(tc, 1, 3)?;
+    let mut bug = false;
+    for _ in 0..n {
+        tc.start_span(5);
+        let first = int(tc, 2, 20);
+        let second = int(tc, 3, 20);
+        tc.stop_span(false);
+        first?;
+        bug |= second? >= 10;
+    }
+    Some(bug)
+}
+
+#[test]
+fn deleting_a_span_renumbers_the_siblings_after_it() {
+    let (mut shrinker, mut probe) = start(
+        pairs,
+        &[run(&[
+            (A, value(2)),
+            (&[(5, 0), (2, 0)], value(0)),
+            (&[(5, 0), (3, 0)], value(0)),
+            (&[(5, 1), (2, 0)], value(0)),
+            (&[(5, 1), (3, 0)], value(10)),
+        ])],
+        0.5,
+    );
+    shrink(&mut shrinker, &mut probe);
+    assert_eq!(ints(shrinker.witness().0), vec![1, 0, 10]);
+    let (nodes, spans) = shrinker.witness();
+    let run = Run::from_nodes(nodes, spans);
+    assert_eq!(run.steps[2].addr, vec![(5, 0), (3, 0)]);
+}
+
+fn four_ints(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    let a = int(tc, 1, 100)?;
+    let b = int(tc, 2, 100)?;
+    let c = int(tc, 3, 100)?;
+    let d = int(tc, 4, 100)?;
+    Some(a + b + c + d >= 10)
+}
+
+#[test]
+fn a_span_the_test_always_draws_is_retried_with_at_most_the_nearest_count_lowerings() {
+    let (mut shrinker, mut probe) = start(
+        four_ints,
+        &[run(&[
+            (A, value(5)),
+            (B, value(5)),
+            (C, value(5)),
+            (&[(4, 0)], value(10)),
+        ])],
+        0.5,
+    );
+    shrink(&mut shrinker, &mut probe);
+    assert_eq!(ints(shrinker.witness().0), vec![0, 0, 0, 10]);
+    assert_eq!(shrinker.graph().edge_count(), 4);
+}
+
+fn one_int(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    Some(int(tc, 1, 100)? >= 10)
+}
+
+#[test]
+fn the_only_draw_is_never_proposed_for_deletion() {
+    let (mut shrinker, mut probe) = start(one_int, &[run(&[(A, value(50))])], 0.5);
+    shrink(&mut shrinker, &mut probe);
+    assert_eq!(ints(shrinker.witness().0), vec![10]);
+}
+
+#[test]
+fn spans_are_ordered_last_starting_first_then_outermost_first() {
+    let r = run(&[
+        (A, value(1)),
+        (&[(5, 0), (2, 0)], value(0)),
+        (&[(5, 0), (3, 0)], value(0)),
+        (&[(5, 1), (2, 0)], value(0)),
+    ]);
+    let spans: Vec<Addr> = spans_of(&r).into_iter().map(|(s, _)| s).collect();
+    assert_eq!(
+        spans,
+        vec![
+            vec![(5, 1)],
+            vec![(5, 1), (2, 0)],
+            vec![(5, 0), (3, 0)],
+            vec![(5, 0)],
+            vec![(5, 0), (2, 0)],
+            vec![(1, 0)],
+        ]
+    );
+    let shorter = without_span(&r, &[(5, 0)]);
+    assert_eq!(shorter.steps.len(), 2);
+    assert_eq!(shorter.steps[1].addr, vec![(5, 0), (2, 0)]);
+    let inner = without_span(&r, &[(5, 0), (2, 0)]);
+    assert_eq!(inner.steps.len(), 3);
+    assert_eq!(inner.steps[1].addr, vec![(5, 0), (3, 0)]);
+    assert_eq!(inner.steps[2].addr, vec![(5, 1), (2, 0)]);
+}
+
+fn wrapped_then_tail(tc: &mut NativeTestCase, lcg: &mut Lcg) -> Option<bool> {
+    if lcg.0 % 2 == 1 {
+        tc.start_span(1);
+        let v = int(tc, 2, 10);
+        tc.stop_span(false);
+        v?;
+    }
+    let c = int(tc, 3, 10)?;
+    Some(c >= 3)
+}
+
+#[test]
+fn a_span_the_test_stops_drawing_is_deleted_outright_and_its_inner_span_skipped() {
+    let (mut shrinker, mut probe) = start(
+        wrapped_then_tail,
+        &[run(&[(&[(1, 0), (2, 0)], value(5)), (C, value(7))])],
+        0.1,
+    );
+    assert_eq!(ints(shrinker.witness().0), vec![5, 7]);
+    probe.min_fails = 1;
+    probe.seed = 2;
+    assert!(drive_no_yield(shrinker.span_pass(&mut probe)).unwrap());
+    assert_eq!(ints(shrinker.witness().0), vec![7]);
+    let graph = shrinker.graph();
+    assert_eq!(graph.edge_count(), 1);
+    assert_eq!(graph.nodes()[START].edges[0].addr, C.to_vec());
+    assert_eq!(probe.adopted.len(), 1);
+    assert_eq!(probe.adopted[0].0, 1);
+}
+
+fn flag_then_pair(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    let f = draw(tc, 1, |tc| tc.weighted(0.5, None))?;
+    let a = int(tc, 2, 10)?;
+    let b = int(tc, 3, 10)?;
+    Some(f && a + b >= 10)
+}
+
+#[test]
+fn only_integer_draws_are_lowered_for_a_span_deletion() {
+    let (mut shrinker, mut probe) = start(
+        flag_then_pair,
+        &[run(&[
+            (A, ChoiceValue::Boolean(true)),
+            (B, value(5)),
+            (C, value(5)),
+        ])],
+        0.5,
+    );
+    assert!(!drive_no_yield(shrinker.span_pass(&mut probe)).unwrap());
+    assert_eq!(shrinker.witness().0.len(), 3);
+    assert!(probe.adopted.is_empty());
+    assert!(shrinker.replays() > 0);
 }

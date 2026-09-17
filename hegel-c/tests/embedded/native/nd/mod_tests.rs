@@ -288,9 +288,7 @@ fn constants_match_their_documented_values() {
     assert_eq!(ANCHOR_SEED_RUNS, 20);
     assert_eq!(BOOST_HOLDOUT, ANCHOR_SEED_RUNS);
     assert_eq!(BOOST_RELIABILITY_FLOOR, 0.30);
-    assert_eq!(POOL_CAP, 10);
     assert_eq!(BOOST_POOL, 16);
-    assert_eq!(REPRODUCE_SPLICES, 10);
     assert_eq!(FINAL_REPLAY_FRESH, 4);
     assert_eq!(TARGET_FAILURE_RATE, 0.1);
 }

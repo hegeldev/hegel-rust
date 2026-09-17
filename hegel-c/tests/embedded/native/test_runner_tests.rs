@@ -988,14 +988,91 @@ fn a_truly_stale_v1_blob_still_reports_stale_within_budget() {
     assert_eq!(calls, 4, "replays stop at the v1 budget");
 }
 
-/// A one-timeline ND blob whose single stored choice is a `true` boolean.
-fn nd_blob() -> String {
-    crate::native::blob::encode_nd_failure(&crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
+/// The label of the span the engine wraps a draw of `value`'s kind in;
+/// none for a clone stream, which opens no span of its own.
+fn kind_label(value: &ChoiceValue) -> Option<u64> {
+    match value {
+        ChoiceValue::Integer(_) => Some(26),
+        ChoiceValue::Float(_) => Some(27),
+        ChoiceValue::Boolean(_) => Some(28),
+        ChoiceValue::Bytes(_) => Some(29),
+        ChoiceValue::String(_) => Some(30),
+        ChoiceValue::Clone(_) => None,
+    }
+}
+
+/// The address the engine gives a top-level draw of `value`'s kind: its
+/// kind span with the ordinal among same-label siblings.
+fn draw_addr(value: &ChoiceValue, ordinals: &mut HashMap<u64, usize>) -> Vec<(u64, usize)> {
+    let Some(label) = kind_label(value) else {
+        return Vec::new();
+    };
+    let ordinal = ordinals.entry(label).or_insert(0);
+    *ordinal += 1;
+    vec![(label, *ordinal - 1)]
+}
+
+/// The spans the engine records for top-level draws realizing `nodes`:
+/// one kind span around each.
+fn draw_spans(nodes: &[ChoiceNode]) -> Vec<Span> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            kind_label(&n.value()).map(|label| Span {
+                start: i,
+                end: i + 1,
+                label: label.to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            })
+        })
+        .collect()
+}
+
+/// The run of top-level draws realizing `values`, addressed as the engine
+/// would address them.
+fn run_of_values(values: &[ChoiceValue]) -> Run {
+    let mut ordinals = HashMap::default();
+    Run {
+        steps: values
+            .iter()
+            .map(|value| crate::native::graph::Step {
+                addr: draw_addr(value, &mut ordinals),
+                value: value.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// The counterexample graph holding every run in `runs`.
+fn build_graph(runs: &[Vec<ChoiceValue>]) -> Graph {
+    let mut graph = Graph::new();
+    for run in runs {
+        graph.insert(&run_of_values(run));
+    }
+    graph
+}
+
+/// One run's graph, ready to replay.
+fn graph_of(values: &[ChoiceValue]) -> Arc<Graph> {
+    Arc::new(build_graph(core::slice::from_ref(&values.to_vec())))
+}
+
+/// Stored ND state holding `runs`, sized to the longest.
+fn nd_state_of(runs: &[Vec<ChoiceValue>]) -> crate::native::blob::NdReproState {
+    crate::native::blob::NdReproState {
+        graph: build_graph(runs),
         entropy: 7,
-        extension: 4,
-    })
-    .unwrap()
+        longest: runs.iter().map(|r| r.len()).max().unwrap_or(0) as u32,
+    }
+}
+
+/// An ND blob whose single stored run is one `true` boolean.
+fn nd_blob() -> String {
+    crate::native::blob::encode_nd_failure(&nd_state_of(&[vec![ChoiceValue::Boolean(true)]]))
+        .unwrap()
 }
 
 #[test]
@@ -1021,7 +1098,7 @@ fn reproduce_blob_replays_an_nd_blob_until_a_replay_fails() {
     assert_eq!(
         failure.caveat.as_deref(),
         Some(
-            "nondeterministic failure, reproduced from stored timelines: \
+            "nondeterministic failure, reproduced from stored state: \
              failed 1 of 3 replays this run"
         )
     );
@@ -2151,20 +2228,19 @@ where
     });
 }
 
-/// An interesting [`RunResult`] at `origin` realizing `nodes`, standing in
-/// for a raw execution's outcome.
+/// An interesting [`RunResult`] at `origin` realizing `nodes` as top-level
+/// draws, standing in for a raw execution's outcome.
 fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
     RunResult {
         status: Status::Interesting,
+        spans: draw_spans(&nodes),
         nodes,
-        spans: Vec::new(),
         origin: Some(origin.to_string()),
         target_observations: crate::native::HashMap::default(),
         events: Vec::new(),
         divergence: None,
-        live: Vec::new(),
-        realized: Vec::new(),
-        ran_out: false,
+        settled: Vec::new(),
+        ended: false,
     }
 }
 
@@ -2173,15 +2249,14 @@ fn interesting_at(origin: &str, nodes: Vec<ChoiceNode>) -> RunResult {
 fn valid_at(nodes: Vec<ChoiceNode>) -> RunResult {
     RunResult {
         status: Status::Valid,
+        spans: draw_spans(&nodes),
         nodes,
-        spans: Vec::new(),
         origin: None,
         target_observations: crate::native::HashMap::default(),
         events: Vec::new(),
         divergence: None,
-        live: Vec::new(),
-        realized: Vec::new(),
-        ran_out: false,
+        settled: Vec::new(),
+        ended: false,
     }
 }
 
@@ -2496,7 +2571,7 @@ fn the_discovery_bar_starts_from_the_first_check_seed() {
             ctx.origins.entry(&origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(&origin, &[ChoiceValue::Boolean(true)], None)
+                .nd_evidence_batch(&origin, graph_of(&[ChoiceValue::Boolean(true)]), 1, None)
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -2676,7 +2751,7 @@ fn the_backtrack_scan_probes_geometrically() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90, 85, 80, 75, 70, 65, 60, 55, 50]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(90)]);
@@ -2711,7 +2786,7 @@ fn the_scan_continues_past_a_bar_rejected_candidate() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90, 70, 40]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(
@@ -2898,7 +2973,7 @@ fn shrink_admission_rejects_an_origin_out_of_bar_attempts() {
             let timed_out = ctx
                 .shrink_origin(
                     origin.clone(),
-                    vec![bool_node(true)],
+                    (vec![bool_node(true)], Vec::new()),
                     Verbosity::Quiet,
                     &output,
                     None,
@@ -3093,7 +3168,12 @@ fn an_expired_deadline_rejects_the_evidence_batch() {
                 return;
             };
             let batch = ctx
-                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], Some(now))
+                .nd_evidence_batch(
+                    "Panic: bug",
+                    graph_of(&[ChoiceValue::Boolean(true)]),
+                    1,
+                    Some(now),
+                )
                 .await
                 .unwrap();
             assert!(!batch.bar_accepted, "a batch cut short proves nothing");
@@ -3104,7 +3184,7 @@ fn an_expired_deadline_rejects_the_evidence_batch() {
 }
 
 #[test]
-fn backtrack_pools_the_other_reproducing_entries() {
+fn backtrack_grafts_the_other_reproducing_entries() {
     let bug = "bug";
     with_engine(
         quiet_settings(),
@@ -3123,15 +3203,24 @@ fn backtrack_pools_the_other_reproducing_entries() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90, 85, 40]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(85)]);
-            let pool = ctx.origins.get(&origin).unwrap().pool();
-            assert_eq!(pool[0], vec![int_node(85).value()]);
-            assert!(
-                pool.contains(&vec![int_node(90).value()]),
-                "the scan's other reproducing entry is pooled: {pool:?}"
+            let counterexample = ctx.origins.get(&origin).unwrap();
+            assert_eq!(counterexample.incumbent().unwrap(), &[int_node(85)]);
+            let graph = counterexample.graph().unwrap();
+            let start_values: Vec<ChoiceValue> = graph.nodes()[0]
+                .edges
+                .iter()
+                .map(|e| e.value.clone())
+                .collect();
+            assert_eq!(
+                start_values,
+                vec![int_node(85).value()],
+                "the scan's other reproducing entry draws another value where the \
+                 restored one draws 85, so the graph would never produce it: it is \
+                 foreign, and stays out"
             );
         },
     );
@@ -3253,7 +3342,7 @@ fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
                 origin.clone(),
-                vec![int_node(12)],
+                (vec![int_node(12)], Vec::new()),
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3273,7 +3362,7 @@ fn a_displaced_incumbent_is_recoverable_after_a_late_flip() {
             assert!(!ctx.origins.needs_confirmation(&origin));
             ctx.shrink_origin(
                 origin.clone(),
-                vec![int_node(90)],
+                (vec![int_node(90)], Vec::new()),
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3383,7 +3472,7 @@ fn a_single_entry_history_probes_its_founding_sighting() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(90)]);
@@ -3411,7 +3500,7 @@ fn the_refinement_narrows_to_the_newest_reproducing_entry() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[95, 90, 85, 80, 75, 70, 65, 60]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(
@@ -3445,7 +3534,7 @@ fn a_raw_sighting_can_be_the_restored_incumbent() {
             let history = ctx.origins.get(&origin).unwrap().history();
             assert!(!history.entries()[1].accept, "90 does not displace 60");
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(
@@ -3475,7 +3564,7 @@ fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
                 origin.to_string(),
-                vec![int_node(40)],
+                (vec![int_node(40)], Vec::new()),
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3530,7 +3619,7 @@ fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
                 origin.clone(),
-                vec![int_node(90)],
+                (vec![int_node(90)], Vec::new()),
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3581,7 +3670,7 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
                 origin.to_string(),
-                vec![int_node(70)],
+                (vec![int_node(70)], Vec::new()),
                 Verbosity::Quiet,
                 &output,
                 None,
@@ -3707,7 +3796,7 @@ fn tied_raw_candidates_restore_the_shortlex_least() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[40, 95, 90]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(90)]);
@@ -3744,7 +3833,7 @@ fn a_second_pass_probe_can_find_the_candidate() {
             let origin = format!("Panic: {bug}");
             seed_history(ctx, &origin, &[90, 40]);
             ctx.nd_flip();
-            let Backtrack::Restored { nodes } = ctx.backtrack(&origin).await.unwrap() else {
+            let Backtrack::Restored { nodes, .. } = ctx.backtrack(&origin).await.unwrap() else {
                 panic!("expected a restore");
             };
             assert_eq!(nodes, vec![int_node(90)]);
@@ -3776,7 +3865,7 @@ fn an_exact_shrink_verify_vanish_aborts_under_error_strictness() {
             let err = ctx
                 .shrink_origin(
                     origin.to_string(),
-                    vec![int_node(90)],
+                    (vec![int_node(90)], Vec::new()),
                     Verbosity::Quiet,
                     &output,
                     None,
@@ -3816,7 +3905,7 @@ fn a_divergent_shrink_verify_vanish_aborts_under_error_strictness() {
             let err = ctx
                 .shrink_origin(
                     origin.to_string(),
-                    vec![int_node(90)],
+                    (vec![int_node(90)], Vec::new()),
                     Verbosity::Quiet,
                     &output,
                     None,
@@ -3952,7 +4041,7 @@ fn nd_raw_interesting_never_displaces_an_occupied_origin() {
 
             ctx.origins
                 .entry(origin)
-                .confirm(0.9, None, Vec::new(), (4, 4))
+                .confirm(0.9, None, Graph::new(), 0, (4, 4))
                 .unwrap();
             ctx.record_run(
                 &interesting_at(origin, vec![bool_node(false)]),
@@ -4050,8 +4139,14 @@ fn nd_discovery_sweep_confirms_a_real_failure() {
                 .unwrap();
             assert!(!ctx.origins.needs_confirmation("Panic: bug"));
             assert!(
-                ctx.origins.get("Panic: bug").unwrap().pool().len() > 1,
-                "confirmation replays realizing fresh continuations must be captured"
+                ctx.origins
+                    .get("Panic: bug")
+                    .unwrap()
+                    .graph()
+                    .unwrap()
+                    .edge_count()
+                    > 1,
+                "confirmation replays realizing fresh continuations must be grafted"
             );
             let (witness, anchor) = ctx.origins.entry("Panic: bug").take_witness().unwrap();
             assert_eq!(witness.origin.as_deref(), Some("Panic: bug"));
@@ -4124,10 +4219,16 @@ fn nd_boost_raises_the_anchor_or_declines() {
             boom("bug")
         },
         async |ctx| {
-            let incumbent = vec![ChoiceValue::Boolean(true)];
+            let incumbent = interesting_at("Panic: bug", vec![bool_node(true)]);
             ctx.origins
                 .entry("Panic: bug")
-                .confirm(0.1, None, vec![vec![ChoiceValue::Boolean(false)]], (4, 9))
+                .confirm(
+                    0.1,
+                    None,
+                    build_graph(&[vec![ChoiceValue::Boolean(false)]]),
+                    1,
+                    (4, 9),
+                )
                 .unwrap();
             let (witness, lcb) = ctx
                 .nd_boost("Panic: bug", &incumbent, 0.0)
@@ -4224,17 +4325,27 @@ fn nd_evidence_batch_restores_the_capture_flag() {
         },
         async |ctx| {
             ctx.capture_replays = true;
-            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
-                .await
-                .unwrap();
+            ctx.nd_evidence_batch(
+                "Panic: bug",
+                graph_of(&[ChoiceValue::Boolean(true)]),
+                1,
+                None,
+            )
+            .await
+            .unwrap();
             assert!(
                 ctx.capture_replays,
                 "a batch inside a capture window restores the flag"
             );
             ctx.capture_replays = false;
-            ctx.nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
-                .await
-                .unwrap();
+            ctx.nd_evidence_batch(
+                "Panic: bug",
+                graph_of(&[ChoiceValue::Boolean(true)]),
+                1,
+                None,
+            )
+            .await
+            .unwrap();
             assert!(!ctx.capture_replays);
         },
     );
@@ -4258,7 +4369,12 @@ fn anchor_seed_extension_reaches_the_reference_batch() {
         },
         async |ctx| {
             let batch = ctx
-                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(true)], None)
+                .nd_evidence_batch(
+                    "Panic: bug",
+                    graph_of(&[ChoiceValue::Boolean(true)]),
+                    1,
+                    None,
+                )
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -4270,7 +4386,12 @@ fn anchor_seed_extension_reaches_the_reference_batch() {
             assert!(batch.evidence.lower_bound() > nd::RETENTION_HIGH_WATER);
             assert!(batch.witness.is_some());
             let rejected = ctx
-                .nd_evidence_batch("Panic: bug", &[ChoiceValue::Boolean(false)], None)
+                .nd_evidence_batch(
+                    "Panic: bug",
+                    graph_of(&[ChoiceValue::Boolean(false)]),
+                    1,
+                    None,
+                )
                 .await
                 .unwrap();
             assert!(!rejected.bar_accepted);
@@ -4392,15 +4513,22 @@ fn shrink_does_not_drift_on_a_rising_landscape() {
     let entries = db.fetch(b"k");
     assert_eq!(entries.len(), 1);
     let state = crate::native::blob::decode_nd_state(&entries[0]).unwrap();
-    let ChoiceValue::Integer(n_final) = &state.timelines[0][0] else {
-        panic!("the incumbent must start with the drawn size");
-    };
-    let n_final = n_final.to_i64().unwrap();
-    assert!(
-        n_final >= 10,
-        "shrinking to n = {n_final} (p = {}) trades failure probability away",
-        (100 + 40 * n_final) as f64 / 1000.0
-    );
+    let sizes: Vec<i64> = state.graph.nodes()[0]
+        .edges
+        .iter()
+        .map(|e| match &e.value {
+            ChoiceValue::Integer(n) => n.to_i64().unwrap(),
+            other => panic!("the counterexample starts with the drawn size: {other:?}"),
+        })
+        .collect();
+    assert!(!sizes.is_empty());
+    for n_final in sizes {
+        assert!(
+            n_final >= 10,
+            "shrinking to n = {n_final} (p = {}) trades failure probability away",
+            (100 + 40 * n_final) as f64 / 1000.0
+        );
+    }
 }
 
 #[test]
@@ -4438,8 +4566,13 @@ fn deterministic_core_is_retained() {
         .iter()
         .find_map(|e| crate::native::blob::decode_nd_state(e))
         .unwrap();
+    let start_values: Vec<ChoiceValue> = state.graph.nodes()[0]
+        .edges
+        .iter()
+        .map(|e| e.value.clone())
+        .collect();
     assert_eq!(
-        state.timelines[0],
+        start_values,
         vec![ChoiceValue::Boolean(true)],
         "a 70%-reliable candidate must not displace a deterministic incumbent"
     );
@@ -4551,7 +4684,7 @@ fn nd_reuse_retries_a_stored_flaky_timeline_until_it_reproduces() {
 }
 
 #[test]
-fn nd_misaligned_trusted_reuse_confirms_at_shrink_and_persists_its_pool() {
+fn nd_misaligned_trusted_reuse_confirms_at_shrink_and_persists_its_state() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
@@ -4928,9 +5061,8 @@ fn measurement_runs_move_no_counters_but_still_admit_origins() {
                 target_observations: crate::native::HashMap::default(),
                 events: Vec::new(),
                 divergence: None,
-                live: Vec::new(),
-                realized: Vec::new(),
-                ran_out: false,
+                settled: Vec::new(),
+                ended: false,
             };
             ctx.record_run(&valid, Duration::from_secs(1), true)
                 .unwrap();
@@ -4988,16 +5120,19 @@ fn nd_reproduce_replays_the_counterexample_as_one_test_case_whichever_branch_the
             }
         },
         async |ctx| {
-            let stored = vec![
-                vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
-                vec![
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Integer(BigInt::from(7)),
-                ],
-            ];
+            let stored = ReproSource::Graph {
+                graph: Arc::new(build_graph(&[
+                    vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+                    vec![
+                        ChoiceValue::Boolean(true),
+                        ChoiceValue::Integer(BigInt::from(7)),
+                    ],
+                ])),
+                longest: 2,
+            };
             for _ in 0..2 {
                 let (run, evidence) = ctx
-                    .nd_reproduce(Some("Panic: branch"), &stored, 1, 0, 0)
+                    .nd_reproduce(Some("Panic: branch"), &stored, 1, 0)
                     .await
                     .unwrap();
                 let run = run.unwrap();
@@ -5030,14 +5165,20 @@ fn a_replay_that_leaves_its_counterexample_is_named_at_debug_verbosity() {
             Err(()) => TestCaseResult::Overrun,
         },
         async |ctx| {
-            let stored = vec![vec![ChoiceValue::Boolean(true)]];
-            let (run, _) = ctx.nd_reproduce(None, &stored, 1, 0, 0).await.unwrap();
+            let stored = ReproSource::Graph {
+                graph: graph_of(&[ChoiceValue::Boolean(true)]),
+                longest: 1,
+            };
+            let (run, _) = ctx.nd_reproduce(None, &stored, 1, 0).await.unwrap();
             assert!(run.is_none());
         },
     );
     assert!(
-        lines.lock().unwrap().iter().any(|l| l
-            == "replay left its counterexample at position 0 of stream [] (set of 1 timelines)"),
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l == "replay left its counterexample at position 0 of stream []"),
         "{:?}",
         lines.lock().unwrap()
     );
@@ -5067,14 +5208,17 @@ fn nd_reproduce_spends_its_attempts_on_diverged_clone_replays() {
             }
         },
         async |ctx| {
-            let stored = vec![vec![
-                ChoiceValue::Boolean(true),
-                ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
+            let stored = ReproSource::Graph {
+                graph: graph_of(&[
                     ChoiceValue::Boolean(true),
-                    ChoiceValue::Boolean(true),
-                ]))),
-            ]];
-            let (run, evidence) = ctx.nd_reproduce(None, &stored, 3, 0, 0).await.unwrap();
+                    ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
+                        ChoiceValue::Boolean(true),
+                        ChoiceValue::Boolean(true),
+                    ]))),
+                ]),
+                longest: 3,
+            };
+            let (run, evidence) = ctx.nd_reproduce(None, &stored, 3, 0).await.unwrap();
             assert!(run.is_none());
             assert_eq!(
                 evidence.runs(),
@@ -5086,92 +5230,7 @@ fn nd_reproduce_spends_its_attempts_on_diverged_clone_replays() {
 }
 
 #[test]
-fn nd_reproduce_rescues_a_pool_miss_with_a_positional_splice() {
-    with_engine(
-        nd_settings().seed(Some(3)),
-        None,
-        |ds| {
-            let (a, b) = match (rbool(ds), rbool(ds)) {
-                (Ok(a), Ok(b)) => (a, b),
-                _ => return TestCaseResult::Overrun,
-            };
-            if a && b {
-                boom("splice")
-            } else {
-                TestCaseResult::Valid
-            }
-        },
-        async |ctx| {
-            let stored = vec![
-                vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(false)],
-                vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
-            ];
-            let (run, evidence) = ctx
-                .nd_reproduce(Some("Panic: splice"), &stored, 2, 50, 0)
-                .await
-                .unwrap();
-            let run = run.unwrap();
-            assert_eq!(run.origin.as_deref(), Some("Panic: splice"));
-            assert!(
-                evidence.runs() > 2,
-                "the counterexample faces its attempts before the splices"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_positional_splice_carries_whole_clone_records_across_intact() {
-    use crate::native::core::CloneRecord;
-    use alloc::sync::Arc;
-    let clone_of = |v: i64| {
-        ChoiceValue::Clone(Arc::new(CloneRecord::from_values(vec![
-            ChoiceValue::Integer(BigInt::from(v)),
-        ])))
-    };
-    with_engine(
-        nd_settings().seed(Some(3)),
-        None,
-        |ds| {
-            let armed = match rbool(ds) {
-                Ok(b) => b,
-                Err(()) => return TestCaseResult::Overrun,
-            };
-            let child = match ds.clone_stream() {
-                Ok(c) => c,
-                Err(_) => return TestCaseResult::Overrun,
-            };
-            match rint(&*child, 0, 1000) {
-                Ok(x) if armed && x >= 500 => boom("clone splice"),
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        },
-        async |ctx| {
-            let stored = vec![
-                vec![ChoiceValue::Boolean(true), clone_of(0)],
-                vec![ChoiceValue::Boolean(false), clone_of(600)],
-            ];
-            let (run, _) = ctx
-                .nd_reproduce(Some("Panic: clone splice"), &stored, 2, 50, 0)
-                .await
-                .unwrap();
-            let run = run.unwrap();
-            assert_eq!(run.origin.as_deref(), Some("Panic: clone splice"));
-            let ChoiceValue::Clone(record) = run.nodes[1].value() else {
-                panic!("the clone position survives the splice: {:?}", run.nodes);
-            };
-            assert_eq!(
-                record.owned_values(),
-                vec![ChoiceValue::Integer(BigInt::from(600))],
-                "the spliced timeline replays the clone record verbatim"
-            );
-        },
-    );
-}
-
-#[test]
-fn nd_reproduce_falls_back_to_fresh_generation_and_reports_a_dry_pool() {
+fn nd_reproduce_falls_back_to_fresh_generation_past_a_dry_counterexample() {
     with_engine(
         nd_settings().seed(Some(1)),
         None,
@@ -5181,19 +5240,22 @@ fn nd_reproduce_falls_back_to_fresh_generation_and_reports_a_dry_pool() {
             Err(()) => TestCaseResult::Overrun,
         },
         async |ctx| {
-            let stored = vec![vec![ChoiceValue::Boolean(false)]];
+            let stored = ReproSource::Graph {
+                graph: graph_of(&[ChoiceValue::Boolean(false)]),
+                longest: 1,
+            };
             let (run, _) = ctx
-                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 0, 0)
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 0)
                 .await
                 .unwrap();
-            assert!(run.is_none(), "the stored timeline never fails");
+            assert!(run.is_none(), "the stored run never fails");
             let (run, _) = ctx
-                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 0, 40)
+                .nd_reproduce(Some("Panic: fresh"), &stored, 2, 40)
                 .await
                 .unwrap();
             assert!(
                 run.is_some(),
-                "fresh generation past a dry pool still finds the failure"
+                "fresh generation past a dry counterexample still finds the failure"
             );
         },
     );
@@ -5240,13 +5302,14 @@ fn nd_failures_persist_v2_state_and_reproduce_across_runs() {
 
     let db = DirectoryTestCaseDatabase::new(&path);
     let entries = db.fetch(b"k");
-    assert_eq!(entries.len(), 1, "one v2 entry per confirmed origin");
+    assert_eq!(entries.len(), 1, "one v3 entry per confirmed origin");
     assert!(
         deserialize_choices(&entries[0]).is_none(),
-        "a v1 reader rejects the v2 entry instead of misreading it"
+        "a v1 reader rejects the v3 entry instead of misreading it"
     );
     let state = crate::native::blob::decode_nd_state(&entries[0]).unwrap();
-    assert!(!state.timelines.is_empty());
+    assert!(state.graph.edge_count() > 0);
+    assert!(state.longest >= 1);
 
     let execs = AtomicUsize::new(0);
     let result = reuse_run(
@@ -5286,7 +5349,7 @@ fn nd_failures_persist_v2_state_and_reproduce_across_runs() {
 }
 
 #[test]
-fn nd_trusted_promotion_repersists_the_stored_pool() {
+fn nd_trusted_promotion_repersists_the_shrunk_graph() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
@@ -5295,14 +5358,11 @@ fn nd_trusted_promotion_repersists_the_stored_pool() {
         ChoiceValue::Boolean(false),
         ChoiceValue::Boolean(true),
     ];
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![
-            vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
-            extra.clone(),
-        ],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[
+        vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)],
+        extra.clone(),
+    ]);
+    assert_eq!(state.graph.edge_count(), 4);
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let result = reuse_run(
@@ -5325,20 +5385,32 @@ fn nd_trusted_promotion_repersists_the_stored_pool() {
     else {
         panic!("a promoted trusted origin emits replay state");
     };
+    let start_values: Vec<ChoiceValue> = reported.graph.nodes()[0]
+        .edges
+        .iter()
+        .map(|e| e.value.clone())
+        .collect();
     assert_eq!(
-        reported.timelines,
-        vec![vec![ChoiceValue::Boolean(true)]],
-        "the stored extra timeline never served a replay, so the delete pass \
-         removed it (decision 75); the shrunk incumbent is the whole counterexample"
+        start_values,
+        vec![ChoiceValue::Boolean(true)],
+        "the graph shrinker deletes the draws the failure never needed"
     );
-    assert!(!reported.timelines.contains(&extra));
+    assert_eq!(
+        reported.graph.edge_count(),
+        1,
+        "the second booleans of both stored runs go: {:?}",
+        reported.graph.nodes()
+    );
 }
 
 /// A body that alternates between two branches on successive executions
-/// after a shared first boolean — David's `ps`/`pt`: odd executions draw
-/// two more booleans and an integer (failing on true, true, 42), even ones
-/// draw two integers (failing on 7, 9). Neither branch fails by luck under
-/// a random continuation often enough to matter.
+/// after a shared first boolean — David's `ps`/`pt`: odd executions open
+/// span 1 and draw two more booleans and an integer (failing on true,
+/// true, 42), even ones open span 2 and draw two integers (failing on 7,
+/// 9). Neither branch fails by luck under a random continuation often
+/// enough to matter. The spans give the arms' draws distinct addresses:
+/// two arms drawing at one address are one state to the graph, which
+/// serves them one value (decision 78).
 fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
     let mut executions = 0usize;
     move |ds| {
@@ -5346,7 +5418,11 @@ fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
             return TestCaseResult::Overrun;
         };
         executions += 1;
-        if executions % 2 == 0 {
+        let arm = if executions % 2 == 0 { 2 } else { 1 };
+        if ds.start_span(arm).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        let verdict = if arm == 2 {
             match (rint(ds, 0, 100), rint(ds, 0, 100)) {
                 (Ok(7), Ok(9)) => boom("branch"),
                 (Ok(_), Ok(_)) => TestCaseResult::Valid,
@@ -5358,201 +5434,97 @@ fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
                 (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
                 _ => TestCaseResult::Overrun,
             }
+        };
+        if ds.stop_span(false).is_err() {
+            return TestCaseResult::Overrun;
         }
+        verdict
     }
 }
 
-fn branch_s() -> Vec<ChoiceValue> {
-    vec![
-        ChoiceValue::Boolean(true),
-        ChoiceValue::Boolean(true),
-        ChoiceValue::Boolean(true),
-        ChoiceValue::Integer(BigInt::from(42)),
-    ]
+/// [`branching_body`]'s failing odd-execution run: true, then span 1 with
+/// true, true, 42.
+fn branch_s() -> Run {
+    Run {
+        steps: vec![
+            crate::native::graph::Step {
+                addr: vec![(28, 0)],
+                value: ChoiceValue::Boolean(true),
+            },
+            crate::native::graph::Step {
+                addr: vec![(1, 0), (28, 0)],
+                value: ChoiceValue::Boolean(true),
+            },
+            crate::native::graph::Step {
+                addr: vec![(1, 0), (28, 1)],
+                value: ChoiceValue::Boolean(true),
+            },
+            crate::native::graph::Step {
+                addr: vec![(1, 0), (26, 0)],
+                value: ChoiceValue::Integer(BigInt::from(42)),
+            },
+        ],
+    }
 }
 
-fn branch_s_nodes() -> Vec<ChoiceNode> {
-    vec![
-        bool_node(true),
-        bool_node(true),
-        bool_node(true),
-        int_node(42),
-    ]
+/// [`branching_body`]'s failing even-execution run: true, then span 2
+/// with 7, 9.
+fn branch_t() -> Run {
+    Run {
+        steps: vec![
+            crate::native::graph::Step {
+                addr: vec![(28, 0)],
+                value: ChoiceValue::Boolean(true),
+            },
+            crate::native::graph::Step {
+                addr: vec![(2, 0), (26, 0)],
+                value: ChoiceValue::Integer(BigInt::from(7)),
+            },
+            crate::native::graph::Step {
+                addr: vec![(2, 0), (26, 1)],
+                value: ChoiceValue::Integer(BigInt::from(9)),
+            },
+        ],
+    }
 }
 
-fn branch_t() -> Vec<ChoiceValue> {
-    vec![
-        ChoiceValue::Boolean(true),
-        ChoiceValue::Integer(BigInt::from(7)),
-        ChoiceValue::Integer(BigInt::from(9)),
-    ]
+/// The realized form of [`branch_s`]: its nodes and the spans the engine
+/// records for them.
+fn branch_s_witness() -> RunResult {
+    let mut witness = interesting_at(
+        "Panic: branch",
+        vec![
+            bool_node(true),
+            bool_node(true),
+            bool_node(true),
+            int_node(42),
+        ],
+    );
+    let span = |label: u64, start: usize, end: usize, depth: u32, parent: Option<usize>| Span {
+        start,
+        end,
+        label: label.to_string(),
+        depth,
+        parent,
+        discarded: false,
+    };
+    witness.spans = vec![
+        span(28, 0, 1, 0, None),
+        span(1, 1, 4, 0, None),
+        span(28, 1, 2, 1, Some(1)),
+        span(28, 2, 3, 1, Some(1)),
+        span(26, 3, 4, 1, Some(1)),
+    ];
+    assert_eq!(run_of(&witness), branch_s());
+    witness
 }
 
-#[test]
-fn the_multiverse_passes_keep_both_branches_and_promote_the_smaller_one() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(nd_settings(), None, branching_body(), async |ctx| {
-        let origin = ctx.origins.entry("Panic: branch");
-        origin.adopt(branch_s_nodes());
-        origin
-            .confirm(
-                0.8,
-                None,
-                pooled_timelines(branch_s(), vec![branch_t()]),
-                (20, 20),
-            )
-            .unwrap();
-        assert_eq!(
-            timeline_order(&branch_t(), &branch_s()),
-            core::cmp::Ordering::Less,
-            "a shorter timeline is the smaller one"
-        );
-        let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-        ctx.nd_multiverse_shrink("Panic: branch", 0.8, None, Verbosity::Debug, &output)
-            .await
-            .unwrap();
-        let counterexample = ctx.origins.get("Panic: branch").unwrap();
-        assert_eq!(
-            counterexample.timelines(),
-            vec![branch_t(), branch_s()],
-            "neither branch can be deleted — each reproduces only half the runs — \
-             and the smaller one is promoted to the front"
-        );
-        assert_eq!(
-            counterexample.incumbent_values().unwrap(),
-            branch_t(),
-            "the promoted component is installed from a witness that stayed on it"
-        );
-    });
-    let lines = lines.lock().unwrap();
-    assert!(
-        lines
-            .iter()
-            .any(|l| {
-                l == "nd multiverse census: origin=Panic: branch kept 2 of 2 timelines (served [true, true])"
-            }),
-        "both branches serve failing runs, so the census keeps both: {lines:?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("nd multiverse reorder") && l.ends_with("accepted=true"))
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("nd multiverse splice") && l.ends_with("accepted=false")),
-        "{lines:?}"
-    );
-}
-
-#[test]
-fn the_census_drops_every_timeline_that_never_serves_and_the_deadline_stops_the_passes() {
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| match rbool(ds) {
-            Ok(true) => boom("bug"),
-            Ok(false) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
-        },
-        async |ctx| {
-            let dead: Vec<Vec<ChoiceValue>> = (1..=6)
-                .map(|n| {
-                    let mut timeline = vec![ChoiceValue::Boolean(true)];
-                    timeline.extend(core::iter::repeat_n(ChoiceValue::Boolean(false), n));
-                    timeline
-                })
-                .collect();
-            let origin = ctx.origins.entry("Panic: bug");
-            origin.adopt(vec![bool_node(true)]);
-            origin
-                .confirm(
-                    0.5,
-                    None,
-                    pooled_timelines(vec![ChoiceValue::Boolean(true)], dead.clone()),
-                    (20, 20),
-                )
-                .unwrap();
-            assert_eq!(origin.timelines().len(), 7);
-            let output = Output::callback(|_| {});
-            ctx.nd_multiverse_shrink(
-                "Panic: bug",
-                0.5,
-                crate::sys::Instant::now(),
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                ctx.origins.entry("Panic: bug").timelines().len(),
-                7,
-                "an expired deadline stops before the census"
-            );
-            ctx.nd_multiverse_shrink("Panic: bug", 0.5, None, Verbosity::Quiet, &output)
-                .await
-                .unwrap();
-            assert_eq!(
-                ctx.origins.entry("Panic: bug").timelines().len(),
-                1,
-                "the incumbent serves every failing run; the six dead timelines go at once"
-            );
-            ctx.nd_multiverse_shrink("Panic: bug", 0.5, None, Verbosity::Quiet, &output)
-                .await
-                .unwrap();
-            assert_eq!(ctx.origins.entry("Panic: bug").timelines().len(), 1);
-        },
-    );
-}
-
-#[test]
-fn a_set_accept_that_needs_a_witness_on_its_first_timeline_is_refused_without_one() {
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| match (rint(ds, 0, 100), rint(ds, 0, 100)) {
-            (Ok(_), Ok(9)) => boom("second"),
-            (Ok(_), Ok(_)) => TestCaseResult::Valid,
-            _ => TestCaseResult::Overrun,
-        },
-        async |ctx| {
-            ctx.origins
-                .entry("Panic: second")
-                .confirm(0.5, None, Vec::new(), (20, 20))
-                .unwrap();
-            let candidate = vec![
-                vec![
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Integer(BigInt::from(9)),
-                ],
-                vec![
-                    ChoiceValue::Integer(BigInt::from(5)),
-                    ChoiceValue::Integer(BigInt::from(9)),
-                ],
-            ];
-            let verdict = ctx
-                .nd_evaluate_set("Panic: second", &candidate, 0.5, true)
-                .await
-                .unwrap();
-            assert!(
-                !verdict.accepted,
-                "every replay reproduces through the second timeline, so nothing can \
-                 be installed as the first"
-            );
-            assert!(verdict.witness.is_none());
-            let verdict = ctx
-                .nd_evaluate_set("Panic: second", &candidate, 0.5, false)
-                .await
-                .unwrap();
-            assert!(
-                verdict.accepted,
-                "the same set is a fine counterexample as it stands"
-            );
-        },
-    );
+/// The graph of both of [`branching_body`]'s failing runs.
+fn branching_graph() -> Graph {
+    let mut graph = Graph::from_run(&branch_s());
+    graph.insert(&branch_t());
+    assert_eq!(graph.edge_count(), 7);
+    graph
 }
 
 #[test]
@@ -5600,11 +5572,7 @@ fn nd_trusted_zero_fail_shrink_batch_keeps_trusted_and_reports_honestly() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]]);
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
@@ -5634,7 +5602,7 @@ fn nd_trusted_zero_fail_shrink_batch_keeps_trusted_and_reports_honestly() {
     );
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        caveat.contains("reproduced from stored timelines earlier this run")
+        caveat.contains("reproduced from stored state earlier this run")
             && caveat.contains("not reproduced at report time"),
         "a zero-fail batch keeps the origin trusted and the caveat says so: {caveat:?}"
     );
@@ -5646,11 +5614,7 @@ fn nd_trusted_weak_batch_promotes_and_shrinks_under_the_floor() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]]);
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
@@ -5677,7 +5641,7 @@ fn nd_trusted_weak_batch_promotes_and_shrinks_under_the_floor() {
     assert!(result.failures[0].reproduce_blob.is_some());
     let caveat = result.failures[0].caveat.as_deref().unwrap();
     assert!(
-        caveat.contains("confirmed") && !caveat.contains("stored timelines"),
+        caveat.contains("confirmed") && !caveat.contains("stored state"),
         "one failing replay in the batch promotes the trusted origin: {caveat:?}"
     );
     assert!(
@@ -5721,11 +5685,7 @@ fn stale_nd_entries_demote_to_secondary_then_delete() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Boolean(true)]]);
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let settings = || {
@@ -5818,11 +5778,7 @@ fn a_v2_entry_replay_that_detects_nondeterminism_under_error_strictness_aborts()
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Boolean(true)]]);
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
 
     let execs = AtomicUsize::new(0);
@@ -5878,8 +5834,11 @@ fn a_fresh_tier_replay_that_detects_nondeterminism_under_error_strictness_aborts
             }
         },
         async |ctx| {
-            let stored = vec![vec![ChoiceValue::Boolean(true)]];
-            let result = ctx.nd_reproduce(None, &stored, 0, 0, 4).await;
+            let stored = ReproSource::Graph {
+                graph: graph_of(&[ChoiceValue::Boolean(true)]),
+                longest: 1,
+            };
+            let result = ctx.nd_reproduce(None, &stored, 0, 4).await;
             match result {
                 Err(crate::backend::RunError::NonDeterministic(msg)) => {
                     assert!(
@@ -5933,10 +5892,14 @@ fn nd_shrinking_never_lowers_the_failure_probability_at_the_noise_floor() {
     else {
         panic!("expected an nd blob");
     };
-    let incumbent = state.incumbent();
-    let atoms: Vec<i128> = incumbent[1..]
+    let atoms: Vec<i128> = state
+        .graph
+        .nodes()
         .iter()
-        .map(|v| match v {
+        .enumerate()
+        .filter(|(n, _)| *n != crate::native::graph::START)
+        .flat_map(|(_, node)| node.edges.iter())
+        .map(|e| match &e.value {
             ChoiceValue::Integer(n) => i128::try_from(n).unwrap(),
             other => panic!("expected integer atoms, got {other:?}"),
         })
@@ -5950,44 +5913,6 @@ fn nd_shrinking_never_lowers_the_failure_probability_at_the_noise_floor() {
         atoms,
         vec![10],
         "the L4 standard: one atom, minimized to the bug boundary"
-    );
-}
-
-#[test]
-fn pooled_timelines_caps_at_pool_cap_and_dedupes() {
-    let incumbent = vec![ChoiceValue::Boolean(false)];
-    let mut rest: Vec<Vec<ChoiceValue>> = (0..nd::POOL_CAP + 3)
-        .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
-        .collect();
-    rest.insert(0, incumbent.clone());
-    rest.insert(2, vec![ChoiceValue::Boolean(true)]);
-    let timelines = pooled_timelines(incumbent.clone(), rest);
-    assert_eq!(timelines.len(), nd::POOL_CAP);
-    assert_eq!(timelines[0], incumbent);
-    for (i, t) in timelines.iter().enumerate() {
-        assert!(!timelines[i + 1..].contains(t));
-    }
-}
-
-#[test]
-fn nd_state_for_caps_stored_timelines_at_pool_cap() {
-    with_engine(
-        nd_settings(),
-        None,
-        |_ds| TestCaseResult::Valid,
-        async |ctx| {
-            let pool: Vec<Vec<ChoiceValue>> = (0..nd::POOL_CAP)
-                .map(|i| vec![ChoiceValue::Boolean(true); i + 1])
-                .collect();
-            ctx.origins
-                .entry("Panic: bug")
-                .confirm(0.5, None, pool, (4, 6))
-                .unwrap();
-            let incumbent = vec![ChoiceValue::Boolean(false)];
-            let state = ctx.nd_state_for("Panic: bug", incumbent.clone()).unwrap();
-            assert_eq!(state.timelines.len(), nd::POOL_CAP);
-            assert_eq!(state.timelines[0], incumbent);
-        },
     );
 }
 
@@ -6076,7 +6001,13 @@ fn report_blobs_only_confirmed_origins() {
             .unwrap();
             ctx.origins
                 .entry("Panic: a")
-                .confirm(0.5, None, Vec::new(), (4, 6))
+                .confirm(
+                    0.5,
+                    None,
+                    build_graph(&[vec![ChoiceValue::Boolean(true)]]),
+                    1,
+                    (4, 6),
+                )
                 .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
@@ -6117,10 +6048,18 @@ fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
             }
         },
         async |ctx| {
-            ctx.origins.entry("Panic: a").replace(vec![bool_node(true)]);
             ctx.origins
                 .entry("Panic: a")
-                .confirm(0.5, None, Vec::new(), (4, 6))
+                .replace(vec![bool_node(true)], Vec::new());
+            ctx.origins
+                .entry("Panic: a")
+                .confirm(
+                    0.5,
+                    None,
+                    build_graph(&[vec![ChoiceValue::Boolean(true)]]),
+                    1,
+                    (4, 6),
+                )
                 .unwrap();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
@@ -6191,10 +6130,16 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
         async |ctx| {
             ctx.origins
                 .entry("Panic: a")
-                .replace(vec![bool_node(true), bool_node(true)]);
+                .replace(vec![bool_node(true), bool_node(true)], Vec::new());
             ctx.origins
                 .entry("Panic: a")
-                .confirm(0.5, None, Vec::new(), (4, 6))
+                .confirm(
+                    0.5,
+                    None,
+                    build_graph(&[vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]]),
+                    2,
+                    (4, 6),
+                )
                 .unwrap();
             ctx.record_run(
                 &interesting_at("Panic: b", vec![bool_node(false)]),
@@ -6532,11 +6477,7 @@ fn nd_targeting_reference_interrupted_by_a_discovery_is_not_marked_dead() {
 
 #[test]
 fn reproduce_blob_never_runs_a_fresh_generation() {
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Integer(BigInt::from(0))]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Integer(BigInt::from(0))]]);
     let blob = crate::native::blob::encode_nd_failure(&state).unwrap();
     let draws = std::cell::RefCell::new(Vec::new());
     let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
@@ -6640,13 +6581,10 @@ fn a_flip_during_shrink_probes_requeues_the_origin_for_a_gauntleted_shrink() {
 fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let v2_bytes = crate::native::blob::encode_nd_state(&crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
-        entropy: 7,
-        extension: 4,
-    })
-    .unwrap();
-    let pre_shrink = serialize_choices(&vec![ChoiceValue::Boolean(false); 20]).unwrap();
+    let v2_bytes =
+        crate::native::blob::encode_nd_state(&nd_state_of(&[vec![ChoiceValue::Boolean(true)]]))
+            .unwrap();
+    let pre_shrink = serialize_choices(&vec![ChoiceValue::Boolean(false); 60]).unwrap();
     assert!(
         shortlex(&v2_bytes, &pre_shrink) != core::cmp::Ordering::Greater,
         "the seeded entry must sit under the drain's shortlex break"
@@ -6657,7 +6595,7 @@ fn shrink_drain_retains_v2_secondary_entries_unreplayed() {
         db.save(&secondary_key, &v2_bytes);
     }
     let result = reuse_run(one_bug_settings(&path), "k", |ds| {
-        for _ in 0..20 {
+        for _ in 0..60 {
             if rbool(ds).is_err() {
                 return TestCaseResult::Overrun;
             }
@@ -6809,11 +6747,7 @@ fn deterministic_final_replay_is_stamped() {
 
 #[test]
 fn nd_blob_replay_cases_are_stamped() {
-    let state = crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Boolean(true)]],
-        entropy: 0,
-        extension: 4,
-    };
+    let state = nd_state_of(&[vec![ChoiceValue::Boolean(true)]]);
     let blob = crate::native::blob::encode_nd_failure(&state).unwrap();
     let mut calls = 0u32;
     let mut stamped = 0u32;
@@ -7347,7 +7281,12 @@ fn a_seeded_bar_quota_with_no_reproducing_replay_rejects_at_the_cap() {
             ctx.origins.entry(origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
+                .nd_evidence_batch(
+                    origin,
+                    graph_of(&[ChoiceValue::Integer(BigInt::from(3))]),
+                    1,
+                    None,
+                )
                 .await
                 .unwrap();
             assert!(
@@ -7388,7 +7327,12 @@ fn a_seeded_bar_quota_accepts_once_a_replay_reproduces() {
             ctx.origins.entry(&origin).seed_evidence(seed);
             ctx.nd_flip();
             let batch = ctx
-                .nd_evidence_batch(&origin, &[ChoiceValue::Integer(BigInt::from(3))], None)
+                .nd_evidence_batch(
+                    &origin,
+                    graph_of(&[ChoiceValue::Integer(BigInt::from(3))]),
+                    1,
+                    None,
+                )
                 .await
                 .unwrap();
             assert!(batch.bar_accepted);
@@ -7534,12 +7478,11 @@ fn reconciliation_demotes_a_reproduced_run_start_entry_after_a_flip() {
     let db = DirectoryTestCaseDatabase::new(&path);
     let run_start = serialize_choices(&[ChoiceValue::Integer(BigInt::from(90))]).unwrap();
     db.save(b"k", &run_start);
-    let junk_v2 = crate::native::blob::encode_nd_state(&crate::native::blob::NdReproState {
-        timelines: vec![vec![ChoiceValue::Integer(BigInt::from(7))]],
-        entropy: 0,
-        extension: 4,
-    })
-    .unwrap();
+    let junk_v2 =
+        crate::native::blob::encode_nd_state(&nd_state_of(&[vec![ChoiceValue::Integer(
+            BigInt::from(7),
+        )]]))
+        .unwrap();
     db.save(b"k", &junk_v2);
     let executions = Rc::new(Cell::new(0u32));
     let execs = executions.clone();
@@ -7587,13 +7530,19 @@ fn superseding_one_origin_keeps_a_byte_identical_entry_shared_with_another() {
     let fut = async {
         let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
         ctx.nd_flip();
-        ctx.record_nd_incumbent("Panic: a", &[int_node(90)])
-            .unwrap();
-        ctx.record_nd_incumbent("Panic: b", &[int_node(90)])
-            .unwrap();
+        ctx.origins
+            .entry("Panic: a")
+            .replace(vec![int_node(90)], Vec::new());
+        ctx.record_nd_incumbent("Panic: a").unwrap();
+        ctx.origins
+            .entry("Panic: b")
+            .replace(vec![int_node(90)], Vec::new());
+        ctx.record_nd_incumbent("Panic: b").unwrap();
         assert_eq!(db.fetch(b"k").len(), 1);
-        ctx.record_nd_incumbent("Panic: a", &[int_node(50)])
-            .unwrap();
+        ctx.origins
+            .entry("Panic: a")
+            .replace(vec![int_node(50)], Vec::new());
+        ctx.record_nd_incumbent("Panic: a").unwrap();
         assert_eq!(
             db.fetch(b"k").len(),
             2,
@@ -7736,7 +7685,9 @@ fn reconciliation_deletes_a_same_run_leftover_absent_from_the_final_failures() {
     let exchange = CaseExchange::new();
     let mut ctx = Engine::new(&settings, Some("k"), &exchange).unwrap();
     ctx.persister.record("Panic: bug", &[int_node(90)]).unwrap();
-    ctx.origins.entry("Panic: bug").replace(vec![int_node(50)]);
+    ctx.origins
+        .entry("Panic: bug")
+        .replace(vec![int_node(50)], Vec::new());
     ctx.reconcile_database().unwrap();
 
     assert_eq!(
@@ -7863,15 +7814,18 @@ fn a_reuse_replay_that_realizes_any_stored_timeline_is_aligned_and_skips_the_shr
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().to_str().unwrap().to_string();
     let db = DirectoryTestCaseDatabase::new(&path);
+    let mut graph = Graph::from_run(&branch_t());
+    graph.insert(&branch_s());
     let state = crate::native::blob::NdReproState {
-        timelines: vec![branch_s(), branch_t()],
-        entropy: 0,
-        extension: 4,
+        graph,
+        entropy: 7,
+        longest: 4,
     };
     db.save(b"k", &crate::native::blob::encode_nd_state(&state).unwrap());
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&lines);
     let executions = AtomicUsize::new(0);
+    let mut body = branching_body();
     let result = reuse_run(
         Settings::new()
             .database(Some(path))
@@ -7882,23 +7836,8 @@ fn a_reuse_replay_that_realizes_any_stored_timeline_is_aligned_and_skips_the_shr
             })),
         "k",
         |ds| {
-            let n = executions.fetch_add(1, Ordering::SeqCst);
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            if n % 2 == 0 {
-                match (rint(ds, 0, 100), rint(ds, 0, 100)) {
-                    (Ok(7), Ok(9)) => boom("branch"),
-                    (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                    _ => TestCaseResult::Overrun,
-                }
-            } else {
-                match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
-                    (Ok(true), Ok(true), Ok(42)) => boom("branch"),
-                    (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
-                    _ => TestCaseResult::Overrun,
-                }
-            }
+            executions.fetch_add(1, Ordering::SeqCst);
+            body(ds)
         },
     )
     .unwrap();
@@ -7920,38 +7859,22 @@ fn a_reuse_replay_that_realizes_any_stored_timeline_is_aligned_and_skips_the_shr
 }
 
 #[test]
-fn the_shrink_anchor_starts_from_the_whole_counterexample_when_a_pool_exists() {
+fn the_graph_shrink_keeps_both_branches_of_a_branching_failure() {
     use std::sync::{Arc, Mutex};
     let lines: Arc<Mutex<Vec<String>>> = Arc::default();
     let sink = Arc::clone(&lines);
     with_engine(nd_settings(), None, branching_body(), async |ctx| {
+        let witness = branch_s_witness();
         let origin = ctx.origins.entry("Panic: branch");
-        origin.adopt(branch_s_nodes());
-        let witness = RunResult {
-            status: Status::Interesting,
-            nodes: branch_s_nodes(),
-            spans: Vec::new(),
-            origin: Some("Panic: branch".to_string()),
-            target_observations: crate::native::HashMap::default(),
-            events: Vec::new(),
-            divergence: None,
-            live: vec![true],
-            realized: vec![true],
-            ran_out: false,
-        };
+        origin.adopt(witness.nodes.clone(), witness.spans.clone());
         origin
-            .confirm(
-                0.3,
-                Some(witness),
-                pooled_timelines(branch_s(), vec![branch_t()]),
-                (10, 20),
-            )
+            .confirm(0.8, Some(witness.clone()), branching_graph(), 4, (20, 20))
             .unwrap();
         let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
         let mut shrunk = crate::native::HashSet::default();
         ctx.shrink_origin(
             "Panic: branch".to_string(),
-            branch_s_nodes(),
+            (witness.nodes, witness.spans),
             Verbosity::Debug,
             &output,
             None,
@@ -7959,110 +7882,47 @@ fn the_shrink_anchor_starts_from_the_whole_counterexample_when_a_pool_exists() {
         )
         .await
         .unwrap();
-        let anchor = ctx.origins.get("Panic: branch").unwrap().anchor().unwrap();
-        assert!(
-            anchor >= 0.8,
-            "both branches reproduce, so the set's lower bound replaces the \
-             single-timeline confirmation anchor: {anchor}"
+        assert!(shrunk.contains("Panic: branch"));
+        let graph = ctx.origins.get("Panic: branch").unwrap().graph().unwrap();
+        assert_eq!(
+            graph.edge_count(),
+            7,
+            "each branch reproduces only half the runs, so neither can go: {:?}",
+            graph.nodes()
+        );
+        assert_eq!(
+            graph.walk_verdict(&branch_s()),
+            Walked::Whole,
+            "{:?}",
+            graph.nodes()
+        );
+        assert_eq!(
+            graph.walk_verdict(&branch_t()),
+            Walked::Whole,
+            "{:?}",
+            graph.nodes()
         );
     });
+    let lines = lines.lock().unwrap();
     assert!(
         lines
-            .lock()
-            .unwrap()
             .iter()
-            .any(|l| l.starts_with("nd set anchor: origin=Panic: branch timelines=2 fails=20/20")),
-        "{:?}",
-        lines.lock().unwrap()
+            .any(|l| l.starts_with("nd shrink start: origin=Panic: branch edges=7 anchor=0.800")),
+        "{lines:?}"
     );
-}
-
-fn new_slot() -> (alloc::sync::Arc<crate::sys::sync::Mutex<Slot>>, SlotProbe) {
-    let slot = alloc::sync::Arc::new(crate::sys::sync::Mutex::new(Slot {
-        request: None,
-        response: None,
-        sweep: SweepMode::Fast,
-        adopted: false,
-    }));
-    let probe = SlotProbe {
-        slot: alloc::sync::Arc::clone(&slot),
-    };
-    (slot, probe)
-}
-
-/// A lane whose shrinker is `script`: a future over the lane's probe that
-/// ends on the timeline the lane should be left with.
-fn scripted_lane<F>(
-    slot: alloc::sync::Arc<crate::sys::sync::Mutex<Slot>>,
-    current: Vec<ChoiceNode>,
-    script: F,
-) -> Lane
-where
-    F: Future<Output = crate::native::shrinker::ShrinkResult<Vec<ChoiceNode>>> + Send + 'static,
-{
-    let probe_slot = alloc::sync::Arc::clone(&slot);
-    let shrinking: LaneFuture = Box::pin(async move {
-        let current = script.await?;
-        Ok(Shrinker::with_probe(
-            Box::new(SlotProbe { slot: probe_slot }),
-            current,
-            Spans::new(),
-        ))
-    });
-    Lane::new(slot, shrinking, current)
-}
-
-#[test]
-fn nd_gauntlet_rejects_a_candidate_that_stops_reproducing() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let execs = AtomicUsize::new(0);
-    let seen: alloc::sync::Arc<std::sync::Mutex<Vec<bool>>> = Default::default();
-    let sink = alloc::sync::Arc::clone(&seen);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            if execs.fetch_add(1, Ordering::SeqCst) == 0 {
-                boom("bug")
-            } else {
-                TestCaseResult::Valid
-            }
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (first, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                let (second, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                sink.lock().unwrap().extend([first, second]);
-                Ok(nodes)
-            });
-            let output = ctx.settings.output.clone();
-            ctx.nd_drive_lanes(
-                "Panic: bug",
-                vec![lane],
-                0.99,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        },
-    );
-    assert_eq!(
-        *seen.lock().unwrap(),
-        vec![false, false],
-        "the evidence upper bound falls below the anchor-derived threshold, and the \
-         latched reject answers the re-proposal"
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("nd shrink done: origin=Panic: branch edges=7")),
+        "{lines:?}"
     );
 }
 
 #[test]
-fn nd_gauntlet_accept_tops_the_ledger_up_to_the_reference_batch() {
+fn a_graph_shrink_accept_is_installed_and_reported_at_debug_verbosity() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
     with_engine(
         nd_settings(),
         None,
@@ -8073,662 +7933,23 @@ fn nd_gauntlet_accept_tops_the_ledger_up_to_the_reference_batch() {
             boom("bug")
         },
         async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(matched);
-                Ok(nodes)
-            });
-            let output = ctx.settings.output.clone();
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: bug",
-                    vec![lane],
-                    0.0,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            let lane = &driven.lanes[0];
-            let accept = lane.pending_accept.as_ref().unwrap();
-            let ledger = lane.ledger.get(&accept.key).unwrap();
-            assert_eq!(
-                ledger.evidence.runs(),
-                nd::ANCHOR_SEED_RUNS,
-                "an accept tops the ledger up before it can raise the anchor"
-            );
-            assert_eq!(ledger.verdict, Some(true), "an accept latches");
-            assert!(
-                accept.lower_bound > nd::RETENTION_HIGH_WATER,
-                "an always-failing candidate seeds a high-water anchor, got {}",
-                accept.lower_bound
-            );
-            assert_eq!(
-                ctx.calls, 0,
-                "every run of a parallel shrink is a measurement run"
-            );
-        },
-    );
-}
-
-#[test]
-fn an_exhausted_alpha_budget_pins_new_candidates_at_the_ceiling() {
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            boom("bug")
-        },
-        async |ctx| {
-            let origin = "Panic: bug".to_string();
-            let spend = &mut ctx.origins.entry(&origin).gauntlet_spend;
-            while spend.charge(&nd::Evidence::default(), 0.0, true, None)
-                != nd::GAUNTLET_MIN_FAILS_CEILING
-            {}
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(
-                    matched,
-                    "an always-failing candidate still accepts at the ceiling"
-                );
-                Ok(nodes)
-            });
-            let output = ctx.settings.output.clone();
-            let driven = ctx
-                .nd_drive_lanes(&origin, vec![lane], 0.0, None, Verbosity::Quiet, &output)
-                .await
-                .unwrap();
-            let lane = &driven.lanes[0];
-            let accept = lane.pending_accept.as_ref().unwrap();
-            assert_eq!(
-                lane.ledger.get(&accept.key).unwrap().min_fails,
-                nd::GAUNTLET_MIN_FAILS_CEILING,
-                "the engine-held spend map outlives probe rebuilds"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_rejected_candidate_latches_its_verdict() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let execs = alloc::sync::Arc::new(AtomicUsize::new(0));
-    let counted = alloc::sync::Arc::clone(&execs);
-    let body_execs = alloc::sync::Arc::clone(&execs);
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            let n = body_execs.fetch_add(1, Ordering::SeqCst);
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            if n == 0 {
-                boom("bug")
-            } else {
-                TestCaseResult::Valid
-            }
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(!matched, "the recruit's ledger drives to a reject");
-                let replays = counted.load(Ordering::SeqCst);
-                let (rematch, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(!rematch, "a bound verdict is final");
-                assert_eq!(
-                    counted.load(Ordering::SeqCst),
-                    replays + 1,
-                    "a latched reject costs the realizing run and no drive"
-                );
-                Ok(nodes)
-            });
-            let output = ctx.settings.output.clone();
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: bug",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            let key = serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap();
-            assert_eq!(
-                driven.lanes[0].ledger.get(&key).unwrap().verdict,
-                Some(false)
-            );
-        },
-    );
-}
-
-#[test]
-fn a_reaccept_never_raises_the_anchor_again() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            boom("boom")
-        },
-        async |ctx| {
-            ctx.origins
-                .entry("Panic: boom")
-                .confirm(0.3, None, Vec::new(), (20, 20))
-                .unwrap();
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                for _ in 0..2 {
-                    let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                    assert!(matched);
-                    probe.candidate_adopted()?;
-                }
-                Ok(nodes)
-            });
-            let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-            ctx.nd_drive_lanes(
-                "Panic: boom",
-                vec![lane],
-                0.3,
-                None,
-                Verbosity::Debug,
-                &output,
-            )
-            .await
-            .unwrap();
-            let anchor = ctx.origins.get("Panic: boom").unwrap().anchor().unwrap();
-            assert!(
-                anchor > 0.3,
-                "the first adopted accept of a candidate raises the monotone anchor"
-            );
-            let adoptions: Vec<String> = lines
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|l| l.starts_with("nd lane adopted:"))
-                .cloned()
-                .collect();
-            assert_eq!(adoptions.len(), 2, "{:?}", lines.lock().unwrap());
-            assert!(
-                adoptions[0].ends_with(&format!("anchor={anchor:.3}"))
-                    && adoptions[1].ends_with(&format!("anchor={anchor:.3}")),
-                "re-accepting the same timeline draws on replay evidence and must not \
-                 keep raising the anchor: {adoptions:?}"
-            );
-        },
-    );
-}
-
-#[test]
-fn the_gauntlet_counts_only_on_timeline_runs_as_evidence_about_the_candidate() {
-    with_engine(nd_settings(), None, branching_body(), async |ctx| {
-        let (slot, mut probe) = new_slot();
-        let lane = scripted_lane(slot, branch_s_nodes(), async move {
-            let nodes = branch_s_nodes();
-            let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-            assert!(
-                matched,
-                "every on-timeline run fails, so the candidate is accepted"
-            );
-            probe.candidate_adopted()?;
-            Ok(nodes)
-        });
-        let output = Output::callback(|_| {});
-        let driven = ctx
-            .nd_drive_lanes(
-                "Panic: branch",
-                vec![lane],
-                0.3,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        let lane = &driven.lanes[0];
-        let ledger = lane.ledger.values().next().unwrap();
-        assert_eq!(ledger.verdict, Some(true));
-        assert_eq!(
-            (ledger.evidence.fails(), ledger.evidence.runs()),
-            (nd::ANCHOR_SEED_RUNS, nd::ANCHOR_SEED_RUNS),
-            "off-timeline runs are not evidence"
-        );
-        assert!(
-            ledger.bounces >= nd::ANCHOR_SEED_RUNS - 1,
-            "the runs that left the candidate did not abandon it"
-        );
-    });
-}
-
-/// A failing run's result on `nodes`, live on the first timeline, as the
-/// witness a confirmation holds for the shrink.
-fn witness_of(nodes: Vec<ChoiceNode>, origin: &str) -> RunResult {
-    RunResult {
-        status: Status::Interesting,
-        nodes,
-        spans: Vec::new(),
-        origin: Some(origin.to_string()),
-        target_observations: crate::native::HashMap::default(),
-        events: Vec::new(),
-        divergence: None,
-        live: vec![true],
-        realized: vec![true],
-        ran_out: false,
-    }
-}
-
-/// A body whose follow-up draw changed shape for good: a boolean-shaped
-/// stored timeline can never be realized again.
-fn reshaped_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
-    |ds| match rbool(ds) {
-        Ok(false) => TestCaseResult::Valid,
-        Ok(true) => match rint(ds, 0, 100) {
-            Ok(_) => boom("reshaped"),
-            Err(()) => TestCaseResult::Overrun,
-        },
-        Err(()) => TestCaseResult::Overrun,
-    }
-}
-
-/// A body that takes a rarely-reached integer branch (failing on `x >= 50`)
-/// one execution in ten, and a boolean branch that always fails otherwise.
-fn rare_branch_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
-    let mut executions = 0usize;
-    move |ds| {
-        let Ok(a) = rbool(ds) else {
-            return TestCaseResult::Overrun;
-        };
-        executions += 1;
-        if !a {
-            return TestCaseResult::Valid;
-        }
-        if scramble(executions) % 10 == 0 {
-            match rint(ds, 0, 100) {
-                Ok(x) if x >= 50 => boom("rare"),
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        } else {
-            match rbool(ds) {
-                Ok(_) => boom("rare"),
-                Err(()) => TestCaseResult::Overrun,
-            }
-        }
-    }
-}
-
-#[test]
-fn a_candidate_on_a_branch_too_rare_to_gauntlet_within_the_allowance_stops_its_lane() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(nd_settings(), None, rare_branch_body(), async |ctx| {
-        let rare = vec![bool_node(true), int_node(70)];
-        let (slot, mut probe) = new_slot();
-        let rare_lane = scripted_lane(slot, rare.clone(), async move {
-            let nodes = vec![bool_node(true), int_node(60)];
-            let halted = probe.run(ShrinkRun::Full(&nodes)).await;
-            assert!(matches!(
-                halted,
-                Err(crate::native::shrinker::ShrinkHalt::Stop)
-            ));
-            Err(crate::native::shrinker::ShrinkHalt::Stop)
-        });
-        let (slot, _probe) = new_slot();
-        let common_lane = scripted_lane(slot, vec![bool_node(true), bool_node(true)], async {
-            Ok(vec![bool_node(true), bool_node(true)])
-        });
-        let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-        let driven = ctx
-            .nd_drive_lanes(
-                "Panic: rare",
-                vec![rare_lane, common_lane],
-                0.5,
-                None,
-                Verbosity::Debug,
-                &output,
-            )
-            .await
-            .unwrap();
-        assert!(!driven.timed_out);
-        assert!(driven.lanes[0].stopped);
-        assert_eq!(
-            driven.lanes[0].current, rare,
-            "the rare timeline is left as it was"
-        );
-        let ledger = driven.lanes[0].ledger.values().next().unwrap();
-        assert_eq!(
-            ledger.verdict, None,
-            "never answered: neither accepted nor latched"
-        );
-        assert_eq!(
-            ledger.led,
-            2 * SET_EVIDENCE_CAP,
-            "the allowance scales with the lanes"
-        );
-        assert!(
-            ledger.evidence.runs() < nd::ANCHOR_SEED_RUNS,
-            "too few runs stayed on the candidate to seed an accept: {}",
-            ledger.evidence.runs()
-        );
-        assert_eq!(
-            ledger.evidence.fails(),
-            ledger.evidence.runs(),
-            "every run that stayed on it failed; the branch is merely rare"
-        );
-    });
-    assert!(
-        lines.lock().unwrap().iter().any(|l| l
-            .starts_with("nd lane starved: origin=Panic: rare lane=0: its candidate led 120 runs and stayed on it for ")),
-        "{:?}",
-        lines.lock().unwrap()
-    );
-}
-
-/// A body whose third draw's kind is decided by the second's value: an
-/// integer (failing on `a && z >= 60`) when `y == 60`, otherwise a boolean
-/// that never fails. Editing `y` away from 60 changes the path for good.
-fn edit_gated_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
-    |ds| {
-        let (Ok(a), Ok(y)) = (rbool(ds), rint(ds, 0, 100)) else {
-            return TestCaseResult::Overrun;
-        };
-        if y == 60 {
-            match rint(ds, 0, 100) {
-                Ok(z) if a && z >= 60 => boom("gated"),
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        } else {
-            match rbool(ds) {
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        }
-    }
-}
-
-/// Like [`edit_gated_body`] but the third draw's kind is a scrambled coin:
-/// an integer branch failing on `a && y >= 60 && z >= 60`, or a boolean
-/// branch that never fails.
-fn coin_gated_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
-    let mut executions = 0usize;
-    move |ds| {
-        let (Ok(a), Ok(y)) = (rbool(ds), rint(ds, 0, 100)) else {
-            return TestCaseResult::Overrun;
-        };
-        executions += 1;
-        if scramble(executions) % 2 == 1 {
-            match rint(ds, 0, 100) {
-                Ok(z) if a && y >= 60 && z >= 60 => boom("coin"),
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        } else {
-            match rbool(ds) {
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        }
-    }
-}
-
-/// Drive a two-lane shrink of `body` in which the second lane proposes
-/// `[T, 59, 60]` from `[T, 60, 60]` while the first lane holds a timeline
-/// of another shape, `[T, T, 61]`, so that the boolean the proposal
-/// misfits on is a kind no stored timeline has at that position; returns
-/// the executions the proposal's answer took, asserting it was a miss.
-fn executions_to_answer_the_gated_proposal<B>(origin: &'static str, body: B) -> usize
-where
-    B: FnMut(&dyn DataSource) -> TestCaseResult,
-{
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let executions = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&executions);
-    let mut body = body;
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            body(ds)
-        },
-        async |ctx| {
-            let (slot, _probe) = new_slot();
-            let other_lane = scripted_lane(
-                slot,
-                vec![bool_node(true), bool_node(true), int_node(61)],
-                async { Ok(vec![bool_node(true), bool_node(true), int_node(61)]) },
-            );
-            let current = vec![bool_node(true), int_node(60), int_node(60)];
-            let (slot, mut probe) = new_slot();
-            let int_lane = scripted_lane(slot, current.clone(), async move {
-                let nodes = vec![bool_node(true), int_node(59), int_node(60)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(!matched, "y = 59 fails on no path");
-                Ok(current)
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    origin,
-                    vec![other_lane, int_lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert!(!driven.timed_out);
-            assert_eq!(
-                driven.lanes[1].current,
-                vec![bool_node(true), int_node(60), int_node(60)]
-            );
-        },
-    );
-    executions.load(Ordering::SeqCst)
-}
-
-#[test]
-fn a_mid_proposal_misfit_is_put_down_to_nondeterminism_before_it_is_punned() {
-    assert_eq!(
-        executions_to_answer_the_gated_proposal("Panic: gated", edit_gated_body()) as u64,
-        MISFIT_DEFERRALS + 1,
-        "every run misfits at the boolean, which the proposal is put down to the test's \
-         nondeterminism that many times before the misfit is taken for the edit and punned"
-    );
-}
-
-#[test]
-fn a_deferred_proposal_is_realized_by_the_first_run_that_follows_it() {
-    let executions = executions_to_answer_the_gated_proposal("Panic: coin", coin_gated_body());
-    assert!(
-        (2..=MISFIT_DEFERRALS as usize).contains(&executions),
-        "the coin's boolean runs are deferred, and an integer run answers the proposal as \
-         itself before the deferrals run out: {executions}"
-    );
-}
-
-#[test]
-fn a_proposal_punned_into_another_lanes_shape_is_a_miss_not_a_new_branch() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let executions = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&executions);
-    let mut body = reshaped_body();
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            body(ds)
-        },
-        async |ctx| {
-            let stale = vec![bool_node(true), bool_node(true)];
-            let (slot, mut probe) = new_slot();
-            let stale_lane = scripted_lane(slot, stale.clone(), async move {
-                let nodes = vec![bool_node(true), bool_node(false)];
-                let (matched, answered, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(
-                    !matched,
-                    "the pun took the integer branch, which is the other lane's"
-                );
-                assert_eq!(
-                    answered, nodes,
-                    "the shrinker sees its own proposal missed, no hybrid"
-                );
-                let (matched, answered, _) = probe
-                    .run(ShrinkRun::Probe {
-                        prefix: &[ChoiceValue::Boolean(true), ChoiceValue::Boolean(false)],
-                        max_size: 2,
-                    })
-                    .await?;
-                assert!(!matched, "so is a probe punned into the other lane's shape");
-                assert_eq!(
-                    answered.len(),
-                    2,
-                    "answered with what ran: a probe has no nodes of its own"
-                );
-                assert_eq!(answered[0], bool_node(true));
-                assert_eq!(answered[1].data.kind(), int_node(0).data.kind());
-                Ok(stale)
-            });
-            let (slot, _probe) = new_slot();
-            let live_lane = scripted_lane(slot, vec![bool_node(true), int_node(60)], async {
-                Ok(vec![bool_node(true), int_node(60)])
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: reshaped",
-                    vec![stale_lane, live_lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert!(!driven.timed_out);
-            assert_eq!(
-                driven.lanes[0].current,
-                vec![bool_node(true), bool_node(true)],
-                "the stale timeline is left as it was"
-            );
-            assert!(
-                driven.lanes[0].ledger.is_empty(),
-                "no realization was recorded for it"
-            );
-        },
-    );
-    assert_eq!(
-        executions.load(Ordering::SeqCst) as u64,
-        2 * (MISFIT_DEFERRALS + 1),
-        "each misfit is put down to the test that many times, then punned once"
-    );
-}
-
-#[test]
-fn the_census_drops_an_incumbent_the_failure_no_longer_reaches_and_promotes_the_branch_it_does() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(nd_settings(), None, reshaped_body(), async |ctx| {
-        let stale = vec![bool_node(true), bool_node(true)];
-        let origin = ctx.origins.entry("Panic: reshaped");
-        origin.adopt(stale.clone());
-        origin
-            .confirm(
-                0.5,
-                Some(witness_of(stale.clone(), "Panic: reshaped")),
-                pooled_timelines(
-                    values_of(&stale),
-                    vec![values_of(&[bool_node(true), int_node(60)])],
-                ),
-                (20, 20),
-            )
-            .unwrap();
-        let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-        let mut shrunk = crate::native::HashSet::default();
-        ctx.shrink_origin(
-            "Panic: reshaped".to_string(),
-            stale,
-            Verbosity::Debug,
-            &output,
-            None,
-            &mut shrunk,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            ctx.origins.get("Panic: reshaped").unwrap().timelines(),
-            vec![vec![
-                ChoiceValue::Boolean(true),
-                ChoiceValue::Integer(BigInt::from(0))
-            ]],
-            "the reachable branch is the whole counterexample, shrunk"
-        );
-    });
-    assert!(
-        lines.lock().unwrap().iter().any(|l| l
-            == "nd parallel shrink: origin=Panic: reshaped lanes=1 of 2 timelines (served [false, true])"),
-        "{:?}",
-        lines.lock().unwrap()
-    );
-}
-
-#[test]
-fn the_census_keeps_the_incumbent_when_no_replay_fails() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| match rbool(ds) {
-            Ok(_) => TestCaseResult::Valid,
-            Err(()) => TestCaseResult::Overrun,
-        },
-        async |ctx| {
-            let incumbent = vec![bool_node(true), bool_node(true)];
-            let origin = ctx.origins.entry("Panic: gone");
-            origin.adopt(incumbent.clone());
+            let witness = interesting_at("Panic: bug", vec![bool_node(true)]);
+            let origin = ctx.origins.entry("Panic: bug");
+            origin.adopt(witness.nodes.clone(), witness.spans.clone());
             origin
                 .confirm(
                     0.5,
-                    Some(witness_of(incumbent.clone(), "Panic: gone")),
-                    pooled_timelines(
-                        values_of(&incumbent),
-                        vec![values_of(&[bool_node(true), int_node(60)])],
-                    ),
+                    Some(witness.clone()),
+                    build_graph(&[vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(true)]]),
+                    2,
                     (20, 20),
                 )
                 .unwrap();
             let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
             let mut shrunk = crate::native::HashSet::default();
             ctx.shrink_origin(
-                "Panic: gone".to_string(),
-                incumbent.clone(),
+                "Panic: bug".to_string(),
+                (witness.nodes, witness.spans),
                 Verbosity::Debug,
                 &output,
                 None,
@@ -8736,910 +7957,63 @@ fn the_census_keeps_the_incumbent_when_no_replay_fails() {
             )
             .await
             .unwrap();
-            assert_eq!(
-                ctx.origins.get("Panic: gone").unwrap().timelines(),
-                vec![values_of(&incumbent)],
-                "nothing served, so the incumbent stands alone and unshrunk"
-            );
+            let counterexample = ctx.origins.get("Panic: bug").unwrap();
+            assert_eq!(counterexample.graph().unwrap().edge_count(), 1);
+            assert_eq!(counterexample.incumbent().unwrap(), &[bool_node(false)]);
+            assert!(counterexample.anchor().unwrap() >= 0.5);
         },
     );
+    let lines = lines.lock().unwrap();
     assert!(
-        lines.lock().unwrap().iter().any(|l| l
-            == "nd parallel shrink: origin=Panic: gone lanes=1 of 2 timelines (served [false, false])"),
-        "{:?}",
-        lines.lock().unwrap()
+        lines
+            .iter()
+            .any(|l| l.starts_with("nd graph accept: origin=Panic: bug edges=1 anchor=")),
+        "{lines:?}"
     );
 }
 
 #[test]
-fn a_led_run_that_stays_on_another_lanes_candidate_is_not_evidence_about_the_leaders_set() {
-    with_engine(nd_settings(), None, scrambled_pair_body(), async |ctx| {
-        let s_current = vec![bool_node(true), bool_node(true), int_node(60)];
-        let (slot, mut probe) = new_slot();
-        let s_lane = scripted_lane(slot, s_current.clone(), async move {
-            probe.set_sweep_mode(SweepMode::Confirm);
-            for x in [10, 20, 30, 40, 50] {
-                let nodes = vec![bool_node(true), bool_node(true), int_node(x)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(!matched, "x = {x} never fails");
-            }
-            Ok(s_current)
-        });
-        let (slot, mut probe) = new_slot();
-        let t_lane = scripted_lane(
-            slot,
-            vec![bool_node(true), int_node(70), int_node(91)],
-            async move {
-                let nodes = vec![bool_node(true), int_node(63), int_node(60)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(matched);
-                probe.candidate_adopted()?;
-                Ok(nodes)
-            },
-        );
-        let output = Output::callback(|_| {});
-        let driven = ctx
-            .nd_drive_lanes(
-                "Panic: pair",
-                vec![s_lane, t_lane],
-                0.5,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        let ledger = driven.lanes[1].ledger.values().next().unwrap();
-        assert_eq!(ledger.verdict, Some(true));
-        assert!(
-            ledger.bounces > 0,
-            "some of the second lane's led runs took the first branch"
-        );
-        assert!(
-            driven.lanes[0]
-                .ledger
-                .values()
-                .any(|l| l.evidence.runs() > l.evidence.fails()),
-            "the first lane's proposals passed while the second lane led"
-        );
-        assert_eq!(
-            ledger.set_evidence.fails(),
-            ledger.set_evidence.runs(),
-            "runs that stayed on the first lane's proposals are evidence about those \
-             proposals, not about the set the second lane's accept installs"
-        );
-    });
-}
-
-#[test]
-fn a_failing_candidate_that_is_no_improvement_is_answered_without_a_gauntlet() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let executions = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&executions);
-    let before_the_improvement = Arc::new(AtomicUsize::new(0));
-    let snapshot = Arc::clone(&before_the_improvement);
-    let watched = Arc::clone(&executions);
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            match rint(ds, 0, 100) {
-                Ok(x) if x >= 50 => boom("bug"),
-                Ok(_) => TestCaseResult::Valid,
-                Err(()) => TestCaseResult::Overrun,
-            }
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![int_node(60)], async move {
-                let larger = vec![int_node(70)];
-                let (matched, answered, _) = probe.run(ShrinkRun::Full(&larger)).await?;
-                assert!(
-                    !matched,
-                    "a failing run the shrinker cannot adopt is a miss"
-                );
-                assert_eq!(answered, larger, "answered with what actually ran");
-                let (matched, answered, _) = probe
-                    .run(ShrinkRun::Probe {
-                        prefix: &[ChoiceValue::Integer(BigInt::from(70))],
-                        max_size: 1,
-                    })
-                    .await?;
-                assert!(!matched);
-                assert_eq!(answered, larger);
-                snapshot.store(watched.load(Ordering::SeqCst), Ordering::SeqCst);
-                let smaller = vec![int_node(55)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&smaller)).await?;
-                assert!(matched, "an improvement is gauntleted and accepted");
-                probe.candidate_adopted()?;
-                Ok(smaller)
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: bug",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert_eq!(driven.lanes[0].current, vec![int_node(55)]);
-            assert_eq!(
-                driven.lanes[0].ledger.len(),
-                1,
-                "only the improvement was entered in the ledger"
-            );
-        },
-    );
-    assert_eq!(
-        before_the_improvement.load(Ordering::SeqCst),
-        2,
-        "each non-improving candidate cost the one run that realized it"
-    );
-}
-
-#[test]
-fn a_led_run_that_lands_on_another_lanes_timeline_is_not_evidence_about_the_leaders_set() {
-    with_engine(nd_settings(), None, coin_gated_body(), async |ctx| {
-        let (slot, mut probe) = new_slot();
-        let int_lane = scripted_lane(
-            slot,
-            vec![bool_node(true), int_node(61), int_node(60)],
-            async move {
-                let nodes = vec![bool_node(true), int_node(60), int_node(60)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(
-                    matched,
-                    "the candidate fails on every run that stays on it; the runs the coin \
-                     sent to the boolean branch passed on the other lane's timeline"
-                );
-                probe.candidate_adopted()?;
-                Ok(nodes)
-            },
-        );
-        let (slot, _probe) = new_slot();
-        let bool_current = vec![bool_node(true), int_node(60), bool_node(true)];
-        let bool_lane = scripted_lane(slot, bool_current.clone(), async { Ok(bool_current) });
-        let output = Output::callback(|_| {});
-        let driven = ctx
-            .nd_drive_lanes(
-                "Panic: coin",
-                vec![int_lane, bool_lane],
-                0.5,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        let ledger = driven.lanes[0].ledger.values().next().unwrap();
-        assert_eq!(ledger.verdict, Some(true));
-        assert!(ledger.bounces > 0, "some led runs took the boolean branch");
-        assert_eq!(
-            (ledger.set_evidence.fails(), ledger.set_evidence.runs()),
-            (ledger.evidence.fails(), ledger.evidence.runs()),
-            "only the runs on the candidate speak for the set it would join"
-        );
-    });
-}
-
-#[test]
-fn a_full_proposal_that_runs_out_and_passes_is_a_miss_at_once() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let executions = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&executions);
-    let after_the_short_proposal = Arc::new(AtomicUsize::new(0));
-    let snapshot = Arc::clone(&after_the_short_proposal);
-    let watched = Arc::clone(&executions);
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            match (rint(ds, 0, 100), rint(ds, 0, 100)) {
-                (Ok(y), Ok(z)) if y >= 60 && z >= 60 => boom("pair"),
-                (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                _ => TestCaseResult::Overrun,
-            }
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![int_node(60), int_node(60)], async move {
-                probe.set_sweep_mode(SweepMode::Confirm);
-                let short = vec![int_node(50)];
-                let (matched, answered, _) = probe.run(ShrinkRun::Full(&short)).await?;
-                assert!(
-                    !matched,
-                    "a proposal the test drew past is not the proposal"
-                );
-                assert_eq!(
-                    answered.len(),
-                    2,
-                    "what ran is answered, random tail included"
-                );
-                assert_eq!(answered[0], int_node(50));
-                snapshot.store(watched.load(Ordering::SeqCst), Ordering::SeqCst);
-                Ok(vec![int_node(60), int_node(60)])
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: pair",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert!(
-                driven.lanes[0].ledger.is_empty(),
-                "too short and passing is not a flaky miss to confirm"
-            );
-        },
-    );
-    assert_eq!(
-        after_the_short_proposal.load(Ordering::SeqCst),
-        1,
-        "one run, even under the confirm sweep"
-    );
-}
-
-#[test]
-fn a_full_proposal_that_runs_out_and_fails_is_a_candidate_with_its_random_tail() {
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| match (rint(ds, 0, 100), rbool(ds)) {
-            (Ok(y), Ok(_)) if y >= 60 => boom("tail"),
-            (Ok(_), Ok(_)) => TestCaseResult::Valid,
-            _ => TestCaseResult::Overrun,
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![int_node(60), bool_node(true)], async move {
-                let short = vec![int_node(60)];
-                let (matched, answered, _) = probe.run(ShrinkRun::Full(&short)).await?;
-                assert!(
-                    matched,
-                    "the run that drew past the proposal failed and was gauntleted"
-                );
-                assert_eq!(answered.len(), 2);
-                assert_eq!(answered[0], int_node(60));
-                probe.candidate_adopted()?;
-                Ok(answered)
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: tail",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert_eq!(driven.lanes[0].ledger.len(), 1);
-            assert_eq!(driven.lanes[0].current[0], int_node(60));
-        },
-    );
-}
-
-#[test]
-fn gauntlet_depth_charges_the_deadline_not_the_logical_counters() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let bug_runs = AtomicUsize::new(0);
-    with_engine(
-        nd_settings(),
-        None,
-        |ds| {
-            let Ok(v) = rint(ds, 0, 100) else {
-                return TestCaseResult::Overrun;
-            };
-            if v >= 10 && bug_runs.fetch_add(1, Ordering::SeqCst) % 3 != 0 {
-                boom("bug")
-            } else {
-                TestCaseResult::Valid
-            }
-        },
-        async |ctx| {
-            let output = ctx.settings.output.clone();
-            let result = ctx
-                .nd_parallel_shrink(
-                    "Panic: bug",
-                    vec![(vec![int_node(47)], Vec::new())],
-                    0.3,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert_eq!(result.set.len(), 1);
-            assert_eq!(result.set[0].len(), 1);
-            assert_eq!(
-                result.set[0][0].value(),
-                ChoiceValue::Integer(BigInt::from(10)),
-                "the confirmed-dry stop must land on the true boundary"
-            );
-            assert!(!result.timed_out);
-            assert_eq!(
-                ctx.calls, 0,
-                "gauntlet runs are physical only: none is a logical call"
-            );
-        },
-    );
-}
-
-#[test]
-fn gauntlet_accept_without_adoption_moves_nothing() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().to_str().unwrap().to_string();
-    let mut settings = Settings::new()
-        .database(Some(path))
-        .verbosity(Verbosity::Quiet);
+fn a_boost_winner_the_graph_already_walks_is_installed_over_the_incumbent() {
+    let mut settings = Settings::new().database(None);
     settings.nd_force = true;
     with_engine(
         settings,
-        Some("k"),
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            boom("bug")
-        },
-        async |ctx| {
-            ctx.origins
-                .entry("Panic: bug")
-                .confirm(
-                    0.3,
-                    Some(interesting_at("Panic: bug", vec![bool_node(true)])),
-                    Vec::new(),
-                    (4, 6),
-                )
-                .unwrap();
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(matched, "the gauntlet accepts the always-failing candidate");
-                Ok(nodes)
-            });
-            let output = Output::callback(|_| {});
-            ctx.nd_drive_lanes(
-                "Panic: bug",
-                vec![lane],
-                0.3,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-            let (_, anchor) = ctx.origins.entry("Panic: bug").take_witness().unwrap();
-            assert_eq!(anchor, 0.3, "the stored anchor is untouched");
-            assert!(
-                ctx.db().unwrap().fetch(b"k").is_empty(),
-                "an unadopted accept must not persist an incumbent"
-            );
-        },
-    );
-}
-
-#[test]
-fn anchor_raises_only_on_adoption_and_once_per_timeline() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let path = dir.path().to_str().unwrap().to_string();
-    let mut settings = Settings::new()
-        .database(Some(path))
-        .verbosity(Verbosity::Quiet);
-    settings.nd_force = true;
-    with_engine(
-        settings,
-        Some("k"),
-        |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            boom("bug")
-        },
-        async |ctx| {
-            ctx.origins
-                .entry("Panic: bug")
-                .confirm(0.3, None, Vec::new(), (4, 6))
-                .unwrap();
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true)], async move {
-                let nodes = vec![bool_node(true)];
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(matched);
-                probe.candidate_adopted()?;
-                probe.candidate_adopted()?;
-                Ok(nodes)
-            });
-            let output = Output::callback(|_| {});
-            ctx.nd_drive_lanes(
-                "Panic: bug",
-                vec![lane],
-                0.3,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-            let anchor = ctx.origins.get("Panic: bug").unwrap().anchor().unwrap();
-            assert!(anchor > 0.3, "adoption raises the anchor");
-            assert!(
-                !ctx.db().unwrap().fetch(b"k").is_empty(),
-                "adoption persists the incumbent"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_fast_sweep_miss_cannot_reject_a_conclusively_accepted_timeline() {
-    with_engine(
-        quiet_settings(),
         None,
-        |ds| match rint(ds, 0, 100) {
-            Ok(_) => TestCaseResult::Valid,
+        |ds| match rbool(ds) {
+            Ok(false) => boom("bug"),
+            Ok(true) => TestCaseResult::Valid,
             Err(()) => TestCaseResult::Overrun,
         },
         async |ctx| {
-            ctx.nd_flip();
-            let (slot, mut probe) = new_slot();
-            let mut lane = scripted_lane(slot, vec![int_node(9)], async move {
-                let nodes = vec![int_node(9)];
-                let (matched, actual, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(
-                    matched,
-                    "a conclusive ledger accept survives one dry replay"
-                );
-                assert_eq!(actual, nodes);
-                Ok(nodes)
-            });
-            let key = serialize_choices(&[ChoiceValue::Integer(BigInt::from(9))]).unwrap();
-            let mut evidence = nd::Evidence::default();
-            for _ in 0..nd::ANCHOR_SEED_RUNS {
-                evidence.record(true);
-            }
-            lane.ledger.insert(
-                key,
-                CandidateLedger {
-                    evidence,
-                    min_fails: nd::GAUNTLET_MIN_FAILS,
-                    verdict: Some(true),
-                    bounces: 0,
-                    led: 0,
-                    set_evidence: evidence,
-                },
-            );
-            let output = ctx.settings.output.clone();
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: bug",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            assert!(driven.lanes[0].pending_accept.is_some());
-        },
-    );
-}
-
-#[test]
-fn a_failing_run_on_no_stored_timeline_does_not_join_the_pool() {
-    let mut executions = 0usize;
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            if rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            executions += 1;
-            if executions % 2 == 0 {
-                match rint(ds, 0, 100) {
-                    Ok(_) => boom("branch"),
-                    Err(()) => TestCaseResult::Overrun,
-                }
-            } else {
-                match (rbool(ds), rbool(ds), rint(ds, 0, 100)) {
-                    (Ok(true), Ok(true), Ok(42)) => boom("branch"),
-                    (Ok(_), Ok(_), Ok(_)) => TestCaseResult::Valid,
-                    _ => TestCaseResult::Overrun,
-                }
-            }
-        },
-        async |ctx| {
+            let incumbent = interesting_at("Panic: bug", vec![bool_node(true)]);
             ctx.origins
-                .entry("Panic: branch")
-                .confirm(0.3, None, Vec::new(), (20, 20))
-                .unwrap();
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, branch_s_nodes(), async move {
-                let nodes = branch_s_nodes();
-                for _ in 0..2 {
-                    let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                    assert!(matched);
-                }
-                Ok(nodes)
-            });
-            let output = Output::callback(|_| {});
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: branch",
-                    vec![lane],
-                    0.3,
-                    None,
-                    Verbosity::Quiet,
-                    &output,
-                )
-                .await
-                .unwrap();
-            let pool = ctx.origins.get("Panic: branch").unwrap().pool().to_vec();
-            assert!(
-                pool.is_empty(),
-                "the always-failing second branch, reached only through the rescue tier, \
-                 is set evidence and a bounce, not a new timeline: {pool:?}"
-            );
-            let ledger = driven.lanes[0].ledger.values().next().unwrap();
-            assert!(
-                ledger.bounces > 0,
-                "the rescue-tier runs left the candidate"
-            );
-            assert!(
-                ledger.set_evidence.runs() > ledger.evidence.runs(),
-                "they still count as trials of the set the candidate led"
-            );
-        },
-    );
-}
-
-/// David's two-branch body with a scrambled coin: a shared first boolean,
-/// then either a boolean and an integer (failing on `a && b && x >= 60`)
-/// or two integers (failing on `a && y >= 60 && z >= 60`), the branch
-/// chosen per execution by [`scramble`].
-fn scrambled_pair_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
-    let mut executions = 0usize;
-    move |ds| {
-        let Ok(a) = rbool(ds) else {
-            return TestCaseResult::Overrun;
-        };
-        executions += 1;
-        if scramble(executions) % 2 == 0 {
-            match (rbool(ds), rint(ds, 0, 100)) {
-                (Ok(b), Ok(x)) if a && b && x >= 60 => boom("pair"),
-                (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                _ => TestCaseResult::Overrun,
-            }
-        } else {
-            match (rint(ds, 0, 100), rint(ds, 0, 100)) {
-                (Ok(y), Ok(z)) if a && y >= 60 && z >= 60 => boom("pair"),
-                (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                _ => TestCaseResult::Overrun,
-            }
-        }
-    }
-}
-
-fn values_of(nodes: &[ChoiceNode]) -> Vec<ChoiceValue> {
-    nodes.iter().map(|n| n.value()).collect()
-}
-
-#[test]
-fn the_parallel_shrink_shrinks_every_timeline_of_the_counterexample() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let sink = Arc::clone(&lines);
-    with_engine(nd_settings(), None, scrambled_pair_body(), async |ctx| {
-        let s_raw = vec![bool_node(true), bool_node(true), int_node(77)];
-        let t_raw = vec![bool_node(true), int_node(70), int_node(91)];
-        let origin = ctx.origins.entry("Panic: pair");
-        origin.adopt(s_raw.clone());
-        origin
-            .confirm(
-                0.5,
-                None,
-                pooled_timelines(values_of(&s_raw), vec![values_of(&t_raw)]),
-                (20, 20),
-            )
-            .unwrap();
-        let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-        let result = ctx
-            .nd_parallel_shrink(
-                "Panic: pair",
-                vec![(s_raw, Vec::new()), (t_raw, Vec::new())],
-                0.5,
-                None,
-                Verbosity::Debug,
-                &output,
-            )
-            .await
-            .unwrap();
-        assert!(!result.timed_out);
-        let set: Vec<Vec<ChoiceValue>> = result.set.iter().map(|n| values_of(n)).collect();
-        assert_eq!(
-            set,
-            vec![
-                vec![
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Integer(BigInt::from(60)),
-                ],
-                vec![
-                    ChoiceValue::Boolean(true),
-                    ChoiceValue::Integer(BigInt::from(60)),
-                    ChoiceValue::Integer(BigInt::from(60)),
-                ],
-            ],
-            "both branches shrink to their boundaries, each in its own lane"
-        );
-        let counterexample = ctx.origins.get("Panic: pair").unwrap();
-        assert_eq!(
-            counterexample.timelines(),
-            set,
-            "the shrunk set is installed as the counterexample"
-        );
-        let anchor = counterexample.anchor().unwrap();
-        assert!(
-            anchor > 0.5 && anchor <= nd::anchor_ceiling(),
-            "adoption raises the anchor to the accept's set bound and never past the ceiling: {anchor}"
-        );
-    });
-    assert!(
-        lines
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|l| l.starts_with("nd lane adopted: origin=Panic: pair lane=1 ")),
-        "the second lane's accepts are adopted too: {:?}",
-        lines.lock().unwrap()
-    );
-}
-
-#[test]
-fn a_parallel_shrink_past_its_deadline_answers_every_request_with_a_miss_and_times_out() {
-    with_engine(nd_settings(), None, scrambled_pair_body(), async |ctx| {
-        let s_raw = vec![bool_node(true), bool_node(true), int_node(77)];
-        let output = Output::callback(|_| {});
-        let result = ctx
-            .nd_parallel_shrink(
-                "Panic: pair",
-                vec![(s_raw.clone(), Vec::new())],
-                0.5,
-                crate::sys::Instant::now(),
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        assert!(result.timed_out);
-        assert_eq!(result.set, vec![s_raw]);
-    });
-}
-
-#[test]
-fn a_lane_suspended_without_a_request_is_an_internal_error() {
-    with_engine(nd_settings(), None, scrambled_pair_body(), async |ctx| {
-        let (slot, _probe) = new_slot();
-        let lane = scripted_lane(slot, vec![bool_node(true)], core::future::pending());
-        let output = Output::callback(|_| {});
-        let Err(err) = ctx
-            .nd_drive_lanes(
-                "Panic: pair",
-                vec![lane],
-                0.5,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-        else {
-            panic!("a lane suspended without a request must be an internal error");
-        };
-        assert!(matches!(err, RunError::Internal(_)), "{err:?}");
-    });
-}
-
-#[test]
-fn a_lane_that_fails_fails_the_shrink() {
-    with_engine(nd_settings(), None, scrambled_pair_body(), async |ctx| {
-        let (slot, _probe) = new_slot();
-        let lane = scripted_lane(slot, vec![bool_node(true)], async {
-            Err(crate::native::shrinker::ShrinkHalt::Error(
-                RunError::Internal(InternalError::new(format_args!("lane failed"))),
-            ))
-        });
-        let output = Output::callback(|_| {});
-        let Err(err) = ctx
-            .nd_drive_lanes(
-                "Panic: pair",
-                vec![lane],
-                0.5,
-                None,
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-        else {
-            panic!("a failing lane must fail the shrink");
-        };
-        assert!(matches!(err, RunError::Internal(e) if e.to_string().contains("lane failed")));
-    });
-}
-
-#[test]
-fn an_undecidable_set_bound_rejects_the_candidate_at_the_cap() {
-    use std::sync::{Arc, Mutex};
-    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
-    let mut executions = 0usize;
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            let Ok(a) = rbool(ds) else {
-                return TestCaseResult::Overrun;
-            };
-            executions += 1;
-            if scramble(executions) % 5 < 2 {
-                match rint(ds, 0, 100) {
-                    Ok(_) if a => boom("half"),
-                    Ok(_) => TestCaseResult::Valid,
-                    Err(()) => TestCaseResult::Overrun,
-                }
-            } else {
-                match (rbool(ds), rbool(ds)) {
-                    (Ok(_), Ok(_)) => TestCaseResult::Valid,
-                    _ => TestCaseResult::Overrun,
-                }
-            }
-        },
-        async |ctx| {
-            let (slot, mut probe) = new_slot();
-            let lane = scripted_lane(slot, vec![bool_node(true), int_node(5)], async move {
-                let nodes = vec![bool_node(true), int_node(5)];
-                probe.set_sweep_mode(SweepMode::Confirm);
-                let (matched, _, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-                assert!(
-                    !matched,
-                    "the set reproduces on two runs in five, astride the threshold"
-                );
-                Ok(nodes)
-            });
-            let sink = Arc::clone(&lines);
-            let output = Output::callback(move |line| sink.lock().unwrap().push(line.to_string()));
-            let driven = ctx
-                .nd_drive_lanes(
-                    "Panic: half",
-                    vec![lane],
-                    0.5,
-                    None,
-                    Verbosity::Debug,
-                    &output,
-                )
-                .await
-                .unwrap();
-            let ledger = driven.lanes[0].ledger.values().next().unwrap();
-            assert_eq!(ledger.verdict, Some(false));
-            assert!(
-                ledger.set_evidence.runs() >= SET_EVIDENCE_CAP,
-                "the reject came at the cap, not from a bound: {} runs",
-                ledger.set_evidence.runs()
-            );
-            assert_eq!(
-                ledger.evidence.fails(),
-                ledger.evidence.runs(),
-                "every on-timeline run failed"
-            );
-        },
-    );
-    assert!(
-        lines
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|l| l.starts_with("gauntlet abandoned a candidate: undecided after 60 led runs")),
-        "{:?}",
-        lines.lock().unwrap()
-    );
-}
-
-#[test]
-fn a_driver_past_its_deadline_answers_a_pending_request_with_a_miss_and_times_out() {
-    with_engine(nd_settings(), None, branching_body(), async |ctx| {
-        let (slot, mut probe) = new_slot();
-        let lane = scripted_lane(slot, branch_s_nodes(), async move {
-            let nodes = vec![bool_node(true), bool_node(true), int_node(60)];
-            let (matched, answered, _) = probe.run(ShrinkRun::Full(&nodes)).await?;
-            assert!(!matched);
-            assert_eq!(
-                answered,
-                branch_s_nodes(),
-                "the miss carries the lane's current"
-            );
-            Ok(branch_s_nodes())
-        });
-        let output = Output::callback(|_| {});
-        let driven = ctx
-            .nd_drive_lanes(
-                "Panic: branch",
-                vec![lane],
-                0.3,
-                crate::sys::Instant::now(),
-                Verbosity::Quiet,
-                &output,
-            )
-            .await
-            .unwrap();
-        assert!(driven.timed_out);
-        assert!(driven.lanes[0].ledger.is_empty(), "no run was made");
-    });
-}
-
-#[test]
-fn the_splice_pass_skips_pairs_with_a_single_choice_timeline() {
-    let mut executions = 0usize;
-    with_engine(
-        nd_settings(),
-        None,
-        move |ds| {
-            let Ok(a) = rbool(ds) else {
-                return TestCaseResult::Overrun;
-            };
-            executions += 1;
-            if !a {
-                return TestCaseResult::Valid;
-            }
-            if scramble(executions) % 2 == 0 && rbool(ds).is_err() {
-                return TestCaseResult::Overrun;
-            }
-            boom("short")
-        },
-        async |ctx| {
-            let origin = ctx.origins.entry("Panic: short");
-            origin.adopt(vec![bool_node(true)]);
-            origin
+                .entry("Panic: bug")
                 .confirm(
-                    0.5,
+                    0.1,
                     None,
-                    pooled_timelines(
-                        vec![ChoiceValue::Boolean(true)],
-                        vec![vec![
-                            ChoiceValue::Boolean(true),
-                            ChoiceValue::Boolean(false),
-                        ]],
-                    ),
-                    (20, 20),
+                    build_graph(&[vec![ChoiceValue::Boolean(false)]]),
+                    1,
+                    (4, 9),
                 )
                 .unwrap();
-            let output = Output::callback(|_| {});
-            ctx.nd_multiverse_shrink("Panic: short", 0.5, None, Verbosity::Quiet, &output)
+            ctx.origins
+                .entry("Panic: bug")
+                .replace(incumbent.nodes.clone(), incumbent.spans.clone());
+            let (witness, lcb) = ctx
+                .nd_boost("Panic: bug", &incumbent, 0.0)
                 .await
+                .unwrap()
                 .unwrap();
+            assert_eq!(witness.nodes, vec![bool_node(false)]);
+            let counterexample = ctx.origins.get("Panic: bug").unwrap();
             assert_eq!(
-                ctx.origins.entry("Panic: short").timelines(),
-                vec![
-                    vec![ChoiceValue::Boolean(true)],
-                    vec![ChoiceValue::Boolean(true), ChoiceValue::Boolean(false)],
-                ],
-                "both serve, and no splice of a one-choice timeline is proposed"
+                counterexample.incumbent().unwrap(),
+                &[bool_node(false)],
+                "the winner is a run the stored graph already walks: installed as is"
             );
+            assert_eq!(counterexample.graph().unwrap().edge_count(), 1);
+            assert_eq!(counterexample.longest(), 1);
+            assert_eq!(counterexample.anchor().unwrap(), lcb);
         },
     );
 }

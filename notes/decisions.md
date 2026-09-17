@@ -1071,3 +1071,62 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     directed the design; the leading-proposal replay, the attribution rules, the
     ceiling, the deferral, the no-improvement and ran-out misses and the starvation
     stop are the implementation's, each forced by a measured failure listed above.)
+
+## 2026-09-17
+
+78. **The counterexample is a graph of draws merged by state identity; the pool of
+    timelines is retired** (`graph.rs`, `graph_shrink.rs`, `core/replay.rs`,
+    `counterexample.rs`, `blob.rs`, `test_runner.rs`; experiments 017–019). A draw's
+    **address** is the spans open at it, outermost first, each as (label, ordinal) with
+    the ordinal counting earlier same-label siblings under the same parent — the engine's
+    kind span around every draw is the innermost frame. A **state** is where a run is
+    between two draws, identified by the prefix of the next draw's address through its
+    first frame not open at the previous draw; `Start` and `End` are distinguished
+    identities. The graph has one node per identity and edges (address, value) → target;
+    inserting a run is the identity merge of 019 (`ident`, the start that was the ideal
+    graph at k = 8), and several edges with one address and value and different targets
+    are a **tie** — structure a hidden coin decides after a draw — settled by the identity
+    the next draw reports. Replay walks the graph as one test case: at each draw the walk
+    arrives at the pending node of the reported identity, settling the edge that led
+    there, and serves the first edge at the address whose kind fits; no pending node of
+    the identity (a misjoin) or no fitting edge (a misfit) is a divergence, after which
+    the walk is rescued by the graph's node of the next identity it recognizes and draws
+    at random where none is; drawing past `End` is a divergence. Clone streams keep
+    decision 74's live set over the clone edges' records; whole-timeline live sets
+    survive only as a test seam. A **clean** failure fails with the origin, never
+    diverged and ended on `End`. Confirmation grafts every failing replay of the bar's
+    batch into the graph unless **foreign** — the walk would serve another value
+    somewhere, so no replay of the graph produces it (019's second rule); an incumbent
+    foreign to its stored graph replaces it with its own. The shrinker (`GraphShrinker`)
+    proposes edge deletions, span deletions of the witness (the draws inside one span
+    removed, later same-label siblings renumbered as the engine numbers them, proposed as
+    the graph of that run alone and, when the test does not follow it, with the nearest
+    earlier integer draws lowered by one, up to `COUNT_LOWERINGS` = 3 — how a list's count
+    shrinks with its elements; the harness's contract move is dropped, ordinals being
+    positional) and value edits (binary search toward the constraint's simplest value,
+    warmed up by grafting up to `WARM_UP_GRAFTS` = 8 failing divergent replays into the
+    candidate, and accepted only when a clean replay **settled** on the edited edge —
+    019's first rule, exercise by settlement — with the tie alternatives no judging
+    replay settled on pruned). Candidates face the gauntlet under the alpha budget as
+    before (decisions 54/72); order is fewer edges, then fewer reachable nodes, then edge
+    values in breadth-first shrink rank, strictly decreasing; an accept raises the anchor
+    to its bound capped at `nd::anchor_ceiling()` (decision 77's cap), installs graph,
+    witness and longest run on the counterexample and persists. Two rules found in the
+    engine build: `walk_verdict` rules foreign before it rules an unknown later state a
+    gap (a divergent replay's random run was otherwise grafted as a gap: a value the walk
+    never serves entered the incumbent), and a node a deletion leaves without edges is
+    where a run ends — its incoming edges lead to `End` — since deleting a terminal edge
+    otherwise produced a graph no run ends on. Persistence: `NdReproState` version 3
+    (graph, entropy, longest run); version 2 is not read, never having shipped. Retired
+    with the pool: the splice tier (decision 52), the lanes, census and multiverse shrinker
+    (decisions 75–77), `POOL_CAP`, `REPRODUCE_SPLICES`, `SET_EVIDENCE_CAP`; boost and ND
+    targeting keep racing the incumbent's values and prefix mutants (a boost winner is
+    installed with the stored graph grafted with its run). Limitation, recorded as a risk:
+    two arms whose draws have the same address are one state, and the graph serves them
+    one value — arms need distinct spans, which generators supply and a bare `if` over the
+    engine's own draws does not. Not built: deletion weighing settlement evidence (019
+    finding 6), value coupling (`sum`), the warm-up while the graph is one run (019 (f)),
+    shrinking clone records, and an engine-side cost measurement against the pool's. (DRM
+    directed: "build out an implementation that's good enough to productionise"; the
+    design points are 019's; the span pass and the two rules are the implementation's,
+    each forced by a failing test.)

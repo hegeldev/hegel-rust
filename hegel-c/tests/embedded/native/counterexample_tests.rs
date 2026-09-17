@@ -3,7 +3,9 @@
 use super::*;
 use crate::native::HashMap;
 use crate::native::bignum::BigInt;
-use crate::native::core::Status;
+use crate::native::core::{ChoiceValue, Status};
+use crate::native::graph::{Frame, Step, Walked};
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -16,9 +18,8 @@ fn witness(origin: &str) -> RunResult {
         target_observations: HashMap::default(),
         events: Vec::new(),
         divergence: None,
-        live: Vec::new(),
-        realized: Vec::new(),
-        ran_out: false,
+        settled: Vec::new(),
+        ended: false,
     }
 }
 
@@ -34,8 +35,27 @@ fn int_node(value: i128) -> ChoiceNode {
     )
 }
 
-fn values(nodes: &[ChoiceNode]) -> Vec<ChoiceValue> {
-    nodes.iter().map(|n| n.value()).collect()
+fn span(label: u64, start: usize, end: usize) -> Span {
+    Span {
+        label: label.to_string(),
+        start,
+        end,
+        depth: 0,
+        parent: None,
+        discarded: false,
+    }
+}
+
+fn graph_of(values: &[i128]) -> Graph {
+    Graph::from_run(&Run {
+        steps: values
+            .iter()
+            .map(|&v| Step {
+                addr: Vec::new(),
+                value: ChoiceValue::Integer(BigInt::from(v)),
+            })
+            .collect(),
+    })
 }
 
 #[test]
@@ -43,32 +63,60 @@ fn a_blank_counterexample_needs_confirmation_and_holds_nothing() {
     let mut c = Counterexample::default();
     assert!(c.needs_confirmation());
     assert!(c.incumbent().is_none());
+    assert!(c.incumbent_spans().is_empty());
+    assert!(c.incumbent_run().is_none());
     assert!(c.take_witness().is_none());
-    assert!(c.pool().is_empty());
-    assert!(c.timelines().is_empty());
+    assert!(c.graph().is_none());
+    assert!(c.replay_graph().is_none());
+    assert_eq!(c.longest(), 0);
     assert!(c.history().is_empty());
     assert!(!c.first_checked());
     assert!(c.reject((0, 10)).is_none(), "nothing to evict");
+    assert!(c.repro_state().is_err(), "nothing to store");
 }
 
 #[test]
 fn adopt_founds_then_only_shortlex_displaces() {
     let mut c = Counterexample::default();
-    assert!(c.adopt(vec![int_node(5), int_node(5)]));
-    assert!(!c.adopt(vec![int_node(9), int_node(9)]), "shortlex-larger");
-    assert!(c.adopt(vec![int_node(7)]), "shorter wins");
+    assert!(c.adopt(vec![int_node(5), int_node(5)], vec![span(3, 0, 2)]));
+    assert_eq!(c.incumbent_spans().len(), 1);
+    assert!(
+        !c.adopt(vec![int_node(9), int_node(9)], Vec::new()),
+        "shortlex-larger"
+    );
+    assert_eq!(
+        c.incumbent_spans().len(),
+        1,
+        "a rejected adopt changes nothing"
+    );
+    assert!(c.adopt(vec![int_node(7)], Vec::new()), "shorter wins");
     assert_eq!(c.incumbent().unwrap(), &[int_node(7)]);
-    c.replace(vec![int_node(100), int_node(100)]);
+    assert!(c.incumbent_spans().is_empty());
+    c.replace(vec![int_node(100), int_node(100)], vec![span(3, 0, 2)]);
     assert_eq!(c.incumbent().unwrap().len(), 2, "replace is unconditional");
+    assert_eq!(c.incumbent_spans().len(), 1);
+}
+
+#[test]
+fn the_incumbent_run_addresses_its_draws_by_the_spans() {
+    let mut c = Counterexample::default();
+    c.adopt(vec![int_node(1), int_node(2)], vec![span(7, 1, 2)]);
+    let run = c.incumbent_run().unwrap();
+    assert_eq!(run.steps[0].addr, Vec::<Frame>::new());
+    assert_eq!(run.steps[1].addr, vec![(7, 0)]);
 }
 
 #[test]
 fn rejection_evicts_the_incumbent_but_keeps_the_evidence() {
     let mut c = Counterexample::default();
-    c.adopt(vec![int_node(1)]);
+    c.adopt(vec![int_node(1)], vec![span(3, 0, 1)]);
     assert_eq!(c.reject((1, 10)), Some(vec![int_node(1)]));
     assert!(c.incumbent().is_none());
-    assert!(c.adopt(vec![int_node(2)]), "a re-sighting founds again");
+    assert!(c.incumbent_spans().is_empty(), "the spans go with it");
+    assert!(
+        c.adopt(vec![int_node(2)], Vec::new()),
+        "a re-sighting founds again"
+    );
     assert_eq!(c.reject((2, 30)), Some(vec![int_node(2)]));
     assert_eq!(
         c.caveat(),
@@ -78,13 +126,29 @@ fn rejection_evicts_the_incumbent_but_keeps_the_evidence() {
 }
 
 #[test]
+fn an_unconfirmed_origin_replays_as_its_incumbents_run() {
+    let mut c = Counterexample::default();
+    c.adopt(vec![int_node(1), int_node(2)], Vec::new());
+    assert!(c.graph().is_none());
+    let graph = c.replay_graph().unwrap();
+    assert_eq!(graph.edge_count(), 2);
+    assert_eq!(
+        graph.walk_verdict(&c.incumbent_run().unwrap()),
+        Walked::Whole
+    );
+    assert_eq!(c.longest(), 2, "floored at the incumbent");
+}
+
+#[test]
 fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
     let mut c = Counterexample::default();
-    c.adopt(vec![int_node(1)]);
-    c.confirm(0.4, Some(witness("a")), vec![Vec::new()], (4, 9))
+    c.adopt(vec![int_node(1)], Vec::new());
+    c.confirm(0.4, Some(witness("a")), graph_of(&[1, 2, 3]), 3, (4, 9))
         .unwrap();
     assert!(!c.needs_confirmation());
-    assert_eq!(c.pool().len(), 1);
+    assert_eq!(c.graph().unwrap().edge_count(), 3);
+    assert_eq!(c.replay_graph().unwrap().edge_count(), 3);
+    assert_eq!(c.longest(), 3);
     let (run, anchor) = c.take_witness().unwrap();
     assert_eq!(run.origin.as_deref(), Some("a"));
     assert_eq!(anchor, 0.4);
@@ -96,90 +160,97 @@ fn confirmation_stores_replay_state_and_the_witness_is_taken_once() {
 #[test]
 fn confirmation_drops_the_history() {
     let mut c = Counterexample::default();
-    c.record_sighting(&[int_node(3)], true).unwrap();
-    c.record_sighting(&[int_node(3)], false).unwrap();
-    c.record_sighting(&[int_node(4)], false).unwrap();
-    assert_eq!(c.history().entries().len(), 2, "deduplicated by choices");
-    assert!(c.history().entries()[0].accept);
-    c.confirm(0.4, None, Vec::new(), (4, 9)).unwrap();
+    c.record_sighting(&[int_node(3)], &[span(5, 0, 1)], true)
+        .unwrap();
+    c.record_sighting(&[int_node(3)], &[], false).unwrap();
+    c.record_sighting(&[int_node(4)], &[], false).unwrap();
+    let entries = c.history().entries();
+    assert_eq!(entries.len(), 2, "deduplicated by choices");
+    assert!(entries[0].accept);
+    assert_eq!(entries[0].run().steps[0].addr, vec![(5, 0)]);
+    assert!(entries[1].run().steps[0].addr.is_empty());
+    c.confirm(0.4, None, graph_of(&[3]), 1, (4, 9)).unwrap();
     assert!(c.history().is_empty());
 }
 
 #[test]
-fn timelines_put_the_current_incumbent_ahead_of_the_captured_pool() {
+fn longest_is_the_stored_length_floored_at_the_incumbent() {
     let mut c = Counterexample::default();
-    let confirmed = vec![int_node(9), int_node(9)];
-    c.adopt(confirmed.clone());
-    c.confirm(
-        0.5,
-        None,
-        pooled_timelines(values(&confirmed), vec![values(&[int_node(7)])]),
-        (4, 9),
-    )
-    .unwrap();
-    c.replace(vec![int_node(1)]);
-    let timelines = c.timelines();
-    assert_eq!(timelines[0], values(&[int_node(1)]));
-    assert_eq!(timelines[1], values(&confirmed));
-    assert_eq!(timelines[2], values(&[int_node(7)]));
-    let state = c.repro_state(values(&[int_node(1)])).unwrap();
-    assert_eq!(state.timelines, timelines);
-    assert_eq!(
-        state.extension as usize,
-        crate::native::nd::continuation_budget(1) - 1
-    );
-    assert_eq!(c.timelines_from(values(&confirmed)).len(), 2);
+    c.confirm(0.4, None, graph_of(&[1, 2]), 2, (4, 9)).unwrap();
+    assert_eq!(c.longest(), 2);
+    c.replace(vec![int_node(1); 5], Vec::new());
+    assert_eq!(c.longest(), 5, "a longer incumbent raises the floor");
+    c.replace(vec![int_node(1)], Vec::new());
+    assert_eq!(c.longest(), 2, "a shorter one leaves the stored length");
 }
 
 #[test]
-fn pooled_timelines_deduplicates_and_caps_incumbent_included() {
-    let rest: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
-        .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
-        .collect();
-    let pool = pooled_timelines(rest[0].clone(), rest.clone());
-    assert_eq!(pool.len(), crate::native::nd::POOL_CAP);
-    assert_eq!(pool[0], rest[0]);
+fn repro_state_carries_the_replay_graph_its_hash_and_the_longest_run() {
+    let mut c = Counterexample::default();
+    c.adopt(vec![int_node(1), int_node(2)], Vec::new());
+    let unconfirmed = c.repro_state().unwrap();
+    assert_eq!(unconfirmed.graph.edge_count(), 2);
+    assert_eq!(unconfirmed.longest, 2);
     assert_eq!(
-        pool[1], rest[1],
-        "the duplicate of the incumbent is skipped"
+        unconfirmed.entropy,
+        fnv1a(&c.replay_graph().unwrap().encode().unwrap())
+    );
+    c.confirm(0.4, None, graph_of(&[1, 2, 3, 4]), 4, (4, 9))
+        .unwrap();
+    let confirmed = c.repro_state().unwrap();
+    assert_eq!(confirmed.graph.edge_count(), 4);
+    assert_eq!(confirmed.longest, 4);
+    assert_ne!(confirmed.entropy, unconfirmed.entropy);
+    assert_eq!(
+        c.repro_state().unwrap().entropy,
+        confirmed.entropy,
+        "identical state re-encodes identically"
     );
 }
 
 #[test]
 fn trusted_origins_survive_rejection_without_eviction() {
     let mut c = Counterexample::default();
-    c.adopt(vec![int_node(1)]);
-    c.trust(Vec::new(), (1, 2));
+    c.adopt(vec![int_node(1)], Vec::new());
+    c.trust(None, (1, 2));
     assert!(!c.needs_confirmation());
     assert!(c.reject((0, 10)).is_none());
     assert!(c.incumbent().is_some());
     assert!(c.take_witness().is_none());
+    assert!(c.graph().is_none(), "a version-1 entry carries no graph");
+    assert_eq!(
+        c.replay_graph().unwrap().edge_count(),
+        1,
+        "so the origin replays as its incumbent"
+    );
 }
 
 #[test]
-fn trust_carries_a_stored_pool_and_never_replaces_it_with_an_empty_one() {
+fn trust_carries_a_stored_graph_and_never_replaces_it_with_nothing() {
     let mut c = Counterexample::default();
-    c.trust(vec![vec![ChoiceValue::Boolean(true)]], (1, 1));
-    assert_eq!(c.pool().len(), 1);
-    c.trust(Vec::new(), (1, 1));
-    assert_eq!(c.pool().len(), 1);
-    c.trust(vec![Vec::new(), vec![ChoiceValue::Boolean(false)]], (1, 1));
-    assert_eq!(c.pool().len(), 2);
+    c.trust(Some((Arc::new(graph_of(&[1, 2])), 2)), (1, 1));
+    assert_eq!(c.graph().unwrap().edge_count(), 2);
+    assert_eq!(c.longest(), 2);
+    c.trust(None, (1, 1));
+    assert_eq!(c.graph().unwrap().edge_count(), 2);
+    c.trust(Some((Arc::new(graph_of(&[1, 2, 3])), 3)), (1, 1));
+    assert_eq!(c.graph().unwrap().edge_count(), 3);
+    assert_eq!(c.longest(), 3);
 }
 
 #[test]
 fn trust_seeds_and_folds_reuse_evidence() {
     let mut c = Counterexample::default();
-    c.trust(Vec::new(), (1, 4));
+    c.trust(None, (1, 4));
     assert_eq!(
         c.caveat(),
-        "nondeterministic failure, reproduced from stored timelines: failed \
+        "nondeterministic failure, reproduced from stored state: failed \
          1 of 4 replays this run"
     );
-    c.trust(Vec::new(), (2, 3));
+    c.trust(None, (2, 3));
     assert_eq!(
         c.caveat(),
-        "nondeterministic failure, reproduced from stored timelines: failed \
+        "nondeterministic failure, reproduced from stored state: failed \
          3 of 7 replays this run"
     );
     assert!(!c.needs_confirmation());
@@ -188,30 +259,36 @@ fn trust_seeds_and_folds_reuse_evidence() {
 #[test]
 fn trust_never_demotes_a_confirmed_origin() {
     let mut c = Counterexample::default();
-    c.confirm(0.7, Some(witness("a")), Vec::new(), (4, 4))
+    c.confirm(0.7, Some(witness("a")), graph_of(&[1]), 1, (4, 4))
         .unwrap();
-    c.trust(vec![Vec::new()], (1, 1));
+    c.trust(Some((Arc::new(graph_of(&[1, 2])), 2)), (1, 1));
     let (_, anchor) = c.take_witness().unwrap();
     assert_eq!(anchor, 0.7);
-    assert!(c.pool().is_empty());
+    assert_eq!(c.graph().unwrap().edge_count(), 1);
+    assert_eq!(c.longest(), 1);
 }
 
 #[test]
 fn confirm_on_a_confirmed_origin_is_an_internal_error() {
     let mut c = Counterexample::default();
-    c.confirm(0.4, None, Vec::new(), (4, 9)).unwrap();
-    assert!(c.confirm(0.5, None, Vec::new(), (4, 4)).is_err());
+    c.confirm(0.4, None, graph_of(&[1]), 1, (4, 9)).unwrap();
+    assert!(c.confirm(0.5, None, graph_of(&[1]), 1, (4, 4)).is_err());
 }
 
 #[test]
 fn promotion_folds_trusted_evidence_into_the_confirmed_counts() {
     let mut c = Counterexample::default();
-    c.trust(Vec::new(), (1, 5));
+    c.trust(Some((Arc::new(graph_of(&[1])), 1)), (1, 5));
     c.record_trusted_batch((0, 20));
-    c.confirm(0.3, None, Vec::new(), (2, 8)).unwrap();
+    c.confirm(0.3, None, graph_of(&[1, 2]), 2, (2, 8)).unwrap();
     assert_eq!(
         c.caveat(),
         "nondeterministic failure, confirmed: failed 3 of 33 replays this run"
+    );
+    assert_eq!(
+        c.graph().unwrap().edge_count(),
+        2,
+        "the batch's graph replaces the stored one"
     );
 }
 
@@ -232,23 +309,47 @@ fn raise_anchor_is_monotone_and_confirmed_only() {
     let mut c = Counterexample::default();
     c.raise_anchor(0.9);
     assert!(c.needs_confirmation());
+    assert_eq!(c.anchor(), None);
     let mut t = Counterexample::default();
-    t.trust(Vec::new(), (1, 1));
+    t.trust(None, (1, 1));
     t.raise_anchor(0.9);
     assert!(t.take_witness().is_none());
+    assert_eq!(t.anchor(), None);
     let mut k = Counterexample::default();
-    k.confirm(0.3, Some(witness("c")), Vec::new(), (4, 12))
+    k.confirm(0.3, Some(witness("c")), graph_of(&[1]), 1, (4, 12))
         .unwrap();
     k.raise_anchor(0.2);
     k.raise_anchor(0.6);
     let (_, anchor) = k.take_witness().unwrap();
     assert_eq!(anchor, 0.6);
+    assert_eq!(k.anchor(), Some(0.6));
+}
+
+#[test]
+fn install_moves_the_whole_counterexample_and_raises_the_anchor() {
+    let mut c = Counterexample::default();
+    c.adopt(vec![int_node(9), int_node(9)], Vec::new());
+    c.confirm(0.6, None, graph_of(&[9, 9]), 2, (4, 4)).unwrap();
+    c.install(
+        graph_of(&[3]),
+        vec![int_node(3)],
+        vec![span(2, 0, 1)],
+        0.4,
+        1,
+    );
+    assert_eq!(c.incumbent().unwrap(), &[int_node(3)]);
+    assert_eq!(c.incumbent_spans().len(), 1);
+    assert_eq!(c.graph().unwrap().edge_count(), 1);
+    assert_eq!(c.longest(), 1);
+    assert_eq!(c.anchor(), Some(0.6), "never lowered");
+    c.install(graph_of(&[2]), vec![int_node(2)], Vec::new(), 0.8, 1);
+    assert_eq!(c.anchor(), Some(0.8));
 }
 
 #[test]
 fn caveats_quote_the_accumulated_replay_evidence() {
     let mut c = Counterexample::default();
-    c.adopt(vec![int_node(1)]);
+    c.adopt(vec![int_node(1)], Vec::new());
     assert!(c.reject((1, 40)).is_some());
     assert_eq!(
         c.caveat(),
@@ -261,7 +362,7 @@ fn caveats_quote_the_accumulated_replay_evidence() {
         "unconfirmed failure: failed 1 of 50 replays this run, below the \
          confirmation bar — likely rare"
     );
-    c.confirm(0.3, None, Vec::new(), (4, 12)).unwrap();
+    c.confirm(0.3, None, graph_of(&[1]), 1, (4, 12)).unwrap();
     assert_eq!(
         c.caveat(),
         "nondeterministic failure, confirmed: failed 5 of 62 replays this run"
@@ -273,7 +374,7 @@ fn a_dry_final_replay_switches_the_confirmed_caveat_wording() {
     let mut c = Counterexample::default();
     c.record_final_replay((0, 29));
     assert!(c.needs_confirmation(), "no-op while unconfirmed");
-    c.confirm(0.4, None, Vec::new(), (4, 9)).unwrap();
+    c.confirm(0.4, None, graph_of(&[1]), 1, (4, 9)).unwrap();
     c.record_final_replay((0, 29));
     assert_eq!(
         c.caveat(),
@@ -286,7 +387,7 @@ fn a_dry_final_replay_switches_the_confirmed_caveat_wording() {
 #[test]
 fn caveats_keep_report_time_counts_apart_from_confirmation_counts() {
     let mut c = Counterexample::default();
-    c.confirm(0.4, None, Vec::new(), (4, 9)).unwrap();
+    c.confirm(0.4, None, graph_of(&[1]), 1, (4, 9)).unwrap();
     assert_eq!(
         c.caveat(),
         "nondeterministic failure, confirmed: failed 4 of 9 replays this run"
@@ -302,11 +403,11 @@ fn caveats_keep_report_time_counts_apart_from_confirmation_counts() {
 #[test]
 fn record_final_replay_records_report_counts_on_trusted() {
     let mut c = Counterexample::default();
-    c.trust(Vec::new(), (1, 5));
+    c.trust(None, (1, 5));
     c.record_final_replay((2, 4));
     assert_eq!(
         c.caveat(),
-        "nondeterministic failure, reproduced from stored timelines: failed \
+        "nondeterministic failure, reproduced from stored state: failed \
          1 of 5 replays at reuse and 2 of 4 at report time"
     );
 }
@@ -314,28 +415,15 @@ fn record_final_replay_records_report_counts_on_trusted() {
 #[test]
 fn a_dry_final_replay_switches_the_trusted_caveat_wording() {
     let mut c = Counterexample::default();
-    c.trust(Vec::new(), (1, 5));
+    c.trust(None, (1, 5));
     c.record_final_replay((0, 20));
     assert_eq!(
         c.caveat(),
-        "nondeterministic failure, reproduced from stored timelines earlier \
+        "nondeterministic failure, reproduced from stored state earlier \
          this run (failed 1 of 5 replays) but not reproduced at report time \
          — a rare failure, or something in the environment changed after \
          discovery"
     );
-}
-
-#[test]
-fn trust_and_confirm_truncate_an_oversized_pool_to_pool_cap() {
-    let pool: Vec<Vec<ChoiceValue>> = (0..crate::native::nd::POOL_CAP + 3)
-        .map(|i| vec![ChoiceValue::Boolean(i % 2 == 0); i + 1])
-        .collect();
-    let mut t = Counterexample::default();
-    t.trust(pool.clone(), (1, 1));
-    assert_eq!(t.pool().len(), crate::native::nd::POOL_CAP);
-    let mut c = Counterexample::default();
-    c.confirm(0.4, None, pool, (4, 9)).unwrap();
-    assert_eq!(c.pool().len(), crate::native::nd::POOL_CAP);
 }
 
 #[test]
@@ -365,7 +453,7 @@ fn backtrack_attempts_are_a_separate_budget() {
 #[test]
 fn a_never_replayed_origin_gets_the_observed_once_caveat() {
     let mut c = Counterexample::default();
-    c.adopt(vec![int_node(1)]);
+    c.adopt(vec![int_node(1)], Vec::new());
     assert_eq!(
         c.caveat(),
         "unconfirmed failure: observed once, never replayed — a rare \
@@ -394,15 +482,24 @@ fn seeds_are_taken_once_and_first_check_is_sticky() {
 }
 
 #[test]
+fn clear_history_drops_the_entries_without_confirming() {
+    let mut c = Counterexample::default();
+    c.record_sighting(&[int_node(3)], &[], true).unwrap();
+    c.clear_history();
+    assert!(c.history().is_empty());
+    assert!(c.needs_confirmation());
+}
+
+#[test]
 fn the_map_reports_live_and_unconfirmed_origins_in_origin_order() {
     let mut all = Counterexamples::default();
     assert!(!all.any_live());
     assert!(all.needs_confirmation("zeta"), "unknown origins do");
     assert!(all.caveat("zeta").is_none());
-    all.entry("c").adopt(vec![int_node(1)]);
-    all.entry("a").adopt(vec![int_node(2)]);
+    all.entry("c").adopt(vec![int_node(1)], Vec::new());
+    all.entry("a").adopt(vec![int_node(2)], Vec::new());
     all.entry("b")
-        .confirm(0.5, None, Vec::new(), (4, 6))
+        .confirm(0.5, None, graph_of(&[1]), 1, (4, 6))
         .unwrap();
     assert!(all.any_live());
     assert_eq!(all.live_origins(), vec!["a", "c"]);
@@ -414,68 +511,6 @@ fn the_map_reports_live_and_unconfirmed_origins_in_origin_order() {
     assert!(all.incumbent("c").is_none());
     assert!(all.caveat("c").is_some());
     assert_eq!(all.iter().count(), 3);
-}
-
-#[test]
-fn timeline_order_is_shortlex_over_serialized_values() {
-    use core::cmp::Ordering;
-    let short = vec![ChoiceValue::Boolean(true)];
-    let long = vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(false)];
-    assert_eq!(timeline_order(&short, &long), Ordering::Less);
-    assert_eq!(timeline_order(&long, &short), Ordering::Greater);
-    let int = vec![ChoiceValue::Integer(BigInt::from(7))];
-    assert_eq!(
-        timeline_order(&int, &short),
-        Ordering::Less,
-        "an integer's tag precedes a boolean's"
-    );
-    assert_eq!(timeline_order(&short, &short), Ordering::Equal);
-    let mut deep = ChoiceValue::Clone(alloc::sync::Arc::new(
-        crate::native::core::CloneRecord::from_values(Vec::new()),
-    ));
-    for _ in 0..=crate::native::core::MAX_CLONE_DEPTH {
-        deep = ChoiceValue::Clone(alloc::sync::Arc::new(
-            crate::native::core::CloneRecord::from_values(vec![deep]),
-        ));
-    }
-    let too_deep = vec![deep];
-    assert_eq!(
-        timeline_order(&too_deep, &too_deep),
-        Ordering::Equal,
-        "timelines that cannot be serialized compare equal"
-    );
-}
-
-#[test]
-fn set_order_counts_timelines_first_then_compares_them_lexicographically() {
-    use core::cmp::Ordering;
-    let a = vec![ChoiceValue::Boolean(true)];
-    let b = vec![ChoiceValue::Boolean(false)];
-    assert_eq!(
-        set_order(core::slice::from_ref(&a), &[b.clone(), a.clone()]),
-        Ordering::Less
-    );
-    assert_eq!(
-        set_order(&[b.clone(), a.clone()], &[a.clone(), b.clone()]),
-        Ordering::Less
-    );
-    assert_eq!(
-        set_order(&[a.clone(), b.clone()], &[a.clone(), b]),
-        Ordering::Equal
-    );
-}
-
-#[test]
-fn install_set_replaces_the_pool_and_optionally_the_incumbent() {
-    let mut c = Counterexample::default();
-    c.adopt(vec![int_node(9)]);
-    assert_eq!(c.anchor(), None);
-    c.confirm(0.6, None, Vec::new(), (4, 4)).unwrap();
-    assert_eq!(c.anchor(), Some(0.6));
-    c.install_set(&[values(&[int_node(9)]), values(&[int_node(3)])], None);
-    assert_eq!(c.incumbent().unwrap(), &[int_node(9)]);
-    assert_eq!(c.pool(), &[values(&[int_node(3)])]);
-    c.install_set(&[values(&[int_node(3)])], Some(vec![int_node(3)]));
-    assert_eq!(c.incumbent().unwrap(), &[int_node(3)]);
-    assert!(c.pool().is_empty());
+    assert!(all.get_mut("b").unwrap().anchor().is_some());
+    assert_eq!(all.iter_mut().count(), 3);
 }

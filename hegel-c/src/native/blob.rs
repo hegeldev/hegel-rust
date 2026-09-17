@@ -19,8 +19,8 @@
 //! - `1` (`PREFIX_ZLIB`): `payload` is the zlib compression of those bytes.
 //! - `2` (`PREFIX_ND_RAW`) / `3` (`PREFIX_ND_ZLIB`): `payload` is the raw /
 //!   zlib-compressed [nondeterministic replay state](NdReproState) — the
-//!   incumbent timeline plus its captured pool, an entropy seed, and a
-//!   continuation budget, so a flaky failure can be replayed until it
+//!   counterexample graph, an entropy seed, and the length its continuation
+//!   budget is sized from, so a flaky failure can be replayed until it
 //!   reproduces rather than exactly once.
 //!
 //! [`encode_failure`] computes both and keeps whichever is shorter — for the
@@ -46,15 +46,18 @@
 //! [`serialize_choices`] rejects for the same reason the decoder does. The
 //! engine never produces one.
 //!
-//! The nondeterministic state bytes double as the version-2 **database
+//! The nondeterministic state bytes double as the version-3 **database
 //! entry** format (decision 8: ND-ness is carried by the representation).
 //! They open with a `u32::MAX` choice count no genuine [`serialize_choices`]
 //! output can start with, so a pre-v2 reader's [`deserialize_choices`]
-//! rejects them as corrupt instead of misreading them.
+//! rejects them as corrupt instead of misreading them. Version-2 entries
+//! (timeline pools) are no longer read: they decode as corrupt and are
+//! deleted by the reuse phase's hygiene.
 
 use crate::native::base64::{base64_decode, base64_encode};
 use crate::native::core::ChoiceValue;
-use crate::native::database::{deserialize_choices, deserialize_choices_exact, serialize_choices};
+use crate::native::database::{deserialize_choices, serialize_choices};
+use crate::native::graph::Graph;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -71,25 +74,19 @@ const PREFIX_ND_ZLIB: u8 = 3;
 /// [`serialize_choices`] count, so pre-v2 readers reject the entry.
 const ND_STATE_MAGIC: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
 /// Version byte following [`ND_STATE_MAGIC`].
-const ND_STATE_VERSION: u8 = 2;
-/// Sanity cap on the timeline count a decoded state may claim. It is
-/// deliberately looser than the write-side pool cap
-/// ([`POOL_CAP`](crate::native::nd::POOL_CAP), 10) so that raising the pool
-/// cap later does not invalidate stored corpora: entries written with more
-/// timelines than the current cap remain decodable.
-const ND_STATE_MAX_TIMELINES: u32 = 64;
+const ND_STATE_VERSION: u8 = 3;
 
 /// zlib compression level used by [`encode_failure`]. 6 is the zlib default.
 const ZLIB_LEVEL: u8 = 6;
 
 /// Upper bound on the decompressed size of a zlib payload, so a hostile blob
-/// cannot force an arbitrarily large allocation. The largest choice-only
-/// state the decoder would otherwise accept is [`ND_STATE_MAX_TIMELINES`]
-/// (64) timelines × [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192)
-/// choices × [`serialize_choices`]' ~17-byte per-choice sizing = 8.5 MiB.
-/// 16 MiB leaves comparable headroom for content-carrying choices (bytes and
-/// strings also serialize their payloads). Encoders keep the raw form for
-/// payloads past this bound, so their output always decodes.
+/// cannot force an arbitrarily large allocation. A choice-only sequence of
+/// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (8192) choices at
+/// [`serialize_choices`]' ~17-byte per-choice sizing is 136 KiB, and a
+/// stored graph is a shrunk failure's few runs of such draws with their
+/// addresses; 16 MiB leaves ample headroom for content-carrying choices
+/// (bytes and strings also serialize their payloads). Encoders keep the raw
+/// form for payloads past this bound, so their output always decodes.
 const MAX_DECOMPRESSED_LEN: usize = 16 << 20;
 
 /// Encode a choice sequence into a failure blob (see the module docs for the
@@ -115,48 +112,38 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
 }
 
 /// The replay state a nondeterministic failure persists (blob prefix 2/3,
-/// or a version-2 database entry): every stored timeline, an entropy seed
-/// for a deterministic single replay, and the continuation budget beyond
-/// the stored timelines' length.
+/// or a version-3 database entry): the counterexample graph (decision 78),
+/// an entropy seed for a deterministic single replay, and the flattened
+/// length of the longest failing run the graph holds, which sizes the
+/// continuation budget of a replay.
 pub(crate) struct NdReproState {
-    /// Stored failing timelines, incumbent first.
-    pub(crate) timelines: Vec<Vec<ChoiceValue>>,
+    pub(crate) graph: Graph,
     /// Seed for the fresh draws a single blob replay may need past a
     /// divergence.
     pub(crate) entropy: u64,
-    /// Fresh-draw budget beyond the longest stored timeline's flattened
-    /// length (derived from the incumbent's at encoding).
-    pub(crate) extension: u32,
-}
-
-impl NdReproState {
-    pub(crate) fn incumbent(&self) -> &[ChoiceValue] {
-        &self.timelines[0]
-    }
+    /// The longest stored failing run's flattened length: a replay draws
+    /// at random past the graph up to
+    /// [`continuation_budget`](crate::native::nd::continuation_budget) of
+    /// it.
+    pub(crate) longest: u32,
 }
 
 /// Encode nondeterministic replay state (see the module docs). The output
-/// is both the version-2 database entry format and the payload behind blob
+/// is both the version-3 database entry format and the payload behind blob
 /// prefixes 2/3.
 pub(crate) fn encode_nd_state(state: &NdReproState) -> Option<Vec<u8>> {
     let mut buf = Vec::new();
     buf.extend_from_slice(&ND_STATE_MAGIC);
     buf.push(ND_STATE_VERSION);
     buf.extend_from_slice(&state.entropy.to_le_bytes());
-    buf.extend_from_slice(&state.extension.to_le_bytes());
-    buf.extend_from_slice(&(state.timelines.len() as u32).to_le_bytes());
-    for timeline in &state.timelines {
-        let bytes = serialize_choices(timeline)?;
-        buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&bytes);
-    }
+    buf.extend_from_slice(&state.longest.to_le_bytes());
+    buf.extend_from_slice(&state.graph.encode()?);
     Some(buf)
 }
 
 /// Decode [`encode_nd_state`] output, or `None` on any malformation —
-/// wrong magic or version, truncation, a zero or absurd timeline count, a
-/// timeline body that is rejected or not fully consumed, or trailing bytes
-/// after the last timeline.
+/// wrong magic or version, truncation, or a graph body [`Graph::decode`]
+/// rejects.
 pub(crate) fn decode_nd_state(bytes: &[u8]) -> Option<NdReproState> {
     let rest = bytes.strip_prefix(&ND_STATE_MAGIC)?;
     let (&version, rest) = rest.split_first()?;
@@ -165,31 +152,12 @@ pub(crate) fn decode_nd_state(bytes: &[u8]) -> Option<NdReproState> {
     }
     let (entropy_bytes, rest) = rest.split_first_chunk::<8>()?;
     let entropy = u64::from_le_bytes(*entropy_bytes);
-    let (extension_bytes, rest) = rest.split_first_chunk::<4>()?;
-    let extension = u32::from_le_bytes(*extension_bytes);
-    let (count_bytes, mut rest) = rest.split_first_chunk::<4>()?;
-    let count = u32::from_le_bytes(*count_bytes);
-    if count == 0 || count > ND_STATE_MAX_TIMELINES {
-        return None;
-    }
-    let mut timelines = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        let (len_bytes, tail) = rest.split_first_chunk::<4>()?;
-        let len = u32::from_le_bytes(*len_bytes) as usize;
-        if tail.len() < len {
-            return None;
-        }
-        let (body, tail) = tail.split_at(len);
-        timelines.push(deserialize_choices_exact(body)?);
-        rest = tail;
-    }
-    if !rest.is_empty() {
-        return None;
-    }
+    let (longest_bytes, rest) = rest.split_first_chunk::<4>()?;
+    let longest = u32::from_le_bytes(*longest_bytes);
     Some(NdReproState {
-        timelines,
+        graph: Graph::decode(rest)?,
         entropy,
-        extension,
+        longest,
     })
 }
 

@@ -23,7 +23,11 @@ below, and later API changes are expected to have broken some of them.
   path dependency — `python3 drive.py --episodes 20 --out results.jsonl` (the
   campaign files are checked in). Amended for experiment 017 part A with the
   `kblock<k>`/`kshift<k>` bodies, a shape signature per stored timeline and the
-  first-failure execution count (`results-graph-a.jsonl`).
+  first-failure execution count (`results-graph-a.jsonl`). Decision 78 replaced
+  the pool of timelines it read out of blobs (`__bench::blob_timelines`) with
+  the graph, so it no longer builds; its measurements describe the retired
+  representation. `ReplayKind::Set` (the live set over whole timelines) stays
+  in `__bench` as a test seam only.
 - `graph-replay`: experiment 017 part B (the counterexample as a graph); runs
   against the branch through `__bench::replay_case` and the `ExternalReplay`
   hook — `TRIALS=20 R=50 cargo run --release -- results.jsonl`, then
@@ -42,6 +46,9 @@ below, and later API changes are expected to have broken some of them.
   passes through `ExternalReplay::resolve`, plus tied edges and the `list` and
   `loop` bodies — `TRIALS=10 KS=20 R=50 cargo run --release -- results.jsonl`,
   then `python3 summarize.py results.jsonl` prints the tables in the notes.
+  Built against `8f78d577`, before decision 78 moved the graph into the engine
+  (`hegel-c/src/native/graph.rs`, `graph_shrink.rs`); it keeps its own graph
+  and shrinker and still drives the engine through the hook.
 - `concurrent-replay`: built against `7a4fd194` (experiment 007's full
   campaign); runs against the branch via its path dependency —
   `cargo build --release`, then `python3 drive.py [trials]`.

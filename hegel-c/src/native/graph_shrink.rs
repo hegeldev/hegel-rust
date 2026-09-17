@@ -3,13 +3,24 @@
 //! The shrinker holds an incumbent [`Graph`] and its **witness** — the
 //! smallest clean failing run replayed from it, the example the failure
 //! is reported with — and proposes candidates: the graph with one edge
-//! deleted, or with one draw's value replaced by a simpler one. A
-//! candidate is judged by replaying it through the gauntlet
-//! ([`nd::gauntlet`]): a **clean** replay fails with the target origin,
-//! never diverged, and ended where the graph ends. In the fast sweep one
-//! unclean replay rejects; the confirmation sweep drives every candidate
-//! to a bound. The passes repeat until a confirmation sweep changes
-//! nothing.
+//! deleted; the witness with one span deleted (a draw, or the draws of a
+//! span the test opened), its later siblings renumbered and, when the test
+//! does not follow that alone, an earlier integer draw lowered by one —
+//! the size a test drew before the draws it governs; or the graph with
+//! one draw's value replaced by a simpler one. A candidate is judged by
+//! replaying it through the gauntlet ([`nd::gauntlet`]): a **clean**
+//! replay fails with the target origin, never diverged, and ended where
+//! the graph ends. In the fast sweep one unclean replay rejects; the
+//! confirmation sweep drives every candidate to a bound. The passes
+//! repeat until a confirmation sweep changes nothing.
+//!
+//! A span deletion is proposed as the graph of the shortened witness
+//! alone: the identities of the states after the deleted span are those
+//! of a run without it, which the graph's edges cannot be edited into.
+//! The other paths of the incumbent are given up by the move; the
+//! gauntlet decides whether the shortened run alone is still the failure
+//! at the anchor rate, and later grafts restore the paths its replays
+//! take.
 //!
 //! A failing unclean replay is a failing run the graph could not fully
 //! produce: it is grafted into the incumbent and the candidate unless it is
@@ -26,8 +37,6 @@
 //! learned from every replay; a clone's record is not shrunk (only
 //! deleted) in this cut.
 
-#![allow(dead_code)]
-
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -39,7 +48,7 @@ use crate::control::hegel_internal_unwrap;
 use crate::native::HashMap;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, Span, flattened_len, sort_key};
-use crate::native::graph::{Addr, Graph, Ident, Run, Walked};
+use crate::native::graph::{Addr, Frame, Graph, Ident, Run, Step, Walked};
 use crate::native::nd::{self, Evidence, GauntletVerdict};
 use crate::native::shrinker::SweepMode;
 
@@ -71,24 +80,27 @@ impl Outcome {
 pub(crate) type ProbeFuture<'s> =
     Pin<Box<dyn Future<Output = Result<Outcome, RunError>> + Send + 's>>;
 
-/// The engine's side of a graph shrink.
-pub(crate) trait GraphProbe {
+/// The engine's side of a graph shrink. `Send` because the engine's run
+/// future, which the shrink suspends inside, is.
+pub(crate) trait GraphProbe: Send {
     /// Replay `graph` once as one test case, drawing at random past it up
     /// to `max_size` choices in total.
     fn replay<'s>(&'s mut self, graph: Arc<Graph>, max_size: usize) -> ProbeFuture<'s>;
 
-    /// Charge one gauntlet proposal to the origin's alpha budget (decision
-    /// 72) and return the failure minimum its verdicts use; `drive` in the
-    /// confirmation sweep.
-    fn charge(&mut self, drive: bool) -> u64;
+    /// Charge one gauntlet proposal priced against `anchor` to the origin's
+    /// alpha budget (decision 72) and return the failure minimum its
+    /// verdicts use; `drive` in the confirmation sweep.
+    fn charge(&mut self, anchor: f64, drive: bool) -> u64;
 
-    /// A candidate was accepted: `graph` is the incumbent, `witness` its
-    /// reported example, `anchor` the raised anchor.
+    /// A candidate was accepted: `graph` is the incumbent, `witness` (its
+    /// nodes and spans) its reported example, `anchor` the raised anchor,
+    /// and `longest` the longest clean failing run seen.
     fn adopted(
         &mut self,
         graph: &Graph,
-        witness: &[ChoiceNode],
+        witness: (&[ChoiceNode], &[Span]),
         anchor: f64,
+        longest: usize,
     ) -> Result<(), RunError>;
 }
 
@@ -96,6 +108,55 @@ pub(crate) trait GraphProbe {
 /// evidence: each adds structure the edit opened, and a graph that keeps
 /// opening structure is not converging on a counterexample.
 const WARM_UP_GRAFTS: u32 = 8;
+
+/// How many earlier integer draws a span deletion is retried with, nearest
+/// first, each lowered by one: the size a test drew before the draws it
+/// governs is usually the nearest.
+const COUNT_LOWERINGS: u32 = 3;
+
+/// The spans of a run — every frame prefix of a draw's address — each
+/// with the index of its first draw, last-starting first and, at one
+/// start, outermost first: the order deletions are proposed in, so that a
+/// deletion never renumbers a span still to be proposed.
+fn spans_of(run: &Run) -> Vec<(Addr, usize)> {
+    let mut seen: HashMap<Addr, usize> = HashMap::default();
+    for (i, step) in run.steps.iter().enumerate() {
+        for d in 1..=step.addr.len() {
+            seen.entry(step.addr[..d].to_vec()).or_insert(i);
+        }
+    }
+    let mut spans: Vec<(Addr, usize)> = seen.into_iter().collect();
+    spans.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.len().cmp(&b.0.len())));
+    spans
+}
+
+/// `run` without the draws inside `span`, the later siblings of `span`
+/// renumbered as the engine numbers them without it.
+fn without_span(run: &Run, span: &[Frame]) -> Run {
+    let depth = span.len() - 1;
+    let (label, ordinal) = span[depth];
+    Run {
+        steps: run
+            .steps
+            .iter()
+            .filter(|s| !s.addr.starts_with(span))
+            .map(|s| {
+                let mut addr = s.addr.clone();
+                if addr.len() > depth
+                    && addr[..depth] == span[..depth]
+                    && addr[depth].0 == label
+                    && addr[depth].1 > ordinal
+                {
+                    addr[depth].1 -= 1;
+                }
+                Step {
+                    addr,
+                    value: s.value.clone(),
+                }
+            })
+            .collect(),
+    }
+}
 
 /// One edge of the incumbent named by identities, so that it can be found
 /// again after an accept renumbers the graph.
@@ -196,20 +257,31 @@ impl GraphShrinker {
         shrinker
     }
 
+    #[cfg(test)]
     pub(crate) fn graph(&self) -> &Arc<Graph> {
         &self.graph
     }
 
+    #[cfg(test)]
     pub(crate) fn witness(&self) -> (&[ChoiceNode], &[Span]) {
         (&self.witness, &self.witness_spans)
     }
 
+    #[cfg(test)]
     pub(crate) fn anchor(&self) -> f64 {
         self.anchor
     }
 
+    #[cfg(test)]
     pub(crate) fn replays(&self) -> u64 {
         self.replays
+    }
+
+    /// Floor the replay budget at `longest`: the longest failing run the
+    /// counterexample already holds, when the shrink starts from stored
+    /// state whose other paths are longer than the witness.
+    pub(crate) fn set_longest(&mut self, longest: usize) {
+        self.longest = self.longest.max(longest);
     }
 
     fn expired(&self) -> bool {
@@ -247,16 +319,17 @@ impl GraphShrinker {
         }
     }
 
-    /// Run the delete and value passes until a confirmation sweep changes
-    /// nothing, or the deadline passes.
+    /// Run the delete, span, and value passes until a confirmation sweep
+    /// changes nothing, or the deadline passes.
     pub(crate) async fn shrink(&mut self, probe: &mut dyn GraphProbe) -> Result<(), RunError> {
         loop {
             let deleted = self.delete_pass(probe).await?;
+            let trimmed = self.span_pass(probe).await?;
             let shrunk = self.value_pass(probe).await?;
             if self.timed_out {
                 return Ok(());
             }
-            if deleted || shrunk {
+            if deleted || trimmed || shrunk {
                 self.sweep = SweepMode::Fast;
             } else if self.sweep == SweepMode::Fast {
                 self.sweep = SweepMode::Confirm;
@@ -288,6 +361,89 @@ impl GraphShrinker {
             }
         }
         Ok(changed)
+    }
+
+    /// Propose deleting each span of the witness in turn (see the module
+    /// docs): the shortened witness, then — when the test does not follow
+    /// it — the shortened witness with one of the nearest earlier integer
+    /// draws lowered by one, up to [`COUNT_LOWERINGS`] of them.
+    async fn span_pass(&mut self, probe: &mut dyn GraphProbe) -> Result<bool, RunError> {
+        let mut changed = false;
+        for (span, start) in spans_of(&Run::from_nodes(&self.witness, &self.witness_spans)) {
+            if self.timed_out {
+                break;
+            }
+            let current = Run::from_nodes(&self.witness, &self.witness_spans);
+            if !current.steps.iter().any(|s| s.addr.starts_with(&span)) {
+                continue;
+            }
+            let shorter = without_span(&current, &span);
+            if shorter.steps.is_empty() {
+                continue;
+            }
+            if self.try_run(probe, &shorter).await? {
+                changed = true;
+                continue;
+            }
+            let idents = current.idents();
+            let mut tried = 0;
+            for j in (0..start).rev() {
+                let before = if j == 0 {
+                    Ident::Start
+                } else {
+                    idents[j - 1].clone()
+                };
+                let Some(lowered) = self.lowered(&shorter, j, before) else {
+                    continue;
+                };
+                tried += 1;
+                if self.try_run(probe, &lowered).await? {
+                    changed = true;
+                    break;
+                }
+                if tried == COUNT_LOWERINGS {
+                    break;
+                }
+            }
+        }
+        Ok(changed)
+    }
+
+    /// `run` with step `j` — an integer draw made in state `before`, above
+    /// its constraint's simplest value — lowered by one; `None` for any
+    /// other step.
+    fn lowered(&self, run: &Run, j: usize, before: Ident) -> Option<Run> {
+        let step = &run.steps[j];
+        let (ChoiceValue::Integer(v), Some(ChoiceData::Integer(ic, _))) = (
+            &step.value,
+            self.constraints.get(&(before, step.addr.clone())),
+        ) else {
+            return None;
+        };
+        if *v <= ic.simplest() {
+            return None;
+        }
+        let mut lowered = run.clone();
+        lowered.steps[j].value = ChoiceValue::Integer(v - 1);
+        Some(lowered)
+    }
+
+    /// Judge the graph of `run` alone as a candidate, adopting it on accept.
+    async fn try_run(&mut self, probe: &mut dyn GraphProbe, run: &Run) -> Result<bool, RunError> {
+        match self
+            .judge(probe, Graph::from_run(run), Edit::Delete)
+            .await?
+        {
+            Verdict::Accepted {
+                graph,
+                witness,
+                lower_bound,
+            } => {
+                self.adopt(probe, graph, witness, lower_bound)?;
+                Ok(true)
+            }
+            Verdict::Rejected => Ok(false),
+        }
     }
 
     /// Propose simpler values for each draw of the incumbent in turn.
@@ -479,7 +635,7 @@ impl GraphShrinker {
         mut candidate: Graph,
         edit: Edit,
     ) -> Result<Verdict, RunError> {
-        let min_fails = probe.charge(self.sweep == SweepMode::Confirm);
+        let min_fails = probe.charge(self.anchor, self.sweep == SweepMode::Confirm);
         let mut evidence = Evidence::default();
         let mut witness: Option<Outcome> = None;
         let mut exercised = matches!(edit, Edit::Delete);
@@ -579,7 +735,12 @@ impl GraphShrinker {
             self.witness_spans = witness.spans;
         }
         self.graph = Arc::new(graph);
-        probe.adopted(&self.graph, &self.witness, self.anchor)
+        probe.adopted(
+            &self.graph,
+            (&self.witness, &self.witness_spans),
+            self.anchor,
+            self.longest,
+        )
     }
 }
 

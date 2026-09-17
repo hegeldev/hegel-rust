@@ -74,24 +74,19 @@ impl NativeDataSource {
         handle.lock().family().events.lock().clone()
     }
 
-    /// Where the replay first left its stored timelines, if it did.
+    /// Where the replay first left its stored counterexample, if it did.
     pub fn take_divergence(handle: &NativeTestCaseHandle) -> Option<Divergence> {
         handle.lock().divergence()
     }
 
-    /// Which stored timelines the whole run stayed on.
-    pub fn take_live(handle: &NativeTestCaseHandle) -> Vec<bool> {
-        handle.lock().live_timelines()
+    /// Under a graph walk, the edges the run settled on (decision 78).
+    pub fn take_settled(handle: &NativeTestCaseHandle) -> Vec<(usize, usize)> {
+        handle.lock().settled_edges()
     }
 
-    /// Which stored timelines the run realized (decision 77).
-    pub fn take_realized(handle: &NativeTestCaseHandle) -> Vec<bool> {
-        handle.lock().realized_timelines()
-    }
-
-    /// Whether the replayed proposal ran out and the tail was drawn at random.
-    pub fn take_ran_out(handle: &NativeTestCaseHandle) -> bool {
-        handle.lock().ran_out()
+    /// Under a graph walk, whether the run ended where the graph ends.
+    pub fn take_ended(handle: &NativeTestCaseHandle) -> bool {
+        handle.lock().ended_on_end()
     }
 
     /// The test case's outcome, reconstructed from its family's write-once

@@ -93,24 +93,21 @@ pub fn data_source_for_blob(
             crate::native::core::NativeTestCase::for_choices(&choices, None, None)
         }
         crate::native::blob::DecodedBlob::Nd(state) => {
-            let incumbent = state.incumbent();
             if settings.verbosity == Verbosity::Debug {
                 settings.output.line(&format!(
-                    "replaying nondeterministic failure blob: choices = {}, pool = {}",
-                    incumbent.len(),
-                    state.timelines.len() - 1
+                    "replaying nondeterministic failure blob: graph edges = {}, longest run = {}",
+                    state.graph.edge_count(),
+                    state.longest
                 ));
             }
-            let budget = state
-                .timelines
-                .iter()
-                .map(|t| crate::native::core::flattened_values_len(t))
-                .max()
-                .unwrap_or(0)
-                + state.extension as usize;
+            let budget = crate::native::nd::continuation_budget(state.longest as usize);
             let rng = crate::native::rng::EngineRng::seeded(state.entropy);
-            crate::native::core::NativeTestCase::for_counterexample(&state.timelines, rng, budget)
-                .ok()?
+            crate::native::core::NativeTestCase::for_graph(
+                alloc::sync::Arc::new(state.graph),
+                rng,
+                budget,
+            )
+            .ok()?
         }
     };
     ntc.family()

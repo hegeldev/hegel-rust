@@ -48,18 +48,23 @@ Failure probability is first-class: every decision that once assumed "interestin
 function of the choice sequence" — shrinker acceptance, database reuse, the final replay, the
 flakiness errors — is a decision about an estimated probability with explicit budgets.
 
-Vocabulary: a **timeline** is the realized choice sequence of one execution; the **incumbent**
-is the failing timeline held as an origin's best example; the **pool** is a bounded per-origin
-set of other failing timelines; the **evidence ledger** is per-candidate `(fails, runs)`
-counts, never persisted; the **anchor** is a Wilson lower confidence bound on the
-incumbent's failure rate; the **gauntlet** is the evidence bar a shrink candidate must clear.
+Vocabulary: a **run** is the realized choice sequence of one execution, each draw with its
+**address** (the spans open at it); the **incumbent** is the failing run held as an origin's
+reported example; the **graph** is the origin's counterexample — its failing runs merged by
+state identity, replayed as one test case (decision 78); the **evidence ledger** is
+per-candidate `(fails, runs)` counts, never persisted; the **anchor** is a Wilson lower
+confidence bound on the incumbent's failure rate; the **gauntlet** is the evidence bar a
+shrink candidate must clear. (Earlier entries here and in `decisions.md` say **timeline**
+for a run's values and **pool** for the set of stored timelines the graph replaced.)
 
 ## Architecture
 
 Engine-side everything lives under `hegel-c/src/native/`: the statistics in `nd/mod.rs`
 (pure arithmetic, no engine state), the per-origin failing test case in `counterexample.rs`
-(`Counterexample`: incumbent, pool, standing, evidence, history, budgets — decision 73), the
-run orchestration in `test_runner.rs`, persistence formats in `blob.rs`.
+(`Counterexample`: incumbent, graph, standing, evidence, history, budgets — decisions 73 and
+78), the graph itself in `graph.rs` and its walk in `core/replay.rs`, the graph shrinker in
+`graph_shrink.rs`, the run orchestration in `test_runner.rs`, persistence formats in
+`blob.rs`.
 
 ### The counterexample (`counterexample.rs`)
 
@@ -68,15 +73,18 @@ The engine's representation of a failing test case is one value per origin,
 owns everything the run knows about that failure:
 
 - the **incumbent**, `Option<Vec<ChoiceNode>>` — the best failing execution, with its
-  constraints because the shrinker works on nodes; `None` after a bar rejection evicted it
-  (the record survives so a re-sighting resumes against the same evidence and budgets, and
-  the caveat-only report can quote them). An origin is *live* while it holds one; "the run
-  has a failure" is `Counterexamples::any_live`.
-- the **pool**, `Vec<Vec<ChoiceValue>>` — the timelines captured at confirmation or trust,
-  the confirm-time incumbent first, truncated to `POOL_CAP`. Kept as captured: after
-  shrinking moves the incumbent, the confirm-time example stays pooled as a replay
-  fallback. `timelines()` composes the current incumbent ahead of it (`pooled_timelines`:
-  deduplicated, `POOL_CAP` total, incumbent included).
+  constraints because the shrinker works on nodes, and the spans it was realized under,
+  which give its draws their addresses (`incumbent_run`); `None` after a bar rejection
+  evicted it (the record survives so a re-sighting resumes against the same evidence and
+  budgets, and the caveat-only report can quote them). An origin is *live* while it holds
+  one; "the run has a failure" is `Counterexamples::any_live`.
+- the **graph**, `Option<Arc<Graph>>` (`graph.rs`, decision 78) — the counterexample
+  proper once the origin is confirmed or trusted: its failing runs merged by state
+  identity, which the graph shrinker moves; with **longest**, the flattened length of the
+  longest failing run it holds, which sizes replays' continuation budget. Replays walk the
+  graph as one test case; the incumbent is a realized run, never a path read off the
+  graph. `replay_graph()` composes the replay source: the graph, or the incumbent's own
+  graph while unconfirmed.
 - the **standing** (`Unconfirmed | Trusted | Confirmed { anchor, witness }`) and the
   replay evidence behind it (fails/replays, with report-time counts kept apart) — the old
   `OriginLifecycle` state machine, now per record.
@@ -88,9 +96,10 @@ The stored form is `NdReproState` (`blob.rs`), produced by `Counterexample::repr
 nothing else builds it. Admission rules live on the type: `adopt` founds or
 shortlex-displaces (called only pre-flip or into a vacant origin — decision 20), `replace`
 installs a validated result (shrink, backtrack restore), `reject` evicts unconfirmed
-origins only, `confirm`/`trust` are the pool's only writers. Under deterministic handling
-every failure is a `Counterexample` too, standing `Unconfirmed` with an empty pool — the
-standing only matters once the run flips.
+origins only, `confirm`/`trust`/`install` are the graph's only writers (`install` is a
+shrink or boost accept: graph, witness, anchor and longest together). Under deterministic
+handling every failure is a `Counterexample` too, standing `Unconfirmed` with no graph —
+the standing only matters once the run flips.
 
 ### Mode lifecycle and strictness
 
@@ -111,7 +120,7 @@ exception — every detection below aborts under `error` (decision 70). Flip sou
   also aborts on within-run generation kind drift, and a check miss aborts — structural
   divergence with a position-naming diagnostic, an aligned outcome change as flaky. A
   stored DB entry that stops reproducing is staleness, never evidence (decision 9).
-- **stored**: decoding a version-2 database entry (`run()`'s reuse loop) or ND reproduce blob
+- **stored**: decoding a version-3 database entry (`run()`'s reuse loop) or ND reproduce blob
   (`reproduce_blob`) — state only a nondeterministic run writes — flips the run before any
   replay of it.
 
@@ -176,14 +185,15 @@ raises on validated accepts (decision 19). Confirmation gates origin *admission*
 generation step, dropping origins that fail it (decision 24); raw interesting runs never
 displace an occupied origin (decision 20). A trusted origin reaching the shrink loop runs
 one evidence batch (`nd_evidence_batch`, the bar arithmetic as stopping rule only): any
-failure promotes it with the batch's LCB as anchor and its pool merged fresh-first with the
-stored one (decision 48); zero failures fold into the trusted counts and skip shrinking,
+failure promotes it with the batch's LCB as anchor and the batch's failing runs grafted
+into the stored graph (decision 48 as amended by 78); zero failures fold into the trusted counts and skip shrinking,
 still reported and persisted. The promoting batch extends to `ANCHOR_SEED_RUNS` on accept
 like every anchor-seeding batch (decision 54). `Trusted` carries the reproducing batch's
 evidence, seeded by `trust()` on the database, blob, and deterministic replay paths. Confirmed and trusted
-origins carry a pool (10 stored timelines total, incumbent first: `pooled_timelines` builds
-every one, and `confirm`/`trust` truncate incoming pools) harvested from
-capture-at-confirmation (decision 10). A first-check miss deposits its evidence in a
+origins carry the graph, harvested from the confirmation batch (decision 10 as amended by
+78): every failing replay of the batch that the graph cannot yet produce is grafted into
+it unless foreign — the walk would have served another value somewhere, so no replay of
+the graph produces it. A first-check miss deposits its evidence in a
 per-origin seed slot (`seed_evidence`/`take_seed`), consumed by the origin's next evidence
 batch so the bar starts partially filled (decision 64). The counterexample also words its
 failure's **caveat** from the run's own evidence — confirmed, trusted, dry-at-report-time
@@ -197,17 +207,21 @@ that misses its shrink verify or final replay **backtracks** over that history t
 reproduction boundary — geometric probes over the accept segment plus every raw sighting,
 binary refinement, then the full discovery bar on the candidate (up to
 `BACKTRACK_BAR_ATTEMPTS` batches, the scan capped at `BACKTRACK_SCAN_REPLAYS` replays); a
-cleared bar confirms the origin with the batch's witness and anchor, pools the scan's
-other reproducing entries, and force-persists the restored incumbent past the Persister's
+cleared bar confirms the origin with the batch's witness and anchor and a graph of the
+restored entry's run with the scan's other reproducing entries grafted in (unless
+foreign), and force-persists the restored incumbent past the Persister's
 monotone `needs_save` (decision 66). Measurement runs never displace, persist, or enter
 history, except the reuse phase's `nd_reproduce` replays, whose displacement is what
 validates a v2 entry under `error` strictness (decision 65).
 
 ### Representation and persistence
 
-`NdReproState` (blob.rs): stored timelines incumbent-first, an entropy seed, and the
-continuation-budget extension. Serialized as the version-2 database entry and behind blob
-prefixes 2/3 (self-identifying, decision 8; old readers reject unknown prefixes loudly). Only
+`NdReproState` (blob.rs): the counterexample graph, an entropy seed, and the flattened
+length of the longest failing run it holds. Serialized as the version-3 database entry and
+behind blob prefixes 2/3 (self-identifying, decision 8; old readers reject unknown prefixes
+loudly; version 2 — the pool of timelines — is no longer read, having never been released).
+The graph encodes as its nodes in order, each with its identity and edges (address,
+value, target index), so identities need no separate table. Only
 origins past confirmation persist — confirmed or trusted; the end-of-run filter is the
 lifecycle's `needs_confirmation`. Confirmation and gauntlet accepts also save the validated
 incumbent mid-run via the `Persister`, each save landing before the bytes it supersedes are
@@ -219,7 +233,7 @@ stands alone. Hygiene is two strikes across two runs: primary miss demotes to th
 corpus, secondary miss deletes (decision 11), with `SECONDARY_CORPUS_CAP` (50 per key)
 evicting the shortlex-largest at reconciliation as a resource bound outside the two-strike
 scheme (decision 44). The pre-shrink secondary drain is v1-only and runs only under
-deterministic handling, breaking on a mid-drain flip. A v2 entry is never drained: under decisions 20/24 a pre-shrink
+deterministic handling, breaking on a mid-drain flip. A graph entry is never drained: under decisions 20/24 a pre-shrink
 reproduction can change no outcome, so its hygiene lives in the reuse phase's budgeted
 strikes (decision 40).
 
@@ -231,21 +245,31 @@ fires solely on constraint drift (decision 32, measured in 007).
 
 One primitive serves database reuse, the final replay, and blob replay (decision 25);
 confirmation runs its own bar-driven batch (`nd_evidence_batch`). Every measurement replay
-runs the whole counterexample as one test case (decision 74, `core/replay.rs`,
-`NativeTestCase::for_counterexample`): the *live set* is the timelines that agree with every
-value drawn so far in every stream; each draw is served from the first live timeline whose
-stored value fits the request, and the live timelines whose value there differs drop out;
-following a stored branch is not a divergence. A *divergence* is the moment no live timeline
-fits — recorded once, as the stream and position, on `RunResult.divergence` — after which
-the pruned timelines continue positionally where they fit (most recently pruned first) and
-the run draws randomly where none does, under the continuation budget of the longest
-timeline. Replay order in `nd_reproduce`: the whole set up to `reuse_replay_budget()` times,
-then positional splices of random timeline pairs (10, decision 52), then fresh generations
-where the caller allows them. Splices cut whole timelines at top-level positions, so a
-clone stream — one `ChoiceValue::Clone` element — crosses over intact. Punning (a misfit
-served as the draw's simplest or unit value, the sequence staying the positional prefix)
-survives only as `Rescue::Pun`, the mode of shrink proposals and probes (`for_choices`,
-`for_probe`), whose misfits are the shrink's own edits and never count as divergences.
+walks the whole counterexample graph as one test case (decision 78, `core/replay.rs`,
+`NativeTestCase::for_graph`). A draw's **address** is the spans open at it, outermost
+first, each as `(label, ordinal)` — the ordinal counting earlier same-label siblings under
+the same parent; the engine's own kind span around every draw is its innermost frame. A
+**state** is where a run is between two draws, identified by the prefix of the next draw's
+address through its first frame not open at the previous draw (`Start` and `End` apart).
+At each draw the walk computes that identity and **arrives** at the pending node of it,
+settling the edge that led there; the draw is then served by the first edge at its
+address whose kind fits. No pending node of the identity (a *misjoin*) or no fitting edge
+(a *misfit*) is a *divergence* — recorded once, as the stream and position, on
+`RunResult.divergence` — after which the walk is rescued by the graph's node of the next
+identity it recognizes and draws at random where none does, under the continuation budget
+of the longest stored run. Drawing past `End` is a divergence too. A **tie** — several
+edges with one address and value and different targets, the structure a hidden coin
+decides after a draw — is settled by the identity the next draw reports; following a
+stored branch is not a divergence. Clone streams: the parent's clone edges at the clone's
+address are the tie, and the child replays their records as a *live set* (decision 74's
+semantics inside the clone — the records that agree with every value drawn so far, each
+draw served by the first that fits); a child divergence is the walk's. Replay order in
+`nd_reproduce`: the graph up to `reuse_replay_budget()` times, then fresh generations
+where the caller allows them; decision 52's positional splices are gone — the rescue by
+identity is the splice. Punning (a misfit served as the draw's simplest or unit value, the
+sequence staying the positional prefix) survives only as `Rescue::Pun`, the mode of
+deterministic shrink proposals and probes (`for_choices`, `for_probe`), whose misfits are
+the shrink's own edits and never count as divergences.
 Executions run through `measure()`, which detects nondeterminism and admits origins like
 any run but moves none of the runner's quantitative state (below).
 
@@ -281,62 +305,53 @@ re-pass from the verified pre-shrink incumbent, discarding untrusted single-run 
 
 Boost (`nd_boost`, gate G2/decisions 28 and 56): when a confirmed incumbent's anchor sits
 below the reliability floor (`BOOST_RELIABILITY_FLOOR`, 0.30 in 20-run-batch LCB units),
-successive halving over the incumbent, its pool, and prefix-mutant fills (up to
-`BOOST_POOL` candidates), scored by raw in-race failure rate, the winner re-measured on a
-`BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. Above the floor
-it never runs; each race logs one Debug line at entry; there is no public setting.
+successive halving over the incumbent and prefix-mutant fills (up to `BOOST_POOL`
+candidates; the graph's other paths are not raced — the walk reaches them, a candidate's
+prefix does not), scored by raw in-race failure rate, the winner re-measured on a
+`BOOST_HOLDOUT` (= `ANCHOR_SEED_RUNS`) holdout before seeding the anchor. A winner other
+than the incumbent is installed with the stored graph grafted with its run (its own graph
+when foreign to the stored one). Above the floor it never runs; each race logs one Debug
+line at entry; there is no public setting.
 
-### Shrinking the counterexample as a set (decisions 75 and 77)
+### Shrinking the counterexample graph (decision 78)
 
-The shrink of a nondeterministic origin runs one shrinker per stored timeline, in
-parallel over one fixed set (decision 77; `nd_parallel_shrink`, `nd_drive_lanes`). A
-census first keeps the timelines that served a failing replay (an incumbent the failure
-no longer reaches is dropped; the first serving timeline is promoted from its witness).
-Each kept timeline gets a `Lane`: the existing shrinker, suspended as a future on a
-`SlotProbe` that posts its request and waits. Every execution replays a set composed lane
-by lane of the lane's candidate and then its current timeline, led by a rotating lane
-whose proposal is the run's leading component (`Replay::shrink_set`): a run that draws
-past the proposal's end draws the rest at random, not from the timeline it shortened (a
-full proposal so overrun that passes is a miss at once, answered with what ran; one
-that fails is a candidate with its random tail, as a probe's is); a misfit against the proposal is put down to the test's nondeterminism `MISFIT_DEFERRALS`
-times — its timeline serves, the proposal is deferred — and then the proposal insists and
-is punned. Whatever timeline a run stays on gets the result: a proposal is realized by a
-run live on it to the end or punned from it (a pun realized in another lane's shape is a
-miss, not a candidate); a realized candidate takes on-timeline evidence from every run
-live on it, and set evidence from the led runs live on it or punned from it — a led run
-that took another lane's branch is a trial of that timeline, not of this set. A realized
-failing candidate that is no improvement on the lane's timeline under `sort_key` is
-answered as a miss with what ran, without a gauntlet (the shrinker adopts strict
-improvements only; its mutation pass and probes run such candidates to observe shape). An
-accept needs both bounds above the threshold (the timeline fails; the counterexample's
-reproduction is not lowered — decision 2) and `ANCHOR_SEED_RUNS` on-timeline runs; a led
-run that left the candidate is a bounce, counted and free. A candidate undecided at
-`SET_EVIDENCE_CAP` set runs with a full on-timeline ledger is rejected; a realized
-candidate past `SET_EVIDENCE_CAP × lanes` led runs without its seed is a branch too rare
-to gauntlet and its lane is stopped with its timeline as it is. Adoption raises the
-anchor to the set's bound capped at `nd::anchor_ceiling()` (LCB(20/20)), installs the
-set and persists it. When a pool exists at the start of a
-shrink the anchor starts from a measurement of the whole set (`nd_measure_set`). The
-pool is frozen for the shrink (decision 76): a measurement replay that fails on no stored
-timeline is set evidence (and a bounce for the candidate), never a new timeline. After
-the per-timeline shrink, `nd_multiverse_shrink` shrinks
-the set under `set_order` (fewer timelines, then `timeline_order` lexicographically).
-A census — `CENSUS_RUNS` replays of the set, recording which timeline each failing run
-followed — drops the pool timelines that served none (experiment 016 rejected a
-gauntleted deletion: the gauntlet's gamma let it drop live branches). Then the
-gauntleted passes: swap adjacent components toward sorted order (the order is state —
-it decides which timeline serves at a disagreement — and sorted is the fixpoint), and
-replace a component with a positional splice of another's prefix onto its tail when the
-splice is smaller. Each candidate set faces `nd_evaluate_set` — the gauntlet driven to
-a bound with every replay as evidence, since the set is the estimand — and a set whose
-first timeline changed is installed only from a failing run that stayed live on it.
-Every accept is strictly smaller, so the rounds end on their own; the shrink deadline
-bounds them. Measured (016, campaign 8): `branch` 2013 → 3301 executions with two lanes,
-`twobranch` 2539 → 4727 with three or four, `racy` 7414 → 1999, `clone` 2388 → 2137,
-reproduction unchanged, every kept timeline shrunk; the sequential alternative (campaign
-6) cost 49k. An accepted improvement costs ~20 runs on its branch at the branch's share. Not built: a shared-prefix
-edit across lanes (leader rotation decides disagreements), and nodes for pool members
-(a promoted component's nodes come from its witness run).
+The shrink of a nondeterministic origin is one `GraphShrinker` (`graph_shrink.rs`) over
+the origin's graph and its **witness** — the smallest clean failing run replayed from the
+graph, the example the failure is reported with. `shrink_origin` starts it from the
+verified incumbent grafted into the stored graph (the incumbent's own graph when foreign
+to it); `EngineGraphProbe` is the engine's side, routing replays through `measure()` and
+accepts through `Counterexample::install`. Passes repeat until a confirmation sweep
+changes nothing (decision 18's confirmed-dry stopping, applied to the graph). The **delete
+pass** proposes the graph without each edge in turn; a node a deletion leaves without
+edges is where a run ends, so the edges into it lead to `End`. The **span pass** proposes
+the witness without each of its spans — every frame prefix of a draw's address,
+last-starting first and outermost first at one start — as the graph of that shortened run
+alone, its later same-label siblings renumbered as the engine numbers them, and, when the
+test does not follow it, retried with the nearest earlier integer draws lowered by one, up
+to `COUNT_LOWERINGS` = 3: a list's count shrinks with its elements (the harness's contract
+move is dropped, ordinals being positional). The **value pass** proposes each edge's value
+replaced by a simpler one under the constraint of the draw that realized it — learned per
+`(state, address)` from every replay — by binary search toward the simplest, floats to
+their integer part, bytes and strings shortened and zeroed. Every candidate is judged by
+replays through the gauntlet (`nd::gauntlet`, charged to the origin's alpha budget as
+before): a **clean** replay fails with the origin, never diverged and ended on `End`; in
+the fast sweep one unclean replay rejects, and the confirmation sweep drives the evidence
+to a bound. A value edit is first **warmed up** — while its replays fail with runs the
+candidate cannot fully produce, they are grafted into it, up to `WARM_UP_GRAFTS` = 8 — and
+is accepted only when a clean replay **settled** on the edited edge (exercise by
+settlement, 019: an edit no failing run drew is an unfalsifiable claim), with the tie
+alternatives no judging replay settled on pruned; a deletion needs no exercise. A failing
+unclean replay of any candidate is grafted into the incumbent unless foreign. The order
+is `GraphKey` — fewer edges, then fewer reachable nodes, then the edge values in
+breadth-first shrink rank — and a candidate must be strictly smaller. An accept raises the
+anchor to the ledger's bound capped at `nd::anchor_ceiling()` (LCB(20/20), decision 77's
+cap), keeps the standing witness when it is smaller and still a whole walk of the new
+graph, and installs graph, witness, anchor and longest run on the counterexample, which
+persists (`record_nd_incumbent`). Debug verbosity logs `nd shrink start`, `nd graph
+accept` and `nd shrink done` lines with edge counts and anchors. Measured outside the
+engine only (experiments 018–019: ideal graphs on `block`, `shift` and `loop`; `list`
+minimal with the span pass's analogue); the engine build's cost against the pool's (016's
+bodies) is not yet measured.
 
 ### Targeting under ND handling
 
@@ -446,7 +461,7 @@ shrunk incumbent. Stamping gauntlet accepts would break decision 10's cost profi
 ### Reproduce blobs
 
 `hegel_run_start_blob` replays a blob as a run: a deterministic blob replays its choices once;
-an ND blob runs the replay primitive over its stored pool with no fresh tier (decision 33).
+an ND blob runs the replay primitive over its stored graph with no fresh tier (decision 33).
 `Hegel::reproduce_failure` drives it through the same frontend loop. `hegel_test_case_from_blob`
 remains for embedders as a documented single attempt.
 
@@ -497,12 +512,19 @@ root crate's changelog covers only the user-facing behavior.
 | Boost default | Reliability-floor heuristic, no setting (decision 28) |
 | Clone-kind serialization fidelity | Values-only kept (decision 32) |
 | Multiple-testing correction | Sequential per-origin budgets, not Benjamini-Hochberg (decision 72): verdicts act immediately and irreversibly, so there is no p-value batch to rank |
-| Replay semantics over the pool | First-fit per timeline retired (decision 74): the whole pool replays as one test case under the live set, deciding between stored branches only when the test's own choices reveal one; splices are the rescue tier. Reopens the replay conclusions of decisions 22/25/31; the pool as storage stands |
+| Replay semantics over the pool | First-fit per timeline retired (decision 74): the whole pool replays as one test case under the live set, deciding between stored branches only when the test's own choices reveal one; splices are the rescue tier. Reopens the replay conclusions of decisions 22/25/31; the pool as storage stands — until decision 78 |
+| The pool of timelines as the counterexample | Replaced by the graph (decision 78, experiments 017–019): failing runs merged by span-structure state identity and walked as one test case; the live set survives inside clone streams only. Splices, the lanes, the census and the multiverse shrinker (decisions 52, 75–77) are retired |
 
 ## Known risks (accepted)
 
 - **Invisible divergence**: kind-compatible structural divergence can evade detection in
-  principle; whole-timeline machinery is the backstop.
+  principle; the identity check at every draw (decision 78) catches what the span
+  structure reveals, and nothing else.
+- **Same-address arms**: two arms of a hidden coin whose draws have the same address —
+  the same spans open, the same kinds, no span of their own — are one state to the graph,
+  which serves them one value; the other arm's run is foreign and is never stored.
+  Generators' spans keep arms apart; a bare `if` in a test body over the engine's own
+  draws does not (decision 78).
 - **Origin instability**: a cross-thread panic re-raised on the test thread via
   `resume_unwind` (a ferried payload) collapses to `Panic at <unknown>`; a plain
   `join().unwrap()` instead pins the origin to the join site and loses the message; a

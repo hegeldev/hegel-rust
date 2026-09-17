@@ -1575,12 +1575,14 @@ impl NativeTestCase {
         )
     }
 
-    /// Replay a whole counterexample — its timelines in order — as one
-    /// test case under [`Rescue::Continue`] (decision 74): every draw is
-    /// served from the first live timeline that fits it, and a run that
-    /// leaves every timeline continues with random draws up to `max_size`
-    /// choices in total. `max_size` is floored to the longest timeline's
-    /// length.
+    /// Replay a pool of timelines as one test case under
+    /// [`Rescue::Continue`] (decision 74): every draw is served from the
+    /// first live timeline that fits it, and a run that leaves every
+    /// timeline continues with random draws up to `max_size` choices in
+    /// total. `max_size` is floored to the longest timeline's length. The
+    /// engine walks graphs ([`Self::for_graph`]); this is the live set's
+    /// test and experiment seam.
+    #[cfg(any(test, feature = "__bench"))]
     pub fn for_counterexample(
         timelines: &[Vec<ChoiceValue>],
         rng: EngineRng,
@@ -1629,7 +1631,6 @@ impl NativeTestCase {
     /// served by the graph where its state and address have an edge, at
     /// random where they do not, up to `max_size` choices in total. See
     /// [`Replay::graph`].
-    #[allow(dead_code)]
     pub(crate) fn for_graph(
         graph: Arc<crate::native::graph::Graph>,
         rng: EngineRng,
@@ -1637,34 +1638,6 @@ impl NativeTestCase {
     ) -> Result<Self, InternalError> {
         Self::new_stream(
             Replay::graph(graph),
-            None,
-            None,
-            max_size,
-            None,
-            false,
-            Arc::new(FamilyCore::new(usize::MAX)),
-            Vec::new(),
-        )
-        .with_random(rng)
-    }
-
-    /// Replay a shrink's candidate set as one test case (decision 77): the
-    /// live-set semantics of [`Self::for_counterexample`], with the
-    /// timelines flagged in `puns` — unrealized proposals, with their
-    /// realized `nodes` where the proposal came from a full run — punning
-    /// their own misfits once they have left the set by them.
-    pub fn for_shrink_set(
-        timelines: &[Vec<ChoiceValue>],
-        nodes: Vec<Option<Vec<ChoiceNode>>>,
-        puns: Vec<bool>,
-        insist: Vec<bool>,
-        rng: EngineRng,
-        max_size: usize,
-    ) -> Result<Self, InternalError> {
-        let replay = Replay::shrink_set(timelines.to_vec(), nodes, puns, insist);
-        let max_size = max_size.max(replay.longest());
-        Self::new_stream(
-            replay,
             None,
             None,
             max_size,
@@ -1774,42 +1747,29 @@ impl NativeTestCase {
         &self.family
     }
 
-    /// Where this test case's replay first left its stored timelines, if
-    /// it did (decision 74): the family's first divergence.
+    /// Where this test case's replay first left its stored counterexample,
+    /// if it did (decision 74): the family's first divergence.
     pub fn divergence(&self) -> Option<Divergence> {
         self.replay.divergence()
     }
 
-    /// Which of the replayed counterexample's timelines are still live, in
-    /// counterexample order: at the end of a run, the timelines every draw
-    /// of every stream agreed with. `[true]` for a proposal replay, empty
-    /// for fresh generation.
+    /// Which of the replayed pool's timelines are still live, in pool
+    /// order: at the end of a run, the timelines every draw of every
+    /// stream agreed with. `[true]` for a proposal replay, empty for fresh
+    /// generation and graph walks.
+    #[cfg(any(test, feature = "__bench"))]
     pub fn live_timelines(&self) -> Vec<bool> {
         self.replay.live()
     }
 
-    /// Which of the replayed counterexample's timelines this run realized
-    /// (decision 77), in counterexample order: see [`Replay::realized`].
-    pub fn realized_timelines(&self) -> Vec<bool> {
-        self.replay.realized()
-    }
-
-    /// Whether the replayed proposal ran out and the run's tail was drawn at
-    /// random: see [`Replay::ran_out`].
-    pub fn ran_out(&self) -> bool {
-        self.replay.ran_out()
-    }
-
     /// Under a graph walk (decision 78), the graph edges this run settled
     /// on, as `(node, edge index)`: see [`Replay::settled`].
-    #[allow(dead_code)]
     pub fn settled_edges(&self) -> Vec<(usize, usize)> {
         self.replay.settled()
     }
 
     /// Under a graph walk, whether the run ended where the graph ends: see
     /// [`Replay::ended_on_end`].
-    #[allow(dead_code)]
     pub fn ended_on_end(&self) -> bool {
         self.replay.ended_on_end()
     }

@@ -317,15 +317,8 @@ fn gauntlet_alpha(seed: Evidence, threshold: f64, min_fails: u64) -> f64 {
     accept
 }
 
-/// Total stored timelines per origin, incumbent included — the invariant
-/// every stored, persisted, or replayed pool obeys
-/// (`counterexample::pooled_timelines` builds them; `Counterexample`'s
-/// `confirm` and `trust` truncate incoming pools). Decision 22 measured K=5 as near-ceiling and
-/// K=10 as the plateau, so incumbent-plus-nine sits inside the measured
-/// range. The decode-side format bound
-/// ([`crate::native::blob::ND_STATE_MAX_TIMELINES`]) is deliberately
-/// looser.
-pub(crate) const POOL_CAP: usize = 10;
+/// Candidates in a boost's successive-halving race (experiment 006): the
+/// incumbent and probe mutants of it.
 pub(crate) const BOOST_POOL: usize = 16;
 
 /// Holdout replays scoring a boost winner — [`ANCHOR_SEED_RUNS`], so a
@@ -483,17 +476,11 @@ pub mod seam_dump {
     }
 }
 
-/// Positional splices tried after the whole pool misses (decision 25).
-/// Experiment 006 measured the 65-100% rescue rate at a cap of 10 splice
-/// candidates, costing 1.6-6.3 replays per rescue; the shipped 6 was a
-/// transcription error, corrected by decision 52.
-pub(crate) const REPRODUCE_SPLICES: u64 = 10;
-
 /// Fresh generations tried at the end of the report-time final replay,
-/// after the pool and its splices miss. A fresh reproduction is still a
-/// reportable failing execution; its misses carry no weight. Chosen, not
-/// derived (decision 53): a small tail behind the budgeted pool and
-/// splice replays — no experiment prices it.
+/// after the stored counterexample's replays miss. A fresh reproduction is
+/// still a reportable failing execution; its misses carry no weight.
+/// Chosen, not derived (decision 53): a small tail behind the budgeted
+/// replays — no experiment prices it.
 pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 
 /// Replay attempts for a v1 exact-choice blob, each with the standard

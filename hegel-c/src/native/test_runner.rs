@@ -26,8 +26,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::future::Future;
-use core::pin::Pin;
 
 use rand::RngExt;
 
@@ -38,22 +36,23 @@ use crate::native::core::{
     BUFFER_SIZE, ChoiceNode, ChoiceValue, Divergence, MAX_SHRINKING_SECONDS, NativeTestCase, Span,
     Spans, Status, sort_key,
 };
-use crate::native::counterexample::{
-    Counterexample, Counterexamples, pooled_timelines, set_order, timeline_order,
-};
+use crate::native::counterexample::{Counterexample, Counterexamples};
 use crate::native::data_source::NativeDataSource;
 use crate::native::database::{
     DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
     serialize_nodes,
 };
 use crate::native::exec_cache::{ExecCache, KindLedger};
+use crate::native::graph::{Graph, Run, Walked};
+use crate::native::graph_shrink::{
+    GraphProbe, GraphShrinker, Outcome as GraphOutcome, ProbeFuture as GraphProbeFuture,
+};
 use crate::native::nd;
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, SweepMode, absorb_stop};
+use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 use crate::settings::{
     Backend, Database, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
 };
-use crate::sys::sync::Mutex;
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -73,23 +72,16 @@ pub struct RunResult {
     /// in recording order. Empty for tests that record no events and on a
     /// result served from the execution cache.
     pub events: Vec<(String, Option<f64>)>,
-    /// Where the replay first left its stored timelines (decision 74):
-    /// `None` for a run every draw of which a stored timeline served — a
-    /// run that stayed on its counterexample — and for fresh generation
+    /// Where the replay first left its stored counterexample (decision
+    /// 74): `None` for a run every draw of which the stored state served —
+    /// a run that stayed on its counterexample — and for fresh generation
     /// and cache hits.
     pub divergence: Option<Divergence>,
-    /// Which of the replayed counterexample's timelines the whole run
-    /// stayed on, in counterexample order (`[true]` for a proposal replay;
-    /// empty for fresh generation and cache hits).
-    pub live: Vec<bool>,
-    /// Which of the replayed counterexample's timelines the run realized
-    /// (decision 77): live at its end, or left the live set at the
-    /// divergence by their own misfit, never while another timeline served.
-    /// Empty where `live` is.
-    pub realized: Vec<bool>,
-    /// Whether a replayed proposal ran out of values and the tail was drawn
-    /// at random (decision 77): too short for the test rather than wrong.
-    pub ran_out: bool,
+    /// Under a graph walk (decision 78), the graph edges the run settled
+    /// on, as `(node, edge index)`; empty otherwise.
+    pub settled: Vec<(usize, usize)>,
+    /// Under a graph walk, whether the run ended where the graph ends.
+    pub ended: bool,
 }
 
 const RANDOM_GENERATION_BATCH: u64 = 10;
@@ -122,19 +114,15 @@ const BACKTRACK_SCAN_REPLAYS: u64 = nd::CONFIRM_CAP;
 
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
-/// Outcome of one [`Engine::nd_replay_once`] measurement replay.
-struct NdReplayOnce {
+/// Outcome of one measurement replay.
+struct NdReplay {
     run: RunResult,
-    realized: Vec<ChoiceValue>,
     failed: bool,
-    /// Whether the run stayed live on the replayed set's first timeline
-    /// (decision 75): the one measurement that is evidence about that
-    /// timeline rather than about the set.
-    on_timeline: bool,
 }
 
 /// Outcome of one evidence batch (experiment 005): the replays, their
-/// evidence, the first failing run, and the failing timelines.
+/// evidence, the first failing run, and the replayed graph with every
+/// failing run grafted in (decision 78).
 struct NdBatch {
     /// Whether the discovery bar's arithmetic accepted. Decides admission
     /// for unconfirmed origins; for trusted origins the bar is only the
@@ -143,37 +131,35 @@ struct NdBatch {
     bar_accepted: bool,
     evidence: nd::Evidence,
     witness: Option<RunResult>,
-    captured: Vec<Vec<ChoiceValue>>,
+    graph: Graph,
+    /// The longest failing run `graph` holds, flattened.
+    longest: usize,
 }
 
-/// One multiverse census (decision 75): which timelines served a failing
-/// replay, and one such replay per timeline as its witness.
-struct Census {
-    served: Vec<bool>,
-    witnesses: Vec<Option<RunResult>>,
+/// What [`Engine::nd_reproduce`] replays: a counterexample graph with the
+/// longest run it holds, or a bare choice sequence — a version-1 entry,
+/// which carries no structure to walk.
+enum ReproSource {
+    Graph { graph: Arc<Graph>, longest: usize },
+    Sequence(Vec<ChoiceValue>),
 }
 
-/// The verdict of one structural shrink candidate — a whole counterexample
-/// — under the gauntlet (decision 75).
-struct SetVerdict {
-    accepted: bool,
-    /// A failing run that stayed live on the candidate's first timeline,
-    /// whose nodes can serve as the new incumbent.
-    witness: Option<RunResult>,
+/// A database entry as the reuse phase decodes it: a version-1 choice
+/// sequence or version-3 replay state.
+enum StoredEntry {
+    Choices(Vec<ChoiceValue>),
+    Graph(crate::native::blob::NdReproState),
 }
-
-/// Replays in one multiverse census (decision 75): enough that a branch the
-/// failure takes one time in five is seen with probability above 0.9998,
-/// so a timeline the census never saw serve describes a branch too rare to
-/// cost the counterexample anything measurable when dropped.
-const CENSUS_RUNS: u64 = 40;
 
 /// Outcome of one history backtrack (seam plan step 4, gate G25).
 enum Backtrack {
     /// A history entry cleared the discovery bar and is the origin's
     /// incumbent again; the origin is confirmed and the restored save
     /// superseded the barred one.
-    Restored { nodes: Vec<ChoiceNode> },
+    Restored {
+        nodes: Vec<ChoiceNode>,
+        spans: Vec<Span>,
+    },
     /// No entry cleared the bar within the scan and bar budgets. Carries
     /// the accumulated physical (fails, runs) for the caller's reject.
     Exhausted { evidence: (u64, u64) },
@@ -249,12 +235,11 @@ pub(crate) async fn explore(
 ///
 /// A deterministic blob replays its choices up to [`nd::V1_BLOB_REPLAYS`]
 /// times, each attempt with the standard continuation budget, stopping at
-/// the first failure. A nondeterministic blob
-/// replays its stored timelines through the same replay-until-failure
-/// sequence as database reuse — per-timeline first-fit, then positional
-/// splices — with no fresh-generation tier: a fresh case could fail for a
-/// reason unrelated to the blob. Every replay is stamped so the client
-/// captures the reproducing execution's output and diagnostic.
+/// the first failure. A nondeterministic blob walks its stored graph
+/// through the same replay-until-failure sequence as database reuse, with
+/// no fresh-generation tier: a fresh case could fail for a reason unrelated
+/// to the blob. Every replay is stamped so the client captures the
+/// reproducing execution's output and diagnostic.
 ///
 /// A run with no failures means the blob is stale; an undecodable blob is
 /// the run's error.
@@ -298,21 +283,21 @@ pub(crate) async fn reproduce_blob(
                 engine.nd_flip();
             }
             engine.capture_replays = true;
+            let graph = Arc::new(state.graph);
+            let longest = state.longest as usize;
+            let source = ReproSource::Graph {
+                graph: Arc::clone(&graph),
+                longest,
+            };
             let (run, evidence) = engine
-                .nd_reproduce(
-                    None,
-                    &state.timelines,
-                    nd::reuse_replay_budget(),
-                    nd::REPRODUCE_SPLICES,
-                    0,
-                )
+                .nd_reproduce(None, &source, nd::reuse_replay_budget(), 0)
                 .await?;
             let failures = match run.and_then(|run| run.origin) {
                 Some(origin) => {
                     engine
                         .origins
                         .entry(&origin)
-                        .trust(state.timelines, (evidence.fails(), evidence.runs()));
+                        .trust(Some((graph, longest)), (evidence.fails(), evidence.runs()));
                     let caveat = engine.origins.caveat(&origin);
                     Vec::from([Failure {
                         origin,
@@ -409,11 +394,8 @@ impl<'a> Engine<'a> {
                     if i >= primary_count && found_interesting_in_primary {
                         break;
                     }
-                    let stored: Vec<Vec<ChoiceValue>>;
-                    let is_v2;
-                    if let Some(stored_choices) = deserialize_choices(&raw) {
-                        stored = Vec::from([stored_choices]);
-                        is_v2 = false;
+                    let entry = if let Some(stored_choices) = deserialize_choices(&raw) {
+                        StoredEntry::Choices(stored_choices)
                     } else if let Some(state) = crate::native::blob::decode_nd_state(&raw) {
                         if self.settings.nondeterminism_strictness
                             != NondeterminismStrictness::Error
@@ -422,40 +404,59 @@ impl<'a> Engine<'a> {
                             self.seam_flip(nd::seam_dump::FlipSite::StoredV2Reuse);
                             self.nd_flip();
                         }
-                        stored = state.timelines;
-                        is_v2 = true;
+                        StoredEntry::Graph(state)
                     } else {
                         if let Some(db) = self.db() {
                             db.delete(&key_bytes, &raw);
                             db.delete(&secondary_key, &raw);
                         }
                         continue;
-                    }
-                    let nd_entry = is_v2 || self.nd_handling();
-                    let (run, reuse_evidence) = if !nd_entry {
-                        let rng = self.rng.spawn();
-                        let ntc = NativeTestCase::for_probe(&stored[0], rng, BUFFER_SIZE)?;
-                        let (run, mismatch) = self.test_function(ntc).await?;
-                        if let Some(err) = mismatch {
-                            return Err(err);
+                    };
+                    let nd_entry = matches!(entry, StoredEntry::Graph(_)) || self.nd_handling();
+                    let (run, reuse_evidence, stored, aligned) = match entry {
+                        StoredEntry::Choices(choices) if !nd_entry => {
+                            let rng = self.rng.spawn();
+                            let ntc = NativeTestCase::for_probe(&choices, rng, BUFFER_SIZE)?;
+                            let (run, mismatch) = self.test_function(ntc).await?;
+                            if let Some(err) = mismatch {
+                                return Err(err);
+                            }
+                            let failed = run.status == Status::Interesting;
+                            let aligned = realized_values(&run) == choices;
+                            (failed.then_some(run), (u64::from(failed), 1), None, aligned)
                         }
-                        let failed = run.status == Status::Interesting;
-                        (failed.then_some(run), (u64::from(failed), 1))
-                    } else {
-                        self.capture_replays = true;
-                        self.reuse_replays = true;
-                        let (run, evidence) = self
-                            .nd_reproduce(
-                                None,
-                                &stored,
-                                nd::reuse_replay_budget(),
-                                nd::REPRODUCE_SPLICES,
-                                0,
-                            )
-                            .await?;
-                        self.reuse_replays = false;
-                        self.capture_replays = false;
-                        (run, (evidence.fails(), evidence.runs()))
+                        entry => {
+                            let (source, stored) = match entry {
+                                StoredEntry::Choices(choices) => {
+                                    (ReproSource::Sequence(choices), None)
+                                }
+                                StoredEntry::Graph(state) => {
+                                    let graph = Arc::new(state.graph);
+                                    let longest = state.longest as usize;
+                                    (
+                                        ReproSource::Graph {
+                                            graph: Arc::clone(&graph),
+                                            longest,
+                                        },
+                                        Some((graph, longest)),
+                                    )
+                                }
+                            };
+                            self.capture_replays = true;
+                            self.reuse_replays = true;
+                            let (run, evidence) = self
+                                .nd_reproduce(None, &source, nd::reuse_replay_budget(), 0)
+                                .await?;
+                            self.reuse_replays = false;
+                            self.capture_replays = false;
+                            let aligned = run.as_ref().is_some_and(|run| match &source {
+                                ReproSource::Sequence(choices) => realized_values(run) == *choices,
+                                ReproSource::Graph { graph, .. } => {
+                                    graph.walk_verdict(&run_of(run)) == Walked::Whole
+                                }
+                            });
+                            (run, (evidence.fails(), evidence.runs()), stored, aligned)
+                        }
                     };
                     if let Some(run) = run {
                         if let Some(o) = run.origin.as_deref() {
@@ -465,9 +466,7 @@ impl<'a> Engine<'a> {
                         }
                         if i < primary_count {
                             found_interesting_in_primary = true;
-                            let realized: Vec<ChoiceValue> =
-                                run.nodes.iter().map(|n| n.value()).collect();
-                            if !stored.contains(&realized) {
+                            if !aligned {
                                 replay_aligned = false;
                             }
                         } else {
@@ -761,8 +760,11 @@ impl<'a> Engine<'a> {
                 let origin = pending.remove(0);
                 let initial = self
                     .origins
-                    .incumbent(&origin)
-                    .map(<[ChoiceNode]>::to_vec)
+                    .get(&origin)
+                    .and_then(|c| {
+                        c.incumbent()
+                            .map(|n| (n.to_vec(), c.incumbent_spans().to_vec()))
+                    })
                     .unwrap_or_default();
                 shrink_timed_out |= self
                     .shrink_origin(
@@ -834,8 +836,8 @@ impl<'a> Engine<'a> {
                     if counterexample.needs_confirmation() {
                         continue;
                     }
-                    if let Some(values) = counterexample.incumbent_values() {
-                        let state = counterexample.repro_state(values)?;
+                    if counterexample.incumbent().is_some() {
+                        let state = counterexample.repro_state()?;
                         new_entries.insert(encode_nd_state_checked(&state)?);
                     }
                 }
@@ -882,12 +884,24 @@ impl<'a> Engine<'a> {
     /// trusted survived (decision 3).
     fn build_report(&mut self) -> Result<TestRunResult, InternalError> {
         let nd_blobs = self.nd_handling();
-        let mut origins_sorted: Vec<(String, Vec<ChoiceNode>)> = self
-            .origins
-            .iter_mut()
-            .filter(|(_, c)| !nd_blobs || !c.needs_confirmation())
-            .filter_map(|(origin, c)| c.evict().map(|nodes| (origin.to_string(), nodes)))
-            .collect();
+        let mut origins_sorted: Vec<(
+            String,
+            Vec<ChoiceNode>,
+            Option<crate::native::blob::NdReproState>,
+        )> = Vec::new();
+        for (origin, c) in self.origins.iter_mut() {
+            if nd_blobs && c.needs_confirmation() {
+                continue;
+            }
+            let state = if nd_blobs && c.incumbent().is_some() {
+                Some(c.repro_state()?)
+            } else {
+                None
+            };
+            if let Some(nodes) = c.evict() {
+                origins_sorted.push((origin.to_string(), nodes, state));
+            }
+        }
         origins_sorted.sort_by(|a, b| sort_key(&b.1).cmp(&sort_key(&a.1)));
 
         if !self.settings.report_multiple_failures {
@@ -898,10 +912,13 @@ impl<'a> Engine<'a> {
         }
 
         let mut failures: Vec<Failure> = Vec::with_capacity(origins_sorted.len());
-        for (origin, nodes) in origins_sorted {
+        for (origin, nodes, state) in origins_sorted {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             let (reproduce_blob, caveat) = if nd_blobs {
-                let state = self.nd_state_for(&origin, choices)?;
+                let state = crate::control::hegel_internal_unwrap!(
+                    state,
+                    "build_report: {origin} has no replay state to encode"
+                );
                 let blob = crate::control::hegel_internal_unwrap!(
                     crate::native::blob::encode_nd_failure(&state),
                     "a failing test case's clone values nest deeper than MAX_CLONE_DEPTH"
@@ -1390,7 +1407,7 @@ pub(crate) struct Engine<'a> {
     /// Per-origin tracking: each distinct panic site (file:line:col captured
     /// by [`crate::run_lifecycle::run_test_case`]) gets its own
     /// [`Counterexample`](crate::native::counterexample::Counterexample) —
-    /// its incumbent, pool, standing, evidence, history, and budgets. This
+    /// its incumbent, graph, standing, evidence, history, and budgets. This
     /// is what makes a single test that fails with several distinct bugs
     /// surface each one.
     pub(crate) origins: Counterexamples,
@@ -1500,7 +1517,7 @@ impl<'a> Engine<'a> {
     }
 
     /// Whether the full nondeterministic pipeline — discovery confirmation,
-    /// the shrink gauntlet, pools, validated persistence, caveated
+    /// the shrink gauntlet, the graph, validated persistence, caveated
     /// reporting — is driving this run. Concurrent-machine runs flow
     /// through it like any other nondeterministic run (experiment 007).
     fn nd_handling(&self) -> bool {
@@ -1551,317 +1568,87 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// One measurement replay of `timeline` with the standard continuation
-    /// budget: reports whether the run reproduced `origin` (any interesting
-    /// origin when `None`) and the realized timeline. One Bernoulli trial
-    /// of the test case, whatever the replay realized (decision 71). A
-    /// choice-tree mismatch aborts under `Error` strictness like any other
-    /// execution.
+    /// One measurement replay of `timeline` positionally, with the standard
+    /// continuation budget: a version-1 entry or a boost mutant, sequences
+    /// with no structure to walk.
     async fn nd_replay_once(
         &mut self,
         timeline: &[ChoiceValue],
         origin: Option<&str>,
-    ) -> Result<NdReplayOnce, RunError> {
-        self.nd_replay_set(core::slice::from_ref(&timeline.to_vec()), origin)
-            .await
+    ) -> Result<NdReplay, RunError> {
+        let budget = nd::continuation_budget(crate::native::core::flattened_values_len(timeline));
+        let ntc = NativeTestCase::for_probe(timeline, self.rng.spawn(), budget)?;
+        self.nd_measure(ntc, origin).await
     }
 
-    /// One measurement replay of a whole counterexample — `timelines` in
-    /// order, as one test case under the live-set semantics (decision 74)
-    /// — with the standard continuation budget for its longest timeline.
-    async fn nd_replay_set(
+    /// One measurement replay of a counterexample graph (decision 78) as
+    /// one test case, drawing at random past it up to `max_size` choices.
+    async fn nd_replay_graph(
         &mut self,
-        timelines: &[Vec<ChoiceValue>],
+        graph: Arc<Graph>,
+        max_size: usize,
         origin: Option<&str>,
-    ) -> Result<NdReplayOnce, RunError> {
-        let budget = nd::continuation_budget(
-            timelines
-                .iter()
-                .map(|t| crate::native::core::flattened_values_len(t))
-                .max()
-                .unwrap_or(0),
-        );
-        let ntc = NativeTestCase::for_counterexample(timelines, self.rng.spawn(), budget)?;
+    ) -> Result<NdReplay, RunError> {
+        let ntc = NativeTestCase::for_graph(graph, self.rng.spawn(), max_size)?;
+        self.nd_measure(ntc, origin).await
+    }
+
+    /// Run one measurement replay: reports whether the run reproduced
+    /// `origin` (any interesting origin when `None`). One Bernoulli trial
+    /// of the test case, whatever the replay realized (decision 71). A
+    /// choice-tree mismatch aborts under `Error` strictness like any other
+    /// execution.
+    async fn nd_measure(
+        &mut self,
+        ntc: NativeTestCase,
+        origin: Option<&str>,
+    ) -> Result<NdReplay, RunError> {
         let (run, mismatch) = self.measure(ntc).await?;
         if let Some(divergence) = &run.divergence {
             if self.settings.verbosity == Verbosity::Debug {
                 self.settings.output.line(&format!(
-                    "replay left its counterexample at position {} of stream {:?} (set of {} timelines)",
-                    divergence.position,
-                    divergence.stream,
-                    timelines.len()
+                    "replay left its counterexample at position {} of stream {:?}",
+                    divergence.position, divergence.stream,
                 ));
             }
         }
         if let Some(err) = mismatch {
             return Err(err);
         }
-        let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
         let failed = run.status == Status::Interesting
             && origin.is_none_or(|o| run.origin.as_deref() == Some(o));
-        let on_timeline = run.live.first().copied().unwrap_or(false);
-        Ok(NdReplayOnce {
-            run,
-            realized,
-            failed,
-            on_timeline,
-        })
+        Ok(NdReplay { run, failed })
     }
 
-    /// The gauntlet over one structural shrink candidate — `set`, a whole
-    /// counterexample — driven to a bound (decision 75): every replay is a
-    /// trial of the set, so all of them are evidence, charged against the
-    /// origin's alpha budget like any proposal. `needs_witness` asks for a
-    /// failing run that stayed live on the set's first timeline, the nodes
-    /// a changed incumbent is installed from; without one such an accept
-    /// is refused.
-    async fn nd_evaluate_set(
-        &mut self,
-        origin: &str,
-        set: &[Vec<ChoiceValue>],
-        anchor: f64,
-        needs_witness: bool,
-    ) -> Result<SetVerdict, RunError> {
-        let min_fails = self.origins.entry(origin).gauntlet_spend.charge(
-            &nd::Evidence::default(),
-            anchor,
-            true,
-            None,
-        );
-        let mut evidence = nd::Evidence::default();
-        let mut witness = None;
-        loop {
-            match nd::gauntlet(&evidence, anchor, min_fails) {
-                nd::GauntletVerdict::Accept => {
-                    if evidence.runs() >= nd::ANCHOR_SEED_RUNS {
-                        return Ok(SetVerdict {
-                            accepted: !needs_witness || witness.is_some(),
-                            witness,
-                        });
-                    }
-                }
-                nd::GauntletVerdict::Reject => {
-                    return Ok(SetVerdict {
-                        accepted: false,
-                        witness,
-                    });
-                }
-                nd::GauntletVerdict::Continue => {}
-            }
-            let replay = self.nd_replay_set(set, Some(origin)).await?;
-            evidence.record(replay.failed);
-            if replay.failed && replay.on_timeline && witness.is_none() {
-                witness = Some(replay.run);
-            }
-        }
-    }
-
-    /// Measure the counterexample `set` as one test case: [`nd::ANCHOR_SEED_RUNS`]
-    /// replays, every one a trial of the set (decision 75). The confirmation
-    /// batch of a discovery-time origin measured its first timeline alone —
-    /// the pool did not exist yet — so the shrink's anchor starts from this
-    /// measurement when a pool has been captured since.
-    async fn nd_measure_set(
-        &mut self,
-        origin: &str,
-        set: &[Vec<ChoiceValue>],
-    ) -> Result<nd::Evidence, RunError> {
-        let mut evidence = nd::Evidence::default();
-        for _ in 0..nd::ANCHOR_SEED_RUNS {
-            let replay = self.nd_replay_set(set, Some(origin)).await?;
-            evidence.record(replay.failed);
-        }
-        Ok(evidence)
-    }
-
-    /// One census of `set` (decision 75): [`CENSUS_RUNS`] replays of the
-    /// whole counterexample, recording which timeline each failing run
-    /// followed — the first one still live at its end — and one such run
-    /// per timeline as its witness. A timeline that never served a failing
-    /// run describes no branch the failure takes at a rate the census
-    /// could see, and deleting it changes nothing about how the
-    /// counterexample reproduces.
-    async fn nd_census(
-        &mut self,
-        origin: &str,
-        set: &[Vec<ChoiceValue>],
-    ) -> Result<Census, RunError> {
-        let mut served = alloc::vec![false; set.len()];
-        let mut witnesses: Vec<Option<RunResult>> = (0..set.len()).map(|_| None).collect();
-        for _ in 0..CENSUS_RUNS {
-            let replay = self.nd_replay_set(set, Some(origin)).await?;
-            if replay.failed {
-                if let Some(k) = replay.run.live.iter().position(|live| *live) {
-                    served[k] = true;
-                    if witnesses[k].is_none() {
-                        witnesses[k] = Some(replay.run);
-                    }
-                }
-            }
-        }
-        Ok(Census { served, witnesses })
-    }
-
-    /// The multiverse passes (decision 75): shrink the counterexample as a
-    /// set, under [`set_order`]. Each round first takes a census
-    /// ([`Self::nd_census`]) and drops every pool timeline that served no
-    /// failing run — the one deletion that costs no reproduction — then
-    /// proposes swapping adjacent components toward sorted order (which
-    /// timeline serves first at a disagreement is state, and sorted is the
-    /// fixpoint) and replacing a component with a positional splice of
-    /// another's prefix onto it when the splice is smaller; those
-    /// candidates are whole sets judged by [`Self::nd_evaluate_set`], and a
-    /// changed first component is installed from the witness that stayed
-    /// on it. Every accept is strictly smaller under the order, so the
-    /// rounds end on their own; the deadline, checked per round, bounds
-    /// them too.
-    async fn nd_multiverse_shrink(
-        &mut self,
-        origin: &str,
-        anchor: f64,
-        deadline: Option<crate::sys::Instant>,
-        verbosity: Verbosity,
-        output: &Output,
-    ) -> Result<(), RunError> {
-        let expired = |d: Option<crate::sys::Instant>| {
-            d.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
-        };
-        loop {
-            let set = self.origins.entry(origin).timelines();
-            if set.len() < 2 || expired(deadline) {
-                return Ok(());
-            }
-            let served = self.nd_census(origin, &set).await?.served;
-            let kept: Vec<Vec<ChoiceValue>> = set
-                .iter()
-                .enumerate()
-                .filter(|(k, _)| *k == 0 || served[*k])
-                .map(|(_, timeline)| timeline.clone())
-                .collect();
-            if verbosity == Verbosity::Debug {
-                output.line(&format!(
-                    "nd multiverse census: origin={origin} kept {} of {} timelines (served {served:?})",
-                    kept.len(),
-                    set.len()
-                ));
-            }
-            if kept != set {
-                self.origins.entry(origin).install_set(&kept, None);
-                self.persist_incumbent(origin)?;
-                continue;
-            }
-            let mut candidates: Vec<(&'static str, Vec<Vec<ChoiceValue>>)> = Vec::new();
-            for k in 1..set.len() {
-                if timeline_order(&set[k], &set[k - 1]) == core::cmp::Ordering::Less {
-                    let mut candidate = set.clone();
-                    candidate.swap(k - 1, k);
-                    candidates.push(("reorder", candidate));
-                }
-            }
-            for k in 0..set.len() {
-                let mut j = self.rng.random_range(0..set.len() - 1);
-                if j >= k {
-                    j += 1;
-                }
-                let bound = set[j].len().min(set[k].len());
-                if bound < 2 {
-                    continue;
-                }
-                let cut = bound - 1;
-                let mut spliced = set[j][..cut].to_vec();
-                spliced.extend_from_slice(&set[k][cut..]);
-                if timeline_order(&spliced, &set[k]) == core::cmp::Ordering::Less
-                    && !set.contains(&spliced)
-                {
-                    let mut candidate = set.clone();
-                    candidate[k] = spliced;
-                    candidates.push(("splice", candidate));
-                }
-            }
-            let mut changed = false;
-            for (pass, candidate) in candidates {
-                crate::control::hegel_internal_assert!(
-                    set_order(&candidate, &set) == core::cmp::Ordering::Less,
-                    "nd_multiverse_shrink: a {pass} candidate is not smaller than its set"
-                );
-                let needs_witness = candidate[0] != set[0];
-                let verdict = self
-                    .nd_evaluate_set(origin, &candidate, anchor, needs_witness)
-                    .await?;
-                if verbosity == Verbosity::Debug {
-                    output.line(&format!(
-                        "nd multiverse {pass}: origin={origin} timelines={} accepted={}",
-                        candidate.len(),
-                        verdict.accepted
-                    ));
-                }
-                if !verdict.accepted {
-                    continue;
-                }
-                let nodes = verdict.witness.filter(|_| needs_witness).map(|w| w.nodes);
-                self.origins.entry(origin).install_set(&candidate, nodes);
-                self.persist_incumbent(origin)?;
-                changed = true;
-                break;
-            }
-            if !changed {
-                return Ok(());
-            }
-        }
-    }
-
-    /// Persist `origin`'s current incumbent and pool.
-    fn persist_incumbent(&mut self, origin: &str) -> Result<(), InternalError> {
-        let incumbent = self
-            .origins
-            .incumbent(origin)
-            .map(<[ChoiceNode]>::to_vec)
-            .unwrap_or_default();
-        self.record_nd_incumbent(origin, &incumbent)
-    }
-
-    /// Replay-until-failure over stored ND state (decisions 25 and 74): the
-    /// whole counterexample as one test case, up to `attempts` times, then
-    /// positional splices of random timeline pairs, then up to `fresh`
-    /// fresh generations. Returns the first reproducing run plus the
-    /// evidence accumulated across every attempt, for the caller's hygiene
-    /// verdict; the fresh tier is a rescue, not a replay of the stored
-    /// state, so only its failures enter the evidence.
+    /// Replay-until-failure over stored ND state (decisions 25 and 78): the
+    /// counterexample as one test case, up to `attempts` times, then up to
+    /// `fresh` fresh generations. Returns the first reproducing run plus
+    /// the evidence accumulated across every attempt, for the caller's
+    /// hygiene verdict; the fresh tier is a rescue, not a replay of the
+    /// stored state, so only its failures enter the evidence.
     async fn nd_reproduce(
         &mut self,
         origin: Option<&str>,
-        timelines: &[Vec<ChoiceValue>],
+        source: &ReproSource,
         attempts: u64,
-        splices: u64,
         fresh: u64,
     ) -> Result<(Option<RunResult>, nd::Evidence), RunError> {
         let mut evidence = nd::Evidence::default();
-        if !timelines.is_empty() {
-            for _ in 0..attempts {
-                let replay = self.nd_replay_set(timelines, origin).await?;
-                evidence.record(replay.failed);
-                if replay.failed {
-                    return Ok((Some(replay.run), evidence));
+        for _ in 0..attempts {
+            let replay = match source {
+                ReproSource::Graph { graph, longest } => {
+                    self.nd_replay_graph(
+                        Arc::clone(graph),
+                        nd::continuation_budget(*longest),
+                        origin,
+                    )
+                    .await?
                 }
-            }
-        }
-        if timelines.len() >= 2 {
-            for _ in 0..splices {
-                let a = self.rng.random_range(0..timelines.len());
-                let mut b = self.rng.random_range(0..timelines.len() - 1);
-                if b >= a {
-                    b += 1;
-                }
-                let (left, right) = (&timelines[a], &timelines[b]);
-                let cut = self.rng.random_range(0..=left.len().min(right.len()));
-                let mut spliced = Vec::with_capacity(cut + right.len() - cut);
-                spliced.extend_from_slice(&left[..cut]);
-                spliced.extend_from_slice(&right[cut..]);
-                let replay = self.nd_replay_once(&spliced, origin).await?;
-                evidence.record(replay.failed);
-                if replay.failed {
-                    return Ok((Some(replay.run), evidence));
-                }
+                ReproSource::Sequence(timeline) => self.nd_replay_once(timeline, origin).await?,
+            };
+            evidence.record(replay.failed);
+            if replay.failed {
+                return Ok((Some(replay.run), evidence));
             }
         }
         for _ in 0..fresh {
@@ -1887,7 +1674,7 @@ impl<'a> Engine<'a> {
     /// no longer fails is nondeterminism detected post-shrink — today's
     /// Flaky abort under `error` strictness, a flip into ND handling
     /// otherwise. Under ND handling each origin replays until failure —
-    /// incumbent, pool, splices, then [`nd::FINAL_REPLAY_FRESH`] fresh
+    /// the graph, then [`nd::FINAL_REPLAY_FRESH`] fresh
     /// generations, up to the standard reuse budget — and the evidence
     /// lands in the lifecycle: a reproducing replay on a yet-unconfirmed
     /// origin is a sighting whose realized run then faces the standard bar
@@ -1901,16 +1688,21 @@ impl<'a> Engine<'a> {
     /// the shrinker run, with decision 38's requeue semantics. Returns
     /// whether the shrinker hit the deadline. A method rather than shrink-
     /// loop code so report-time backtracking can re-enter a per-origin
-    /// shrink (seam plan).
+    /// shrink (seam plan). Under nondeterministic handling the shrink is
+    /// the graph shrinker's (decision 78), whose accepts install the moved
+    /// counterexample as they happen ([`EngineGraphProbe`]); for a trusted
+    /// origin the admission batch's bar arithmetic is only its stopping
+    /// rule, since admission happened at reuse (decision 24).
     async fn shrink_origin(
         &mut self,
         origin: String,
-        initial: Vec<ChoiceNode>,
+        initial: (Vec<ChoiceNode>, Vec<Span>),
         verbosity: Verbosity,
         output: &Output,
         shrink_deadline: Option<crate::sys::Instant>,
         shrunk_origins: &mut crate::native::HashSet<String>,
     ) -> Result<bool, RunError> {
+        let (initial, initial_spans) = initial;
         let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
         let mut probe_anchor = 0.0f64;
         let deterministic_verify = if self.nd_handling() {
@@ -1951,19 +1743,14 @@ impl<'a> Engine<'a> {
             probe_anchor = anchor;
             witness
         } else if !self.origins.needs_confirmation(&origin) {
-            // For a trusted origin the bar arithmetic is only the batch's
-            // stopping rule: admission happened at reuse (decision 24).
-            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
+            let (graph, longest) = self.replay_source(&origin)?;
+            let batch = self
+                .nd_evidence_batch(&origin, graph, longest, None)
+                .await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if let Some(witness) = batch.witness {
                 probe_anchor = batch.evidence.lower_bound();
-                let trusted = self.origins.entry(&origin);
-                let pool = pooled_timelines(
-                    choices.clone(),
-                    batch.captured.into_iter().chain(trusted.pool().to_vec()),
-                );
-                trusted.confirm(probe_anchor, None, pool, evidence)?;
-                self.record_nd_incumbent(&origin, &initial)?;
+                self.confirm_batch(&origin, probe_anchor, batch.graph, batch.longest, evidence)?;
                 witness
             } else {
                 self.origins.entry(&origin).record_trusted_batch(evidence);
@@ -1973,10 +1760,7 @@ impl<'a> Engine<'a> {
         } else {
             if self.has_history(&origin) {
                 match self.backtrack(&origin).await? {
-                    Backtrack::Restored { nodes } => {
-                        self.origins.entry(&origin).replace(nodes);
-                        return Ok(false);
-                    }
+                    Backtrack::Restored { .. } => return Ok(false),
                     Backtrack::Exhausted { evidence } => {
                         self.reject_origin(&origin, evidence, false);
                         shrunk_origins.insert(origin);
@@ -1989,7 +1773,10 @@ impl<'a> Engine<'a> {
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
-            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
+            let (graph, longest) = self.replay_source(&origin)?;
+            let batch = self
+                .nd_evidence_batch(&origin, graph, longest, None)
+                .await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if !batch.bar_accepted {
                 self.reject_origin(&origin, evidence, false);
@@ -2001,150 +1788,100 @@ impl<'a> Engine<'a> {
                 "nd_evidence_batch: bar accept without a witness for {origin}"
             );
             probe_anchor = batch.evidence.lower_bound();
-            let pool = pooled_timelines(choices.clone(), batch.captured);
-            let admitted = self.origins.entry(&origin);
-            admitted.confirm(probe_anchor, None, pool, evidence)?;
-            self.record_nd_incumbent(&origin, &initial)?;
+            self.confirm_batch(&origin, probe_anchor, batch.graph, batch.longest, evidence)?;
             witness
         };
 
         let mut verify = verify;
         if self.nd_handling() && probe_anchor < nd::BOOST_RELIABILITY_FLOOR {
-            let incumbent: Vec<ChoiceValue> = verify.nodes.iter().map(|n| n.value()).collect();
-            if let Some((witness, lcb)) = self.nd_boost(&origin, &incumbent, probe_anchor).await? {
+            if let Some((witness, lcb)) = self.nd_boost(&origin, &verify, probe_anchor).await? {
                 verify = witness;
                 probe_anchor = lcb;
             }
         }
 
-        let gauntleted = self.nd_handling();
-        if gauntleted {
-            let set = self.origins.entry(&origin).timelines();
-            if set.len() > 1 {
-                let measured = self.nd_measure_set(&origin, &set).await?;
-                if verbosity == Verbosity::Debug {
-                    output.line(&format!(
-                        "nd set anchor: origin={origin} timelines={} fails={}/{} lcb={:.3} (was {probe_anchor:.3})",
-                        set.len(),
-                        measured.fails(),
-                        measured.runs(),
-                        measured.lower_bound()
-                    ));
-                }
-                if measured.lower_bound() > probe_anchor {
-                    probe_anchor = measured.lower_bound();
-                    self.origins.entry(&origin).raise_anchor(probe_anchor);
-                }
+        let timed_out = if self.nd_handling() {
+            let (graph, longest) = self.replay_source(&origin)?;
+            let graph = graph.with_run(&run_of(&verify));
+            if verbosity == Verbosity::Debug {
+                output.line(&format!(
+                    "nd shrink start: origin={origin} edges={} anchor={probe_anchor:.3}",
+                    graph.edge_count()
+                ));
             }
-        }
-        let initial_spans = Spans::from(verify.spans.clone());
-        if verbosity == Verbosity::Debug {
-            output.line(&format!(
-                "nd shrink start: origin={origin} timelines={} anchor={probe_anchor:.3}",
-                self.origins.entry(&origin).timelines().len()
-            ));
-        }
-        let (shrunk, timed_out) = if gauntleted {
-            let mut starts: Vec<(Vec<ChoiceNode>, Vec<Span>)> = Vec::new();
-            let set = self.origins.entry(&origin).timelines();
-            if set.len() > 1 {
-                let census = self.nd_census(&origin, &set).await?;
-                let mut kept: Vec<Vec<ChoiceValue>> = Vec::with_capacity(set.len());
-                for (k, witness) in census.witnesses.into_iter().enumerate() {
-                    if let Some(witness) = witness {
-                        kept.push(set[k].clone());
-                        starts.push((witness.nodes, witness.spans));
-                    }
-                }
-                if kept.is_empty() {
-                    kept.push(set[0].clone());
-                    starts.push((verify.nodes, verify.spans));
-                }
-                if verbosity == Verbosity::Debug {
-                    output.line(&format!(
-                        "nd parallel shrink: origin={origin} lanes={} of {} timelines (served {:?})",
-                        kept.len(),
-                        set.len(),
-                        census.served
-                    ));
-                }
-                if kept != set {
-                    let incumbent = (kept[0] != set[0]).then(|| starts[0].0.clone());
-                    self.origins.entry(&origin).install_set(&kept, incumbent);
-                    self.persist_incumbent(&origin)?;
-                }
-            } else {
-                starts.push((verify.nodes, verify.spans));
-            }
-            let result = self
-                .nd_parallel_shrink(
-                    &origin,
-                    starts,
-                    probe_anchor,
-                    shrink_deadline,
-                    verbosity,
-                    output,
-                )
-                .await?;
-            let mut set = result.set.into_iter();
-            let shrunk = crate::control::hegel_internal_unwrap!(
-                set.next(),
-                "parallel shrink: no lane for {origin}"
-            );
-            (shrunk, result.timed_out)
-        } else {
-            let probe = EngineShrinkProbe {
+            let mut shrinker = GraphShrinker::new(graph, verify.nodes, verify.spans, probe_anchor);
+            shrinker.set_longest(longest);
+            shrinker.deadline = shrink_deadline;
+            let mut probe = EngineGraphProbe {
                 engine: &mut *self,
-                target_origin: origin.clone(),
+                origin: origin.clone(),
                 verbosity,
                 output: output.clone(),
             };
-            let mut shrinker = Shrinker::with_probe(Box::new(probe), verify.nodes, initial_spans);
-            shrinker.deadline = shrink_deadline;
-            absorb_stop(shrinker.initial_coarse_reduction().await)?;
+            shrinker.shrink(&mut probe).await?;
+            let anchor = self
+                .origins
+                .get(&origin)
+                .and_then(Counterexample::anchor)
+                .unwrap_or(probe_anchor);
             if verbosity == Verbosity::Debug {
-                let output = output.clone();
-                shrinker.set_debug(move |msg| output.line(msg));
-            }
-            shrinker.shrink().await?;
-            (shrinker.current_nodes, shrinker.timed_out)
-        };
-        let anchor = self
-            .origins
-            .get(&origin)
-            .and_then(Counterexample::anchor)
-            .unwrap_or(probe_anchor);
-        if verbosity == Verbosity::Debug {
-            output.line(&format!(
-                "nd shrink done: origin={origin} timelines={} anchor={anchor:.3} timed_out={timed_out}",
-                self.origins.entry(&origin).timelines().len()
-            ));
-        }
-        if !gauntleted && self.nd_handling() {
-            self.origins.entry(&origin).replace(initial);
-        } else {
-            self.origins.entry(&origin).replace(shrunk);
-            if gauntleted && !timed_out {
-                self.nd_multiverse_shrink(&origin, anchor, shrink_deadline, verbosity, output)
-                    .await?;
+                output.line(&format!(
+                    "nd shrink done: origin={origin} edges={} anchor={anchor:.3} timed_out={}",
+                    self.replay_source(&origin)?.0.edge_count(),
+                    shrinker.timed_out
+                ));
             }
             shrunk_origins.insert(origin);
-        }
+            shrinker.timed_out
+        } else {
+            let (shrunk, shrunk_spans, timed_out) = {
+                let probe = EngineShrinkProbe {
+                    engine: &mut *self,
+                    target_origin: origin.clone(),
+                    verbosity,
+                    output: output.clone(),
+                };
+                let mut shrinker =
+                    Shrinker::with_probe(Box::new(probe), verify.nodes, Spans::from(verify.spans));
+                shrinker.deadline = shrink_deadline;
+                absorb_stop(shrinker.initial_coarse_reduction().await)?;
+                if verbosity == Verbosity::Debug {
+                    let output = output.clone();
+                    shrinker.set_debug(move |msg| output.line(msg));
+                }
+                shrinker.shrink().await?;
+                (
+                    core::mem::take(&mut shrinker.current_nodes),
+                    core::mem::take(&mut shrinker.current_spans).into_vec(),
+                    shrinker.timed_out,
+                )
+            };
+            if self.nd_handling() {
+                self.origins.entry(&origin).replace(initial, initial_spans);
+            } else {
+                self.origins.entry(&origin).replace(shrunk, shrunk_spans);
+                shrunk_origins.insert(origin);
+            }
+            timed_out
+        };
         Ok(timed_out)
     }
 
     /// The engine-owned final replay (decision 30): one exact replay per
-    /// origin while the run is deterministic, the pooled reproduction under
-    /// ND handling. A deterministic miss flips the run; a never-confirmed
-    /// origin with history then backtracks (gate G25) — a restored
-    /// incumbent re-shrinks under the gauntlet on the shrink deadline's
-    /// remaining budget before its pooled replay, an exhausted backtrack
-    /// rejects into the caveat-only report. The same backtrack runs when a
-    /// never-confirmed origin's pooled review itself comes up dry with
+    /// origin while the run is deterministic, the counterexample's
+    /// replay-until-failure under ND handling. A deterministic miss flips
+    /// the run; a never-confirmed origin with history then backtracks (gate
+    /// G25) — a restored incumbent re-shrinks under the gauntlet on the
+    /// shrink deadline's remaining budget before its replay, an exhausted
+    /// backtrack rejects into the caveat-only report. The same backtrack
+    /// runs when a never-confirmed origin's review itself comes up dry with
     /// history on record. Origins exactly replayed before a flip —
     /// a later origin's, or one detected inside their own successful
-    /// replay — re-enter the queue for the pooled review: their single
-    /// replay predates what the run now knows.
+    /// replay — re-enter the queue for the review: their single replay
+    /// predates what the run now knows. A reproducing review run on an
+    /// unconfirmed origin is a sighting, not a confirmation: grafted into
+    /// the origin's graph, it faces the standard bar on the origin's
+    /// remaining attempt budget (decision 72).
     async fn final_replay(
         &mut self,
         verbosity: Verbosity,
@@ -2198,13 +1935,12 @@ impl<'a> Engine<'a> {
                     self.nd_flip();
                     if self.origins.needs_confirmation(&origin) && self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
-                            Backtrack::Restored { nodes } => {
-                                self.origins.entry(&origin).replace(nodes.clone());
+                            Backtrack::Restored { nodes, spans } => {
                                 if reshrink {
                                     let mut shrunk = crate::native::HashSet::default();
                                     self.shrink_origin(
                                         origin.clone(),
-                                        nodes,
+                                        (nodes, spans),
                                         verbosity,
                                         output,
                                         shrink_deadline,
@@ -2225,43 +1961,46 @@ impl<'a> Engine<'a> {
                 self.origins.incumbent(&origin).is_some(),
                 "final_replay: {origin} lost its incumbent without continuing"
             );
-            let timelines = self.origins.entry(&origin).timelines();
+            let (graph, longest) = self.replay_source(&origin)?;
+            let source = ReproSource::Graph {
+                graph: Arc::clone(&graph),
+                longest,
+            };
             self.capture_replays = true;
             let (reproduction, evidence) = self
                 .nd_reproduce(
                     Some(&origin),
-                    &timelines,
+                    &source,
                     nd::reuse_replay_budget(),
-                    nd::REPRODUCE_SPLICES,
                     nd::FINAL_REPLAY_FRESH,
                 )
                 .await?;
             self.capture_replays = false;
             let batch = (evidence.fails(), evidence.runs());
             if self.origins.needs_confirmation(&origin) {
-                // A reproducing review run is a sighting, not a
-                // confirmation: it faces the standard bar on the origin's
-                // remaining attempt budget (decision 72).
                 let mut confirmed = false;
                 let mut review_evidence = (0, 0);
                 if let Some(run) = reproduction {
                     if self.origins.entry(&origin).spend_bar_attempt() {
-                        let reproduced: Vec<ChoiceValue> =
-                            run.nodes.iter().map(|n| n.value()).collect();
+                        let reviewed_graph = Arc::new(graph.with_run(&run_of(&run)));
+                        let reviewed_longest =
+                            longest.max(crate::native::core::flattened_len(&run.nodes));
                         let review = self
-                            .nd_evidence_batch(&origin, &reproduced, shrink_deadline)
+                            .nd_evidence_batch(
+                                &origin,
+                                reviewed_graph,
+                                reviewed_longest,
+                                shrink_deadline,
+                            )
                             .await?;
                         review_evidence = (review.evidence.fails(), review.evidence.runs());
                         if review.bar_accepted {
-                            let pool = pooled_timelines(
-                                timelines[0].clone(),
-                                review.captured.into_iter().chain(timelines),
-                            );
                             let reviewed = self.origins.entry(&origin);
                             let confirmed_origin = reviewed.confirm(
                                 review.evidence.lower_bound(),
                                 None,
-                                pool,
+                                review.graph,
+                                review.longest,
                                 review_evidence,
                             );
                             confirmed_origin?;
@@ -2275,13 +2014,12 @@ impl<'a> Engine<'a> {
                         (batch.0 + review_evidence.0, batch.1 + review_evidence.1);
                     if self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
-                            Backtrack::Restored { nodes: restored } => {
-                                self.origins.entry(&origin).replace(restored.clone());
+                            Backtrack::Restored { nodes, spans } => {
                                 if reshrink {
                                     let mut shrunk = crate::native::HashSet::default();
                                     self.shrink_origin(
                                         origin.clone(),
-                                        restored,
+                                        (nodes, spans),
                                         verbosity,
                                         output,
                                         shrink_deadline,
@@ -2309,47 +2047,52 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    /// One evidence batch: replay `choices` with capture-at-confirmation,
-    /// each replay one plain trial of the test case (decision 71), until
-    /// the discovery bar ([`nd::discovery_bar`], decision 23) decides,
-    /// starting from the origin's first-check seed when one exists. Two uses: the
-    /// bar's driver for admitting unconfirmed origins (experiment 005),
-    /// and an evidence-gathering batch for trusted origins, where the bar
+    /// One evidence batch: replay `graph` (with the continuation budget
+    /// for `longest`) with capture-at-confirmation, each replay one plain
+    /// trial of the test case (decision 71), until the discovery bar
+    /// ([`nd::discovery_bar`], decision 23) decides, starting from the
+    /// origin's first-check seed when one exists. Two uses: the bar's
+    /// driver for admitting unconfirmed origins (experiment 005), and an
+    /// evidence-gathering batch for trusted origins, where the bar
     /// arithmetic is only the stopping rule. The triggering run is
     /// selection, not evidence — only these fresh replays count. An accept
     /// requires a reproducing replay in *this* batch as its witness: a
     /// first-check seed can carry the bar's whole failure quota, and a
     /// seeded quota with no in-batch reproduction rejects at
-    /// [`nd::CONFIRM_CAP`] runs instead of confirming an origin
-    /// the batch never saw fail. An accept
-    /// extends to [`nd::ANCHOR_SEED_RUNS`] runs (decision 54), so
-    /// the anchor a caller seeds from the batch is not biased by the bar's
-    /// stopping rule; a reject stops at the bar. An expired `deadline`
-    /// (passed only by the final replay's review) rejects before the next
-    /// replay — a batch cut short proves nothing; the accept extension
-    /// runs unchecked, bounded by [`nd::ANCHOR_SEED_RUNS`].
+    /// [`nd::CONFIRM_CAP`] runs instead of confirming an origin the batch
+    /// never saw fail. An accept extends to [`nd::ANCHOR_SEED_RUNS`] runs
+    /// (decision 54), so the anchor a caller seeds from the batch is not
+    /// biased by the bar's stopping rule; a reject stops at the bar. An
+    /// expired `deadline` (passed only by the final replay's review)
+    /// rejects before the next replay — a batch cut short proves nothing;
+    /// the accept extension runs unchecked, bounded by
+    /// [`nd::ANCHOR_SEED_RUNS`]. Every replay is of `graph` as given — the
+    /// evidence is about one counterexample — and every failing run is
+    /// grafted into the copy the batch returns (decision 78).
     async fn nd_evidence_batch(
         &mut self,
         origin: &str,
-        choices: &[ChoiceValue],
+        graph: Arc<Graph>,
+        longest: usize,
         deadline: Option<crate::sys::Instant>,
     ) -> Result<NdBatch, RunError> {
         let mut evidence = self.origins.entry(origin).take_seed().unwrap_or_default();
         let mut witness = None;
-        let mut captured: Vec<Vec<ChoiceValue>> = Vec::new();
-        let set = self.origins.entry(origin).timelines_from(choices.to_vec());
+        let mut grafted = (*graph).clone();
+        let mut grafted_longest = longest;
+        let max_size = nd::continuation_budget(longest);
         let capture_entry = self.capture_replays;
         self.capture_replays = true;
         let bar_accepted = loop {
             if deadline.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d)) {
                 break false;
             }
-            let replay = self.nd_replay_set(&set, Some(origin)).await?;
+            let replay = self
+                .nd_replay_graph(Arc::clone(&graph), max_size, Some(origin))
+                .await?;
             evidence.record(replay.failed);
             if replay.failed {
-                if captured.len() < nd::POOL_CAP && !captured.contains(&replay.realized) {
-                    captured.push(replay.realized);
-                }
+                graft_failure(&mut grafted, &mut grafted_longest, &replay.run);
                 if witness.is_none() {
                     witness = Some(replay.run);
                 }
@@ -2368,13 +2111,12 @@ impl<'a> Engine<'a> {
             }
         };
         while bar_accepted && evidence.runs() < nd::ANCHOR_SEED_RUNS {
-            let replay = self.nd_replay_set(&set, Some(origin)).await?;
+            let replay = self
+                .nd_replay_graph(Arc::clone(&graph), max_size, Some(origin))
+                .await?;
             evidence.record(replay.failed);
-            if replay.failed
-                && captured.len() < nd::POOL_CAP
-                && !captured.contains(&replay.realized)
-            {
-                captured.push(replay.realized);
+            if replay.failed {
+                graft_failure(&mut grafted, &mut grafted_longest, &replay.run);
             }
         }
         self.capture_replays = capture_entry;
@@ -2382,7 +2124,8 @@ impl<'a> Engine<'a> {
             bar_accepted,
             evidence,
             witness,
-            captured,
+            graph: grafted,
+            longest: grafted_longest,
         })
     }
 
@@ -2400,25 +2143,26 @@ impl<'a> Engine<'a> {
     /// probe the remaining replay budget goes on a second pass before
     /// giving up. A cleared bar confirms the origin — witness and anchor
     /// from the batch's extension, the scan's other reproducing entries
-    /// pooled — and the restored incumbent supersedes the barred shrunk
-    /// save. Scan errors bias old: a too-old restore re-shrinks under the
-    /// gauntlet (decision 2), a too-new one anchors low or gets rejected.
+    /// grafted into its graph — and the restored incumbent supersedes the
+    /// barred shrunk save. Scan errors bias old: a too-old restore
+    /// re-shrinks under the gauntlet (decision 2), a too-new one anchors
+    /// low or gets rejected. Every probe walks the entry's run as a graph.
     async fn backtrack(&mut self, origin: &str) -> Result<Backtrack, RunError> {
-        let entries: Vec<(Vec<ChoiceValue>, bool)> = self
-            .origins
-            .get(origin)
-            .map(|c| {
-                c.history()
-                    .entries()
-                    .iter()
-                    .map(|e| (e.nodes.iter().map(|n| n.value()).collect(), e.accept))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let entry_keys: Vec<Vec<u8>> = entries
-            .iter()
-            .map(|(timeline, _)| serialize_executed_choices(timeline))
-            .collect::<Result<_, _>>()?;
+        let mut entries: Vec<(Arc<Graph>, usize, bool)> = Vec::new();
+        let mut entry_values: Vec<Vec<ChoiceValue>> = Vec::new();
+        let mut entry_keys: Vec<Vec<u8>> = Vec::new();
+        if let Some(c) = self.origins.get(origin) {
+            for e in c.history().entries() {
+                let values: Vec<ChoiceValue> = e.nodes.iter().map(|n| n.value()).collect();
+                entry_keys.push(serialize_executed_choices(&values)?);
+                entry_values.push(values);
+                entries.push((
+                    Arc::new(Graph::from_run(&e.run())),
+                    nd::continuation_budget(crate::native::core::flattened_len(&e.nodes)),
+                    e.accept,
+                ));
+            }
+        }
         let attempts_left = self
             .origins
             .get(origin)
@@ -2426,8 +2170,8 @@ impl<'a> Engine<'a> {
         if entries.is_empty() || !attempts_left {
             return Ok(Backtrack::Exhausted { evidence: (0, 0) });
         }
-        let accepts: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].1).collect();
-        let raws: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].1).collect();
+        let accepts: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].2).collect();
+        let raws: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].2).collect();
 
         let mut replays_left = BACKTRACK_SCAN_REPLAYS;
         let mut fails = 0u64;
@@ -2457,7 +2201,9 @@ impl<'a> Engine<'a> {
                 break;
             }
             replays_left -= 1;
-            let replay = self.nd_replay_once(&entries[idx].0, Some(origin)).await?;
+            let replay = self
+                .nd_replay_graph(Arc::clone(&entries[idx].0), entries[idx].1, Some(origin))
+                .await?;
             runs += 1;
             fails += u64::from(replay.failed);
             status[idx] = Some(replay.failed);
@@ -2480,7 +2226,13 @@ impl<'a> Engine<'a> {
                     while high - low > 1 && replays_left > 0 {
                         let mid = accepts[low + (high - low) / 2];
                         replays_left -= 1;
-                        let replay = self.nd_replay_once(&entries[mid].0, Some(origin)).await?;
+                        let replay = self
+                            .nd_replay_graph(
+                                Arc::clone(&entries[mid].0),
+                                entries[mid].1,
+                                Some(origin),
+                            )
+                            .await?;
                         runs += 1;
                         fails += u64::from(replay.failed);
                         status[mid] = Some(replay.failed);
@@ -2510,7 +2262,9 @@ impl<'a> Engine<'a> {
                         continue;
                     }
                     replays_left -= 1;
-                    let replay = self.nd_replay_once(&entries[idx].0, Some(origin)).await?;
+                    let replay = self
+                        .nd_replay_graph(Arc::clone(&entries[idx].0), entries[idx].1, Some(origin))
+                        .await?;
                     runs += 1;
                     fails += u64::from(replay.failed);
                     status[idx] = Some(replay.failed);
@@ -2525,8 +2279,16 @@ impl<'a> Engine<'a> {
                     evidence: (fails, runs),
                 });
             }
+            let (candidate_graph, candidate_len) = {
+                let c = self.origins.entry(origin);
+                let entry = c.history().entries().get(candidate);
+                (
+                    Arc::clone(&entries[candidate].0),
+                    entry.map_or(0, |e| crate::native::core::flattened_len(&e.nodes)),
+                )
+            };
             let batch = self
-                .nd_evidence_batch(origin, &entries[candidate].0, None)
+                .nd_evidence_batch(origin, candidate_graph, candidate_len, None)
                 .await?;
             runs += batch.evidence.runs();
             fails += batch.evidence.fails();
@@ -2539,13 +2301,8 @@ impl<'a> Engine<'a> {
                 "backtrack: bar accept without a witness for {origin}"
             );
             let anchor = batch.evidence.lower_bound();
-            let others = (0..entries.len())
-                .filter(|&i| i != candidate && status[i] == Some(true))
-                .map(|i| entries[i].0.clone());
-            let pool = pooled_timelines(
-                entries[candidate].0.clone(),
-                batch.captured.into_iter().chain(others),
-            );
+            let mut graph = batch.graph;
+            let mut longest = batch.longest;
             #[cfg(feature = "__bench")]
             let history_bytes: usize = self.origins.get(origin).map_or(0, |c| {
                 c.history()
@@ -2554,16 +2311,24 @@ impl<'a> Engine<'a> {
                     .map(|e| e.nodes.len() * core::mem::size_of::<ChoiceNode>())
                     .sum()
             });
-            let nodes = self
+            let (nodes, spans) = self
                 .origins
                 .get(origin)
                 .and_then(|c| c.history().entries().get(candidate))
-                .map(|e| e.nodes.clone())
+                .map(|e| (e.nodes.clone(), e.spans.clone()))
                 .unwrap_or_default();
+            if let Some(c) = self.origins.get(origin) {
+                for (i, e) in c.history().entries().iter().enumerate() {
+                    if i != candidate && status[i] == Some(true) {
+                        graft_run(&mut graph, &mut longest, &e.nodes, &e.spans);
+                    }
+                }
+            }
             let confirmed = self.origins.entry(origin).confirm(
                 anchor,
                 Some(witness),
-                pool,
+                graph,
+                longest,
                 (batch.evidence.fails(), batch.evidence.runs()),
             );
             confirmed?;
@@ -2572,29 +2337,32 @@ impl<'a> Engine<'a> {
                 let best = accepts.last().copied().unwrap_or(candidate);
                 nd::seam_dump::record(nd::seam_dump::SeamEvent::Backtrack {
                     origin: origin.to_string(),
-                    restored: entries[candidate].0.clone(),
-                    history_best: entries[best].0.clone(),
+                    restored: entry_values[candidate].clone(),
+                    history_best: entry_values[best].clone(),
                     history_bytes,
                 });
             }
-            let incumbent: Vec<ChoiceValue> = entries[candidate].0.clone();
-            let state = self.nd_state_for(origin, incumbent)?;
+            let restored = self.origins.entry(origin);
+            restored.replace(nodes.clone(), spans.clone());
+            let state = restored.repro_state()?;
             self.persister.supersede_nd(origin, &nodes, &state)?;
-            return Ok(Backtrack::Restored { nodes });
+            return Ok(Backtrack::Restored { nodes, spans });
         }
     }
 
     /// The boost phase (experiment 006) — successive halving over the
-    /// incumbent, its pool, and probe mutants, scored by failure rate under
+    /// incumbent and probe mutants of it, scored by failure rate under
     /// budgeted replay. Returns a witness run and new anchor when the
     /// winner's holdout LCB beats the confirmation anchor (holdout because
-    /// the in-race rate of a halving winner is selection-biased upward).
-    /// Run before shrinking only when the anchor sits below
-    /// [`nd::BOOST_RELIABILITY_FLOOR`] (gate G2).
+    /// the in-race rate of a halving winner is selection-biased upward). A
+    /// winner other than the incumbent is installed as the counterexample
+    /// (decision 78): its witness run grafted into the stored graph, or
+    /// alone when foreign to it. Run before shrinking only when the anchor
+    /// sits below [`nd::BOOST_RELIABILITY_FLOOR`] (gate G2).
     async fn nd_boost(
         &mut self,
         origin: &str,
-        incumbent: &[ChoiceValue],
+        incumbent: &RunResult,
         anchor: f64,
     ) -> Result<Option<(RunResult, f64)>, RunError> {
         if self.settings.verbosity == Verbosity::Debug {
@@ -2602,22 +2370,16 @@ impl<'a> Engine<'a> {
                 "nd boost: origin={origin} racing from anchor {anchor:.3}"
             ));
         }
-        let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.to_vec()]);
-        if let Some(counterexample) = self.origins.get(origin) {
-            for timeline in counterexample.pool() {
-                if candidates.len() < nd::BOOST_POOL && !candidates.contains(timeline) {
-                    candidates.push(timeline.clone());
-                }
-            }
-        }
+        let incumbent = realized_values(incumbent);
+        let mut candidates: Vec<Vec<ChoiceValue>> = Vec::from([incumbent.clone()]);
         let mut attempts = 0;
         while candidates.len() < nd::BOOST_POOL && attempts < nd::BOOST_POOL * 3 {
             attempts += 1;
             let cut = self.rng.random_range(0..=incumbent.len());
-            let budget = crate::native::core::flattened_values_len(incumbent) + 8;
+            let budget = crate::native::core::flattened_values_len(&incumbent) + 8;
             let ntc = NativeTestCase::for_probe(&incumbent[..cut], self.rng.spawn(), budget)?;
             let (run, _mismatch) = self.measure(ntc).await?;
-            let realized: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+            let realized = realized_values(&run);
             if !candidates.contains(&realized) {
                 candidates.push(realized);
             }
@@ -2664,7 +2426,26 @@ impl<'a> Engine<'a> {
                         "nd boost: origin={origin} anchor {anchor:.3} -> {lcb:.3}"
                     ));
                 }
-                self.origins.entry(origin).raise_anchor(lcb);
+                if winner == incumbent {
+                    self.origins.entry(origin).raise_anchor(lcb);
+                } else {
+                    let run = run_of(&witness);
+                    let (stored, longest) = self.replay_source(origin)?;
+                    let witness_len = crate::native::core::flattened_len(&witness.nodes);
+                    let longest = if stored.walk_verdict(&run) == Walked::Foreign {
+                        witness_len
+                    } else {
+                        longest.max(witness_len)
+                    };
+                    self.origins.entry(origin).install(
+                        stored.with_run(&run),
+                        witness.nodes.clone(),
+                        witness.spans.clone(),
+                        lcb,
+                        longest,
+                    );
+                    self.record_nd_incumbent(origin)?;
+                }
                 Some((witness, lcb))
             }
             _ => None,
@@ -3044,15 +2825,14 @@ impl<'a> Engine<'a> {
             return Ok(());
         }
         loop {
-            let Some((origin, nodes)) = self
+            let Some(origin) = self
                 .origins
                 .live()
                 .find(|(o, _)| self.origins.needs_confirmation(o))
-                .map(|(o, n)| (o.to_string(), n.to_vec()))
+                .map(|(o, _)| o.to_string())
             else {
                 return Ok(());
             };
-            let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             if !self.origins.entry(&origin).spend_bar_attempt() {
                 if verbosity == Verbosity::Debug {
                     output.line(&format!(
@@ -3062,7 +2842,10 @@ impl<'a> Engine<'a> {
                 self.reject_origin(&origin, (0, 0), false);
                 continue;
             }
-            let batch = self.nd_evidence_batch(&origin, &choices, None).await?;
+            let (graph, longest) = self.replay_source(&origin)?;
+            let batch = self
+                .nd_evidence_batch(&origin, graph, longest, None)
+                .await?;
             if verbosity == Verbosity::Debug {
                 output.line(&format!(
                     "nd discovery confirm: origin={origin} fails={}/{} accepted={}",
@@ -3073,15 +2856,15 @@ impl<'a> Engine<'a> {
             }
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if batch.bar_accepted {
-                let pool = pooled_timelines(choices, batch.captured);
                 let confirmed = self.origins.entry(&origin).confirm(
                     batch.evidence.lower_bound(),
                     batch.witness,
-                    pool,
+                    batch.graph,
+                    batch.longest,
                     evidence,
                 );
                 confirmed?;
-                self.record_nd_incumbent(&origin, &nodes)?;
+                self.record_nd_incumbent(&origin)?;
             } else {
                 self.reject_origin(&origin, evidence, false);
             }
@@ -3092,19 +2875,16 @@ impl<'a> Engine<'a> {
         self.persister.db.as_deref()
     }
 
-    /// The replay state persisted and emitted for `origin` with `incumbent`
-    /// in front of its captured pool
-    /// ([`Counterexample::repro_state`]); an origin the run never recorded
-    /// has an empty pool.
-    fn nd_state_for(
-        &self,
-        origin: &str,
-        incumbent: Vec<ChoiceValue>,
-    ) -> Result<crate::native::blob::NdReproState, InternalError> {
-        match self.origins.get(origin) {
-            Some(counterexample) => counterexample.repro_state(incumbent),
-            None => Counterexample::default().repro_state(incumbent),
-        }
+    /// The graph `origin` replays by and the flattened length of the
+    /// longest failing run it holds ([`Counterexample::replay_graph`]).
+    /// Every caller holds a live or confirmed origin, which has one.
+    fn replay_source(&self, origin: &str) -> Result<(Arc<Graph>, usize), InternalError> {
+        let counterexample = self.origins.get(origin);
+        let graph = crate::control::hegel_internal_unwrap!(
+            counterexample.and_then(Counterexample::replay_graph),
+            "replay_source: {origin} holds no counterexample to replay"
+        );
+        Ok((graph, counterexample.map_or(0, Counterexample::longest)))
     }
 
     /// Whether `origin` has pre-flip history for a backtrack to scan.
@@ -3130,17 +2910,33 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// Persist `origin`'s new incumbent as a version-2 entry carrying its
-    /// timeline pool — the validated-persistence points under ND handling
-    /// (confirmation and gauntlet accepts).
-    fn record_nd_incumbent(
+    /// Persist `origin`'s counterexample as a version-3 entry carrying its
+    /// graph — the validated-persistence points under ND handling
+    /// (confirmation, gauntlet accepts, and boost).
+    /// Confirm `origin` from an evidence batch's graph, longest run and
+    /// physical evidence, without a witness of its own, and persist it.
+    fn confirm_batch(
         &mut self,
         origin: &str,
-        nodes: &[ChoiceNode],
+        anchor: f64,
+        graph: Graph,
+        longest: usize,
+        evidence: (u64, u64),
     ) -> Result<(), InternalError> {
-        let incumbent: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-        let state = self.nd_state_for(origin, incumbent)?;
-        self.persister.record_nd(origin, nodes, &state)
+        self.origins
+            .entry(origin)
+            .confirm(anchor, None, graph, longest, evidence)?;
+        self.record_nd_incumbent(origin)
+    }
+
+    fn record_nd_incumbent(&mut self, origin: &str) -> Result<(), InternalError> {
+        let counterexample = self.origins.entry(origin);
+        let nodes = counterexample
+            .incumbent()
+            .map(<[ChoiceNode]>::to_vec)
+            .unwrap_or_default();
+        let state = counterexample.repro_state()?;
+        self.persister.record_nd(origin, &nodes, &state)
     }
 
     /// Spawn an independent RNG from the engine's, for components (probes,
@@ -3265,11 +3061,13 @@ impl<'a> Engine<'a> {
                 if !measurement || self.reuse_replays {
                     self.persister.record(&origin, &run.nodes)?;
                     let counterexample = self.origins.entry(&origin);
-                    let accept = counterexample.adopt(run.nodes.clone());
-                    counterexample.record_sighting(&run.nodes, accept)?;
+                    let accept = counterexample.adopt(run.nodes.clone(), run.spans.clone());
+                    counterexample.record_sighting(&run.nodes, &run.spans, accept)?;
                 }
             } else if self.origins.incumbent(&origin).is_none() {
-                self.origins.entry(&origin).adopt(run.nodes.clone());
+                self.origins
+                    .entry(&origin)
+                    .adopt(run.nodes.clone(), run.spans.clone());
             }
         }
         Ok(mismatch)
@@ -3344,9 +3142,8 @@ impl<'a> Engine<'a> {
         let target_observations = NativeDataSource::take_target_observations(&handle);
         let events = NativeDataSource::take_events(&handle);
         let divergence = NativeDataSource::take_divergence(&handle);
-        let live = NativeDataSource::take_live(&handle);
-        let realized = NativeDataSource::take_realized(&handle);
-        let ran_out = NativeDataSource::take_ran_out(&handle);
+        let settled = NativeDataSource::take_settled(&handle);
+        let ended = NativeDataSource::take_ended(&handle);
         let tc_result = NativeDataSource::take_outcome(&handle)?;
 
         let (status, origin) = match tc_result {
@@ -3364,9 +3161,8 @@ impl<'a> Engine<'a> {
             target_observations,
             events,
             divergence,
-            live,
-            realized,
-            ran_out,
+            settled,
+            ended,
         })
     }
 
@@ -3412,9 +3208,8 @@ impl<'a> Engine<'a> {
                     target_observations: HashMap::default(),
                     events: Vec::new(),
                     divergence: None,
-                    live: Vec::new(),
-                    realized: Vec::new(),
-                    ran_out: false,
+                    settled: Vec::new(),
+                    ended: false,
                 });
             }
         }
@@ -3432,13 +3227,37 @@ impl<'a> Engine<'a> {
     }
 }
 
+/// The realized values of a run.
+fn realized_values(run: &RunResult) -> Vec<ChoiceValue> {
+    run.nodes.iter().map(|n| n.value()).collect()
+}
+
+/// A run with the address of every draw, for the graph.
+fn run_of(run: &RunResult) -> Run {
+    Run::from_nodes(&run.nodes, &run.spans)
+}
+
+/// Graft a failing replay into `graph` (unless foreign to it) and stretch
+/// `longest` to it.
+fn graft_failure(graph: &mut Graph, longest: &mut usize, run: &RunResult) {
+    graft_run(graph, longest, &run.nodes, &run.spans);
+}
+
+/// Graft a failing run — its nodes and the spans they were realized under
+/// — into `graph` (unless foreign to it) and stretch `longest` to it.
+fn graft_run(graph: &mut Graph, longest: &mut usize, nodes: &[ChoiceNode], spans: &[Span]) {
+    if graph.graft(&Run::from_nodes(nodes, spans)) {
+        *longest = (*longest).max(crate::native::core::flattened_len(nodes));
+    }
+}
+
 /// The engine side of the shrinker's [`ShrinkProbe`] for a deterministic
 /// run: routes every requested run through [`Engine::cached_test_function`]
 /// and reports whether the run reproduced the origin being shrunk. Borrows
 /// the engine for the duration of the shrink, so the shrinker's executions
 /// record into the engine's tree and counters like any other run. Under
-/// nondeterministic handling the shrink runs through
-/// [`Engine::nd_parallel_shrink`] instead.
+/// nondeterministic handling the shrink runs through the graph shrinker
+/// and [`EngineGraphProbe`] instead.
 struct EngineShrinkProbe<'e, 'a> {
     engine: &'e mut Engine<'a>,
     target_origin: String,
@@ -3472,666 +3291,70 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
     }
 }
 
-/// A shrinker's requested run, owned by the engine while the shrinker is
-/// suspended awaiting its outcome (decision 77).
-enum OwnedRun {
-    Full(Vec<ChoiceNode>),
-    Probe {
-        prefix: Vec<ChoiceValue>,
-        max_size: usize,
-    },
+/// The engine side of the graph shrinker's [`GraphProbe`] (decision 78):
+/// every replay is a measurement run of the candidate graph, every charge
+/// goes to the origin's gauntlet budget, and an accepted candidate is
+/// installed as the origin's counterexample and persisted at once.
+struct EngineGraphProbe<'e, 'a> {
+    engine: &'e mut Engine<'a>,
+    origin: String,
+    verbosity: Verbosity,
+    output: Output,
 }
 
-impl OwnedRun {
-    fn values(&self) -> Vec<ChoiceValue> {
-        match self {
-            OwnedRun::Full(nodes) => nodes.iter().map(|n| n.value()).collect(),
-            OwnedRun::Probe { prefix, .. } => prefix.clone(),
-        }
-    }
-}
-
-/// Runs a proposal's misfit is put down to the test's own nondeterminism
-/// before it is taken for the proposal's edit and punned. With hidden
-/// branches a value edit before the branch point prunes every other
-/// timeline, so the branch's draw diverges on the proposal alone and looked
-/// like the edit's doing; punning it there handed the shrinker a hybrid on
-/// every such run and its mutation pass spent its deep divergence budget on
-/// each (experiment 016, campaign 8: 15k of 24k executions, and 19k of 23k
-/// on a pool missing two of four shapes). An edit that truly changes the
-/// path misfits on every run, so it is realized after this many; a branch
-/// the test takes with probability q slips through as a hybrid with
-/// probability q^6 (1.6% at a coin, 18% at three other equiprobable
-/// branches).
-const MISFIT_DEFERRALS: u64 = 6;
-
-/// The exchange between one per-timeline shrinker and the engine's
-/// parallel shrink driver (decision 77): the shrinker posts a request and
-/// suspends until a response is there; the driver reads the request, and
-/// the sweep mode and adoption the shrinker reports.
-struct Slot {
-    request: Option<OwnedRun>,
-    response: Option<crate::native::shrinker::ShrinkResult<(bool, Vec<ChoiceNode>, Spans)>>,
-    sweep: SweepMode,
-    adopted: bool,
-}
-
-/// The [`ShrinkProbe`] handed to each shrinker of a parallel shrink: its
-/// side of a [`Slot`].
-struct SlotProbe {
-    slot: Arc<Mutex<Slot>>,
-}
-
-impl ShrinkProbe for SlotProbe {
-    fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
-        let owned = match req {
-            ShrinkRun::Full(nodes) => OwnedRun::Full(nodes.to_vec()),
-            ShrinkRun::Probe { prefix, max_size } => OwnedRun::Probe {
-                prefix: prefix.to_vec(),
-                max_size,
-            },
-        };
-        self.slot.lock().request = Some(owned);
-        let slot = Arc::clone(&self.slot);
-        Box::pin(core::future::poll_fn(move |_| {
-            match slot.lock().response.take() {
-                Some(response) => core::task::Poll::Ready(response),
-                None => core::task::Poll::Pending,
+impl GraphProbe for EngineGraphProbe<'_, '_> {
+    fn replay<'s>(&'s mut self, graph: Arc<Graph>, max_size: usize) -> GraphProbeFuture<'s> {
+        Box::pin(async move {
+            if self.verbosity == Verbosity::Verbose {
+                self.output.line("Running test case");
             }
-        }))
-    }
-
-    fn set_sweep_mode(&mut self, mode: SweepMode) -> Option<SweepMode> {
-        Some(core::mem::replace(&mut self.slot.lock().sweep, mode))
-    }
-
-    fn candidate_adopted(&mut self) -> Result<(), InternalError> {
-        self.slot.lock().adopted = true;
-        Ok(())
-    }
-}
-
-/// See [`Lane::pending_accept`].
-struct PendingAccept {
-    key: Vec<u8>,
-    lower_bound: f64,
-    nodes: Vec<ChoiceNode>,
-}
-
-/// One realized timeline's gauntlet state within the shrink of one origin.
-struct CandidateLedger {
-    evidence: nd::Evidence,
-    /// Failure minimum pinned by the candidate's first charge (decision
-    /// 72): the stopping rule never changes mid-test, so budget escalation
-    /// only positions candidates not yet proposed.
-    min_fails: u64,
-    /// The evidence loop's verdict, latched — a bound is final. A latched
-    /// reject spends no further budget or replays; a latched accept keeps
-    /// re-proposals of a conclusively accepted timeline acceptable however
-    /// their recruiting run went (a nested clone shrink's final splice
-    /// re-proposes exactly such timelines).
-    verdict: Option<bool>,
-    /// Runs led by the candidate that left it (decision 77): no evidence
-    /// about the candidate on its own timeline, only about the set.
-    bounces: u64,
-    /// Every run the candidate led, for the starvation allowance.
-    led: u64,
-    /// Every run the candidate led — with it served first — as evidence
-    /// about the counterexample its accept would install (decision 75): a
-    /// candidate must not lower the set's reproduction past the gauntlet
-    /// threshold (decision 2), however reliably it fails when the test
-    /// stays on it.
-    set_evidence: nd::Evidence,
-}
-
-/// One timeline of a lane's contribution to a set replay
-/// ([`Lane::components`]): its values, the proposal's nodes when known, and
-/// whether it is an unrealized proposal (a pun timeline) that insists on
-/// its misfits being punned.
-struct Component {
-    values: Vec<ChoiceValue>,
-    nodes: Option<Vec<ChoiceNode>>,
-    pun: bool,
-    insist: bool,
-}
-
-/// A proposal in flight: its request, and once a run has realized it, the
-/// realization the ledger keys on and the shrinker is answered with.
-struct Candidate {
-    request: OwnedRun,
-    realized: Option<Realized>,
-    /// Runs that left the proposal at a misfit — another stored timeline
-    /// served the draw, or none did — which is a branch the test took on
-    /// its own, or a path the proposal's edit opened. Deferred that many
-    /// times, the proposal is not realized by the run; at
-    /// [`MISFIT_DEFERRALS`] it insists ([`Component::insist`]): the misfit
-    /// is taken for the edit's own and punned (decision 77).
-    deferrals: u64,
-}
-
-struct Realized {
-    key: Vec<u8>,
-    values: Vec<ChoiceValue>,
-    nodes: Vec<ChoiceNode>,
-    spans: Vec<Span>,
-}
-
-type LaneFuture =
-    Pin<Box<dyn Future<Output = crate::native::shrinker::ShrinkResult<Shrinker<'static>>> + Send>>;
-
-/// One timeline of the counterexample under a parallel shrink (decision
-/// 77): its shrinker (until it finishes), its current timeline, the
-/// proposal it has in flight, and its gauntlet ledgers.
-struct Lane {
-    slot: Arc<Mutex<Slot>>,
-    shrinking: Option<LaneFuture>,
-    current: Vec<ChoiceNode>,
-    candidate: Option<Candidate>,
-    ledger: HashMap<Vec<u8>, CandidateLedger>,
-    /// Whether the lane was stopped for starvation — a realized candidate
-    /// whose branch is too rare to gauntlet within the allowance — so that
-    /// its shrinker's early return is not a timeout.
-    stopped: bool,
-    /// The most recent gauntlet accept, held until the shrinker either
-    /// adopts it (the point where the anchor raise and persistence
-    /// happen) or posts its next request. A gauntlet accept the shrinker
-    /// discards — a punned realization, or a sort-key-larger mutation
-    /// probe — must move nothing.
-    pending_accept: Option<PendingAccept>,
-}
-
-impl Lane {
-    fn new(slot: Arc<Mutex<Slot>>, shrinking: LaneFuture, current: Vec<ChoiceNode>) -> Self {
-        Lane {
-            slot,
-            shrinking: Some(shrinking),
-            current,
-            candidate: None,
-            ledger: HashMap::default(),
-            stopped: false,
-            pending_accept: None,
-        }
-    }
-
-    /// The lane's components of one set replay, in order: its candidate,
-    /// then its current timeline — the branch the lane stands for, so that
-    /// a run taking that branch always has a timeline to stay on, whatever
-    /// the candidate did. A proposal not yet realized is a pun timeline; a
-    /// run that stays on the current timeline behind it has realized the
-    /// proposal as the current.
-    fn components(&self) -> Vec<Component> {
-        let current: Vec<ChoiceValue> = self.current.iter().map(|n| n.value()).collect();
-        let stored = |values: Vec<ChoiceValue>| Component {
-            values,
-            nodes: None,
-            pun: false,
-            insist: false,
-        };
-        match &self.candidate {
-            Some(Candidate {
-                realized: Some(realized),
-                ..
-            }) => {
-                let mut components = alloc::vec![stored(realized.values.clone())];
-                if realized.values != current {
-                    components.push(stored(current));
-                }
-                components
-            }
-            Some(Candidate {
-                request,
-                realized: None,
-                deferrals,
-            }) => {
-                let nodes = match request {
-                    OwnedRun::Full(nodes) => Some(nodes.clone()),
-                    OwnedRun::Probe { .. } => None,
-                };
-                alloc::vec![
-                    Component {
-                        values: request.values(),
-                        nodes,
-                        pun: true,
-                        insist: *deferrals >= MISFIT_DEFERRALS,
-                    },
-                    stored(current),
-                ]
-            }
-            None => alloc::vec![stored(current)],
-        }
-    }
-
-    fn respond(&mut self, verdict: bool, nodes: Vec<ChoiceNode>, spans: Vec<Span>) {
-        self.slot.lock().response = Some(Ok((verdict, nodes, Spans::from(spans))));
-        self.candidate = None;
-    }
-
-    fn stop(&mut self) {
-        self.slot.lock().response = Some(Err(crate::native::shrinker::ShrinkHalt::Stop));
-        self.candidate = None;
-        self.stopped = true;
-    }
-}
-
-/// The outcome of a parallel shrink: every lane's final timeline, in the
-/// counterexample's order.
-struct ParallelShrink {
-    set: Vec<Vec<ChoiceNode>>,
-    timed_out: bool,
-}
-
-/// The lanes of a driven parallel shrink, as they ended.
-struct DrivenLanes {
-    lanes: Vec<Lane>,
-    timed_out: bool,
-}
-
-/// Set evidence past which a candidate with a full on-timeline ledger is
-/// rejected as undecidable: its reproduction as a counterexample sits too
-/// close to the threshold to resolve. Also, per lane, the led runs a
-/// realized candidate may spend before its lane is stopped as a branch too
-/// rare to gauntlet — on-timeline evidence arrives at the branch's share
-/// of the runs, so the allowance scales with the number of lanes.
-const SET_EVIDENCE_CAP: u64 = 2 * nd::GAUNTLET_CAP;
-
-impl<'a> Engine<'a> {
-    /// The parallel shrink (decision 77): one shrinker per timeline of the
-    /// counterexample, each suspended on a [`Slot`] while the engine runs
-    /// the whole set of their proposals as one test case. Each execution
-    /// is led by one lane in rotation — its component served first, the
-    /// rest in order — and whichever timelines the run stayed on it is a
-    /// trial of. An unrealized proposal is realized by the first run that
-    /// executed it as itself ([`RunResult::realized`]: live to the end, or
-    /// out of the live set at the divergence by its own misfit or its own
-    /// end — a proposal that runs out draws its tail at random, never from
-    /// the current timeline it was a prefix of); from then on its
-    /// realization is the component, and runs live on it are its
-    /// on-timeline evidence. The lane's current timeline stays in the set
-    /// as the branch's shadow ([`Lane::components`]), so a run that takes
-    /// the branch with other values has a timeline to stay on.
-    /// Every run a lane led is evidence about the set it would install
-    /// (decision 75); a led run that left the candidate is no evidence
-    /// about the candidate itself and costs it nothing but the led-run cap
-    /// ([`SET_EVIDENCE_CAP`], decision 77). A candidate is answered when
-    /// its ledgers reach a bound; the shrinker's
-    /// adoption raises the shared anchor, installs the lane's timeline, and
-    /// persists the set. Lanes that have finished keep their final timeline
-    /// in the set and never lead.
-    async fn nd_parallel_shrink(
-        &mut self,
-        origin: &str,
-        starts: Vec<(Vec<ChoiceNode>, Vec<Span>)>,
-        anchor: f64,
-        deadline: Option<crate::sys::Instant>,
-        verbosity: Verbosity,
-        output: &Output,
-    ) -> Result<ParallelShrink, RunError> {
-        let mut lanes: Vec<Lane> = Vec::with_capacity(starts.len());
-        for (nodes, spans) in starts {
-            let slot = Arc::new(Mutex::new(Slot {
-                request: None,
-                response: None,
-                sweep: SweepMode::Fast,
-                adopted: false,
-            }));
-            let mut shrinker = Shrinker::with_probe(
-                Box::new(SlotProbe {
-                    slot: Arc::clone(&slot),
-                }),
-                nodes.clone(),
-                Spans::from(spans),
-            );
-            shrinker.deadline = deadline;
-            let debug = (verbosity == Verbosity::Debug).then(|| output.clone());
-            let shrinking: LaneFuture = Box::pin(async move {
-                shrinker.initial_coarse_reduction().await?;
-                if let Some(output) = debug {
-                    shrinker.set_debug(move |msg| output.line(msg));
-                }
-                shrinker
-                    .shrink()
-                    .await
-                    .map_err(crate::native::shrinker::ShrinkHalt::Error)?;
-                Ok(shrinker)
-            });
-            lanes.push(Lane::new(slot, shrinking, nodes));
-        }
-        let driven = self
-            .nd_drive_lanes(origin, lanes, anchor, deadline, verbosity, output)
-            .await?;
-        Ok(ParallelShrink {
-            set: driven.lanes.into_iter().map(|lane| lane.current).collect(),
-            timed_out: driven.timed_out,
+            let replay = self
+                .engine
+                .nd_replay_graph(graph, max_size, Some(&self.origin))
+                .await?;
+            let run = replay.run;
+            Ok(GraphOutcome {
+                failed: replay.failed,
+                divergence: run.divergence.is_some(),
+                ended: run.ended,
+                settled: run.settled,
+                nodes: run.nodes,
+                spans: run.spans,
+            })
         })
     }
 
-    /// Drive `lanes` to the end of every shrinker: see
-    /// [`Self::nd_parallel_shrink`], whose loop this is.
-    async fn nd_drive_lanes(
+    fn charge(&mut self, anchor: f64, drive: bool) -> u64 {
+        self.engine
+            .origins
+            .entry(&self.origin)
+            .gauntlet_spend
+            .charge(&nd::Evidence::default(), anchor, drive, None)
+    }
+
+    fn adopted(
         &mut self,
-        origin: &str,
-        mut lanes: Vec<Lane>,
+        graph: &Graph,
+        witness: (&[ChoiceNode], &[Span]),
         anchor: f64,
-        deadline: Option<crate::sys::Instant>,
-        verbosity: Verbosity,
-        output: &Output,
-    ) -> Result<DrivenLanes, RunError> {
-        let mut anchor = anchor;
-        let mut raised: crate::native::HashSet<Vec<u8>> = crate::native::HashSet::default();
-        let mut cursor = 0usize;
-        let mut timed_out = false;
-        let expired = |d: Option<crate::sys::Instant>| {
-            d.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
-        };
-        loop {
-            let mut changed = false;
-            for (k, lane) in lanes.iter_mut().enumerate() {
-                if let Some(shrinking) = lane.shrinking.as_mut() {
-                    let mut cx = core::task::Context::from_waker(core::task::Waker::noop());
-                    if let core::task::Poll::Ready(finished) = shrinking.as_mut().poll(&mut cx) {
-                        match finished {
-                            Ok(shrinker) => {
-                                lane.current = shrinker.current_nodes;
-                                timed_out |= shrinker.timed_out;
-                            }
-                            Err(crate::native::shrinker::ShrinkHalt::Stop) => {
-                                timed_out |= !lane.stopped;
-                            }
-                            Err(crate::native::shrinker::ShrinkHalt::Error(e)) => return Err(e),
-                        }
-                        lane.shrinking = None;
-                    }
-                }
-                let adopted = core::mem::take(&mut lane.slot.lock().adopted);
-                if adopted {
-                    if let Some(accept) = lane.pending_accept.take() {
-                        let lower_bound = accept.lower_bound.min(nd::anchor_ceiling());
-                        if raised.insert(accept.key) && lower_bound > anchor {
-                            anchor = lower_bound;
-                            self.origins.entry(origin).raise_anchor(anchor);
-                        }
-                        lane.current = accept.nodes;
-                        changed = true;
-                        if verbosity == Verbosity::Debug {
-                            output.line(&format!(
-                                "nd lane adopted: origin={origin} lane={k} anchor={anchor:.3}"
-                            ));
-                        }
-                    }
-                }
-                if lane.candidate.is_none() {
-                    if let Some(request) = lane.slot.lock().request.take() {
-                        lane.pending_accept = None;
-                        lane.candidate = Some(Candidate {
-                            request,
-                            realized: None,
-                            deferrals: 0,
-                        });
-                    }
-                }
-            }
-            if changed {
-                let set: Vec<Vec<ChoiceValue>> = lanes
-                    .iter()
-                    .map(|lane| lane.current.iter().map(|n| n.value()).collect())
-                    .collect();
-                self.origins
-                    .entry(origin)
-                    .install_set(&set, Some(lanes[0].current.clone()));
-                self.persist_incumbent(origin)?;
-            }
-            if lanes.iter().all(|lane| lane.shrinking.is_none()) {
-                break;
-            }
-            let active: Vec<usize> = (0..lanes.len())
-                .filter(|&k| lanes[k].candidate.is_some())
-                .collect();
-            if active.is_empty() {
-                crate::control::hegel_internal_error!(
-                    "parallel shrink: every shrinker is suspended without a request"
-                );
-            }
-            if expired(deadline) {
-                timed_out = true;
-                for &k in &active {
-                    let nodes = lanes[k].current.clone();
-                    lanes[k].respond(false, nodes, Vec::new());
-                }
-                continue;
-            }
-            cursor %= active.len();
-            let leader = active[cursor];
-            cursor += 1;
-            let mut order: Vec<usize> = Vec::with_capacity(lanes.len());
-            order.push(leader);
-            order.extend((0..lanes.len()).filter(|&k| k != leader));
-            let mut timelines: Vec<Vec<ChoiceValue>> = Vec::new();
-            let mut nodes: Vec<Option<Vec<ChoiceNode>>> = Vec::new();
-            let mut puns: Vec<bool> = Vec::new();
-            let mut insists: Vec<bool> = Vec::new();
-            let mut positions: Vec<(usize, usize)> = Vec::new();
-            let mut max_size = 0usize;
-            for &k in &order {
-                if let Some(Candidate {
-                    request: OwnedRun::Probe { max_size: size, .. },
-                    realized: None,
-                    ..
-                }) = &lanes[k].candidate
-                {
-                    max_size = max_size.max(*size);
-                }
-                let start = timelines.len();
-                for component in lanes[k].components() {
-                    timelines.push(component.values);
-                    nodes.push(component.nodes);
-                    puns.push(component.pun);
-                    insists.push(component.insist);
-                }
-                positions.push((start, timelines.len()));
-            }
-            let longest = timelines
-                .iter()
-                .map(|t| crate::native::core::flattened_values_len(t))
-                .max()
-                .unwrap_or(0);
-            let max_size = max_size.max(nd::continuation_budget(longest));
-            let rng = self.rng.spawn();
-            let ntc =
-                NativeTestCase::for_shrink_set(&timelines, nodes, puns, insists, rng, max_size)?;
-            let (run, _mismatch) = self.measure(ntc).await?;
-            let failed = run.status == Status::Interesting && run.origin.as_deref() == Some(origin);
-            let realized_values: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
-            let flag =
-                |flags: &[bool], position: usize| flags.get(position).copied().unwrap_or(false);
-            let kinds =
-                |nodes: &[ChoiceNode]| nodes.iter().map(|n| n.data.kind()).collect::<Vec<_>>();
-            let shapes: Vec<Vec<_>> = lanes.iter().map(|lane| kinds(&lane.current)).collect();
-            let run_shape = kinds(&run.nodes);
-            for (&k, &(start, _)) in order.iter().zip(&positions) {
-                let live = flag(&run.live, start);
-                let realized = flag(&run.realized, start);
-                let is_leader = k == leader;
-                let sweep = lanes[k].slot.lock().sweep;
-                let lane = &mut lanes[k];
-                let Some(candidate) = lane.candidate.as_mut() else {
-                    continue;
-                };
-                match candidate.realized.as_ref() {
-                    None => {
-                        let ran_out = realized && run.ran_out;
-                        if ran_out && !failed && matches!(candidate.request, OwnedRun::Full(_)) {
-                            lane.respond(false, run.nodes.clone(), run.spans.clone());
-                            continue;
-                        }
-                        let left_at_a_misfit = !live && !ran_out;
-                        if left_at_a_misfit
-                            && (is_leader || realized)
-                            && candidate.deferrals < MISFIT_DEFERRALS
-                        {
-                            candidate.deferrals += 1;
-                            continue;
-                        }
-                        if !realized {
-                            continue;
-                        }
-                        if failed && sort_key(&run.nodes) > sort_key(&lane.current) {
-                            lane.respond(false, run.nodes.clone(), run.spans.clone());
-                            continue;
-                        }
-                        if !live && run_shape != shapes[k] && shapes.contains(&run_shape) {
-                            let nodes = match &candidate.request {
-                                OwnedRun::Full(nodes) => nodes.clone(),
-                                OwnedRun::Probe { .. } => run.nodes.clone(),
-                            };
-                            lane.respond(false, nodes, run.spans.clone());
-                            continue;
-                        }
-                        let key = crate::control::hegel_internal_unwrap!(
-                            serialize_choices(&realized_values),
-                            "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
-                        );
-                        if lane.ledger.get(&key).is_none_or(|l| l.verdict.is_none()) {
-                            let (seed, pinned) = lane
-                                .ledger
-                                .get(&key)
-                                .map_or((nd::Evidence::default(), None), |l| {
-                                    (l.evidence, Some(l.min_fails))
-                                });
-                            let min_fails = self.origins.entry(origin).gauntlet_spend.charge(
-                                &seed,
-                                anchor,
-                                sweep == SweepMode::Confirm,
-                                pinned,
-                            );
-                            lane.ledger.entry(key.clone()).or_insert(CandidateLedger {
-                                evidence: nd::Evidence::default(),
-                                min_fails,
-                                verdict: None,
-                                bounces: 0,
-                                led: 0,
-                                set_evidence: nd::Evidence::default(),
-                            });
-                        }
-                        let entry = lane.ledger.get_mut(&key).unwrap();
-                        entry.evidence.record(failed);
-                        if is_leader {
-                            entry.led += 1;
-                            entry.set_evidence.record(failed);
-                        }
-                        let fast_miss =
-                            !failed && sweep == SweepMode::Fast && entry.verdict.is_none();
-                        candidate.realized = Some(Realized {
-                            key,
-                            values: realized_values.clone(),
-                            nodes: run.nodes.clone(),
-                            spans: run.spans.clone(),
-                        });
-                        if fast_miss {
-                            lane.respond(false, run.nodes.clone(), run.spans.clone());
-                        }
-                    }
-                    Some(realized) => {
-                        let entry = lane.ledger.get_mut(&realized.key).unwrap();
-                        if live {
-                            entry.evidence.record(failed);
-                        }
-                        if is_leader {
-                            entry.led += 1;
-                            if !live {
-                                entry.bounces += 1;
-                            }
-                            if live || flag(&run.realized, start) {
-                                entry.set_evidence.record(failed);
-                            }
-                        }
-                    }
-                }
-            }
-            let threshold = nd::gauntlet_threshold(anchor);
-            let starvation_allowance = SET_EVIDENCE_CAP * lanes.len() as u64;
-            for (k, lane) in lanes.iter_mut().enumerate() {
-                let Some(Candidate {
-                    realized: Some(realized),
-                    ..
-                }) = &lane.candidate
-                else {
-                    continue;
-                };
-                let ledger = lane.ledger.get_mut(&realized.key).unwrap();
-                let mut starve = false;
-                let verdict = if let Some(verdict) = ledger.verdict {
-                    Some(verdict)
-                } else if ledger.set_evidence.runs() > 0
-                    && ledger.set_evidence.upper_bound() < threshold
-                {
-                    Some(false)
-                } else {
-                    match nd::gauntlet(&ledger.evidence, anchor, ledger.min_fails) {
-                        nd::GauntletVerdict::Reject => Some(false),
-                        nd::GauntletVerdict::Accept
-                            if ledger.set_evidence.lower_bound() >= threshold
-                                && ledger.evidence.runs() >= nd::ANCHOR_SEED_RUNS =>
-                        {
-                            Some(true)
-                        }
-                        _ if ledger.set_evidence.runs() >= SET_EVIDENCE_CAP
-                            && ledger.evidence.runs() >= nd::ANCHOR_SEED_RUNS =>
-                        {
-                            if verbosity == Verbosity::Debug {
-                                output.line(&format!(
-                                    "gauntlet abandoned a candidate: undecided after {} led runs ({} left the timeline; on-timeline {}/{}, set {}/{})",
-                                    ledger.set_evidence.runs(),
-                                    ledger.bounces,
-                                    ledger.evidence.fails(),
-                                    ledger.evidence.runs(),
-                                    ledger.set_evidence.fails(),
-                                    ledger.set_evidence.runs()
-                                ));
-                            }
-                            Some(false)
-                        }
-                        _ if ledger.led >= starvation_allowance => {
-                            starve = true;
-                            None
-                        }
-                        _ => None,
-                    }
-                };
-                if starve {
-                    if verbosity == Verbosity::Debug {
-                        output.line(&format!(
-                            "nd lane starved: origin={origin} lane={k}: its candidate led {} runs and stayed on it for {}; its shrink stops",
-                            ledger.led,
-                            ledger.evidence.runs()
-                        ));
-                    }
-                    lane.stop();
-                    continue;
-                }
-                let Some(verdict) = verdict else {
-                    continue;
-                };
-                ledger.verdict = Some(verdict);
-                if verdict {
-                    lane.pending_accept = Some(PendingAccept {
-                        key: realized.key.clone(),
-                        lower_bound: ledger.set_evidence.lower_bound(),
-                        nodes: realized.nodes.clone(),
-                    });
-                }
-                let nodes = realized.nodes.clone();
-                let spans = realized.spans.clone();
-                lane.respond(verdict, nodes, spans);
-            }
+        longest: usize,
+    ) -> Result<(), RunError> {
+        if self.verbosity == Verbosity::Debug {
+            self.output.line(&format!(
+                "nd graph accept: origin={} edges={} anchor={anchor:.3}",
+                self.origin,
+                graph.edge_count()
+            ));
         }
-        let set: Vec<Vec<ChoiceValue>> = lanes
-            .iter()
-            .map(|lane| lane.current.iter().map(|n| n.value()).collect())
-            .collect();
-        self.origins
-            .entry(origin)
-            .install_set(&set, Some(lanes[0].current.clone()));
-        Ok(DrivenLanes { lanes, timed_out })
+        self.engine.origins.entry(&self.origin).install(
+            graph.clone(),
+            witness.0.to_vec(),
+            witness.1.to_vec(),
+            anchor,
+            longest,
+        );
+        self.engine.record_nd_incumbent(&self.origin)?;
+        Ok(())
     }
 }
 
