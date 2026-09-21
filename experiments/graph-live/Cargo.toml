@@ -1,0 +1,11 @@
+[package]
+name = "graphlive"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hegel = { path = "../..", package = "hegeltest", features = ["static-engine"] }
+hegel_c = { path = "../../hegel-c", package = "hegeltest-c", features = ["__bench"] }
+
+[workspace]

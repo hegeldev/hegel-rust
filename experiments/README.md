@@ -49,6 +49,18 @@ below, and later API changes are expected to have broken some of them.
   Built against `8f78d577`, before decision 78 moved the graph into the engine
   (`hegel-c/src/native/graph.rs`, `graph_shrink.rs`); it keeps its own graph
   and shrinker and still drives the engine through the hook.
+- `graph-live`: experiment 020 (the engine's graph measured against the pool);
+  016's `live-set` harness carried to the graph era — the same per-episode
+  pipeline and seeds, 019's bodies added as frontend tests, and `blobinfo`
+  reading the v3 graph through `__bench::blob_graph`, enumerating its paths
+  and judging them by the body's predicate. `python3 drive.py --jobs 6
+  --episodes 20 --bodies racy,clone,branch,twobranch --out results-016.jsonl`
+  and `--episodes 10 --bodies block4,block8,shift4,shift8,list4,list8,loop4,loop8
+  --out results-019.jsonl`; `python3 drive.py --summarize --out <file>` prints
+  the tables. `results-016.jsonl` and `results-019.jsonl` are campaign 1
+  against decision 78 as built (`6f202f7e`); `results-016-fixed.jsonl` and
+  `results-019-fixed.jsonl` are campaign 2 against decision 79. Runs against
+  the branch via its path dependency, so it tracks the engine.
 - `concurrent-replay`: built against `7a4fd194` (experiment 007's full
   campaign); runs against the branch via its path dependency —
   `cargo build --release`, then `python3 drive.py [trials]`.

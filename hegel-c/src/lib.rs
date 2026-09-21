@@ -60,6 +60,51 @@ pub mod __bench {
         ))
     }
 
+    pub struct BlobEdge {
+        pub addr: Vec<(u64, usize)>,
+        pub value: ChoiceValue,
+        pub target: usize,
+    }
+
+    pub struct BlobNode {
+        pub ident: alloc::string::String,
+        pub edges: Vec<BlobEdge>,
+    }
+
+    /// The counterexample graph behind a nondeterministic blob (experiment
+    /// 020): node 0 is `Start`, node 1 is `End`.
+    pub struct BlobGraph {
+        pub nodes: Vec<BlobNode>,
+        pub longest: u32,
+    }
+
+    pub fn blob_graph(blob: &str) -> Option<BlobGraph> {
+        let crate::native::blob::DecodedBlob::Nd(state) = crate::native::blob::decode_blob(blob)?
+        else {
+            return None;
+        };
+        Some(BlobGraph {
+            longest: state.longest,
+            nodes: state
+                .graph
+                .nodes()
+                .iter()
+                .map(|n| BlobNode {
+                    ident: alloc::format!("{:?}", n.ident),
+                    edges: n
+                        .edges
+                        .iter()
+                        .map(|e| BlobEdge {
+                            addr: e.addr.clone(),
+                            value: e.value.clone(),
+                            target: e.target,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
         crate::native::core::state::biased_integer_sample(
             ic,
