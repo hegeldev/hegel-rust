@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -366,6 +367,92 @@ impl Settings {
     pub fn show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
         self
+    }
+
+    /// Apply the settings environment variables, read through `env`, over
+    /// these settings: `HEGEL_TEST_CASES`, `HEGEL_DATABASE`,
+    /// `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and
+    /// `HEGEL_PRINT_BLOB`. Profile resolution calls this last, so the
+    /// variables win over every profile and `hegel.toml`, while a setter
+    /// called on the resulting handle still wins over them. An unset or
+    /// empty variable leaves its setting alone; a malformed one is an
+    /// error whose message names the variable.
+    pub(crate) fn with_env_overrides_from(
+        mut self,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        if let Some(value) = env_value(&env, "HEGEL_TEST_CASES") {
+            match value.parse::<u64>() {
+                Ok(n) if n > 0 => self.test_cases = n,
+                _ => {
+                    return Err(format!(
+                        "HEGEL_TEST_CASES must be a positive integer, got {value:?}"
+                    ));
+                }
+            }
+        }
+        if let Some(value) = env_value(&env, "HEGEL_DATABASE") {
+            self.database = if value == "disabled" {
+                Database::Disabled
+            } else {
+                Database::Path(value)
+            };
+        }
+        if let Some(value) = env_value(&env, "HEGEL_STATISTICS") {
+            if value != "0" {
+                self.show_statistics = true;
+            }
+        }
+        if let Some(value) = env_value(&env, "HEGEL_SEED") {
+            self.seed = if value == "none" {
+                None
+            } else {
+                match value.parse::<u64>() {
+                    Ok(n) => Some(n),
+                    Err(_) => {
+                        return Err(format!(
+                            "HEGEL_SEED must be an integer or 'none', got {value:?}"
+                        ));
+                    }
+                }
+            };
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_DERANDOMIZE")? {
+            self.derandomize = b;
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB")? {
+            self.print_blob = b;
+        }
+        Ok(self)
+    }
+}
+
+/// The value of `key` in `env`, unless it is unset or empty: an empty
+/// settings variable counts as unset.
+fn env_value(env: impl Fn(&str) -> Option<String>, key: &str) -> Option<String> {
+    env(key).filter(|value| !value.is_empty())
+}
+
+/// The boolean vocabulary of the settings environment variables and the
+/// `#[hegel::main]` flags: `true`, `1`, `yes` and `false`, `0`, `no`.
+pub(crate) fn parse_bool(s: &str) -> Option<bool> {
+    match s {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// The boolean settings variable `key`: `None` when unset or empty, an
+/// error naming the variable when it is outside [`parse_bool`]'s
+/// vocabulary.
+fn env_bool(env: impl Fn(&str) -> Option<String>, key: &str) -> Result<Option<bool>, String> {
+    match env_value(env, key) {
+        None => Ok(None),
+        Some(value) => match parse_bool(&value) {
+            Some(b) => Ok(Some(b)),
+            None => Err(format!("{key} must be true or false, got {value:?}")),
+        },
     }
 }
 

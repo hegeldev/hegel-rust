@@ -36,7 +36,27 @@ layers below it set and leaves the rest alone:
    `default` profile, the one in effect for the current environment;
    [`Settings::from_profile`](crate::Settings::from_profile) resolves any
    profile by name. The rest of this page is mostly about this layer.
-3. **Settings compiled into the test**: builder-method calls on the
+3. **Environment variables**, applied by the engine over the resolved
+   profile whenever a `Settings` value is created, so they win over the
+   profile and `hegel.toml` for every test that does not set the same
+   setting itself:
+
+   | Variable | Effect |
+   |---|---|
+   | `HEGEL_TEST_CASES` | Sets `test_cases`. Must be a positive integer. |
+   | `HEGEL_DATABASE` | Sets `database`: `disabled` turns it off, any other value is the path. |
+   | `HEGEL_STATISTICS` | Anything but `0` or the empty string turns `show_statistics` on. |
+   | `HEGEL_SEED` | Sets `seed`: an integer is the seed, `none` clears one the profile set. |
+   | `HEGEL_DERANDOMIZE` | Sets `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
+   | `HEGEL_PRINT_BLOB` | Sets `print_blob`, with the same vocabulary. |
+
+   An empty variable is ignored; any other malformed value is an error,
+   raised when the `Settings` value is created. The variables do not
+   change how the settings combine: a fixed `seed`, from wherever it
+   came, still takes precedence over `derandomize`, so
+   `HEGEL_DERANDOMIZE=true` has no effect on a profile with a seed unless
+   `HEGEL_SEED=none` clears it.
+4. **Settings compiled into the test**: builder-method calls on the
    `Settings` value, or equivalently the arguments of `#[hegel::test]`,
    `#[hegel::main]`, and the other attribute macros:
 
@@ -57,8 +77,10 @@ layers below it set and leaves the rest alone:
    [`Settings::new`](crate::Settings::new), and a single positional
    expression (`#[hegel::test(my_settings())]`) supplies a complete
    `Settings` value to start from instead, which cannot be combined with
-   `profile`.
-4. **Command-line flags**, for `#[hegel::main]` binaries only: `--seed`,
+   `profile`. These are the settings the author of the test chose, so they
+   take precedence over the environment variables: a variable adjusts the
+   suite, not a test that pins the setting.
+5. **Command-line flags**, for `#[hegel::main]` binaries only: `--seed`,
    `--verbosity`, `--derandomize`, `--database`,
    `--suppress-health-check`, and `--backend` apply on top of the
    compiled-in settings. `--profile <name>` is different: it sets the
@@ -68,23 +90,6 @@ layers below it set and leaves the rest alone:
    profile. A `#[hegel::main]` binary always runs exactly one test case,
    and suppresses the `too_slow` and `test_cases_too_large` health checks,
    which judge how valid cases accumulate over a run.
-5. **Environment variables**, applied last, once per run, so they win over
-   everything in source:
-
-   | Variable | Effect |
-   |---|---|
-   | `HEGEL_TEST_CASES` | Overrides `test_cases`. Must be a positive integer. |
-   | `HEGEL_DATABASE` | Overrides `database`: `disabled` turns it off, any other value is the path. |
-   | `HEGEL_STATISTICS` | Anything but `0` or the empty string turns `show_statistics` on. |
-   | `HEGEL_SEED` | Overrides `seed`: an integer is the seed, `none` clears a fixed seed. |
-   | `HEGEL_DERANDOMIZE` | Overrides `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
-   | `HEGEL_PRINT_BLOB` | Overrides `print_blob`, with the same vocabulary. |
-
-   An empty variable is ignored; any other malformed value is an error.
-   The overrides do not change how the settings combine: a fixed `seed`,
-   from wherever it came, still takes precedence over `derandomize`, so
-   `HEGEL_DERANDOMIZE=true` has no effect on a test with a compiled-in
-   seed unless `HEGEL_SEED=none` clears it.
 
 `HEGEL_DEFAULT_PROFILE` and `HEGEL_CONFIG` also come from the environment
 but act on layer 2, choosing the default profile and the config file; they
@@ -97,12 +102,14 @@ For example, with this `hegel.toml`:
 test_cases = 1000
 ```
 
-a test declared `#[hegel::test(test_cases = 200)]` and run on a CI server
-with `HEGEL_TEST_CASES=5000` resolves the `ci` profile (1000 test cases,
-derandomized, database disabled), the attribute overrides
-`test_cases` to 200, and the environment variable overrides it again to
-5000. Locally, without the variable, the same test runs 200 cases with the
-`development` profile's settings for everything else.
+a test declared `#[hegel::test]` and run on a CI server with
+`HEGEL_TEST_CASES=5000` resolves the `ci` profile (1000 test cases,
+derandomized, database disabled) and the environment variable overrides
+`test_cases` to 5000. A test declared `#[hegel::test(test_cases = 200)]`
+in the same run keeps its 200: the attribute is compiled in, and wins over
+the variable. Locally, without the variable, the first test runs 100 cases
+and the second 200, with the `development` profile's settings for
+everything else.
 
 # Profiles
 
@@ -314,11 +321,11 @@ run first.
 |---|---|---|
 | `HEGEL_DEFAULT_PROFILE` | profile resolution | The default profile, unless `Settings::set_default_profile` or `--profile` set one. |
 | `HEGEL_CONFIG` | config loading | Path of the `hegel.toml` to load instead of searching for one. |
-| `HEGEL_TEST_CASES` | each run | Overrides `test_cases`, after every other layer. |
-| `HEGEL_DATABASE` | each run | Overrides `database`, after every other layer. |
-| `HEGEL_STATISTICS` | each run | Turns `show_statistics` on, after every other layer. |
-| `HEGEL_SEED` | each run | Overrides `seed`, after every other layer. |
-| `HEGEL_DERANDOMIZE` | each run | Overrides `derandomize`, after every other layer. |
-| `HEGEL_PRINT_BLOB` | each run | Overrides `print_blob`, after every other layer. |
+| `HEGEL_TEST_CASES` | profile resolution | Sets `test_cases` over the resolved profile. |
+| `HEGEL_DATABASE` | profile resolution | Sets `database` over the resolved profile. |
+| `HEGEL_STATISTICS` | profile resolution | Turns `show_statistics` on over the resolved profile. |
+| `HEGEL_SEED` | profile resolution | Sets `seed` over the resolved profile. |
+| `HEGEL_DERANDOMIZE` | profile resolution | Sets `derandomize` over the resolved profile. |
+| `HEGEL_PRINT_BLOB` | profile resolution | Sets `print_blob` over the resolved profile. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |

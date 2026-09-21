@@ -793,6 +793,23 @@ fn cstring_lossy(s: &str) -> CString {
 /// directory or the nearest ancestor, and registered programmatically with
 /// `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
 /// to resolve one by name.
+///
+/// Whichever profile a handle starts from, `base` included, the settings
+/// environment variables are applied over it before the handle is
+/// returned, so they win over every profile and `hegel.toml` while the
+/// setters called on the handle afterwards win over them:
+///
+/// - `HEGEL_TEST_CASES`: a positive integer, the `test_cases` value.
+/// - `HEGEL_DATABASE`: `disabled` turns the database off; any other value
+///   is its path.
+/// - `HEGEL_STATISTICS`: anything but `0` turns `show_statistics` on.
+/// - `HEGEL_SEED`: an integer fixes the seed; `none` clears one.
+/// - `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB`: `true`, `1` or `yes`, or
+///   `false`, `0` or `no`.
+///
+/// An empty variable is ignored. A malformed one makes this function (and
+/// `hegel_settings_new_for_profile`) fail with `HEGEL_E_INVALID_ARG` and a
+/// message naming the variable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,
@@ -807,14 +824,16 @@ pub unsafe extern "C" fn hegel_settings_new(
 ///   registered with `hegel_settings_register_profile`.
 /// `out_settings`: Receives a handle initialized from that profile.
 ///
-/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
-/// or a `hegel.toml` is malformed. Read the message with
-/// `hegel_context_last_error`.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown,
+/// a `hegel.toml` is malformed, or a settings environment variable is
+/// malformed. Read the message with `hegel_context_last_error`.
 ///
 /// Selecting a profile by name does not change what the default profile is:
 /// the named profile still implicitly extends `default` (see
 /// `hegel_settings_new`), so it layers over the environment's profile —
-/// except `base`, which is always the plain base settings.
+/// except `base`, which is always the plain base settings. The settings
+/// environment variables listed under `hegel_settings_new` apply to the
+/// result either way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new_for_profile(
     ctx: *mut HegelContext,

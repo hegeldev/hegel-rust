@@ -147,9 +147,12 @@ pub struct Settings {
 
 impl Settings {
     /// Create settings from the `default` profile described in the
-    /// [profiles](Settings#profiles) section. Panics when profile
-    /// resolution fails: a default-profile setting names an unknown
-    /// profile, or a `hegel.toml` is malformed.
+    /// [profiles](Settings#profiles) section, with the settings environment
+    /// variables (`HEGEL_TEST_CASES`, `HEGEL_SEED`, …; see
+    /// [`docs::settings`](crate::docs::settings)) applied over it. Panics
+    /// when profile resolution fails: a default-profile setting names an
+    /// unknown profile, a `hegel.toml` is malformed, or one of those
+    /// variables holds a malformed value.
     pub fn new() -> Self {
         Self::from_resolution(crate::ffi::settings_from_profile(None))
     }
@@ -160,9 +163,11 @@ impl Settings {
     /// Selecting a profile does not change what the default profile is, and
     /// the named profile still implicitly extends `default`, so it layers
     /// over the environment's profile — except `base`, which is always the
-    /// plain base settings. Panics when the profile is unknown or a
-    /// `hegel.toml` is malformed; [`Settings::try_from_profile`] reports
-    /// the failure as an `Err` instead.
+    /// plain base settings. The settings environment variables apply over
+    /// the result as for [`Settings::new`]. Panics when the profile is
+    /// unknown, a `hegel.toml` is malformed, or a variable holds a
+    /// malformed value; [`Settings::try_from_profile`] reports the failure
+    /// as an `Err` instead.
     pub fn from_profile(name: &str) -> Self {
         Self::from_resolution(Self::try_from_profile(name).map_err(|e| e.message))
     }
@@ -233,10 +238,11 @@ impl Settings {
     /// Set the number of test cases to run (default: 100).
     ///
     /// The `HEGEL_TEST_CASES` environment variable, when set and non-empty,
-    /// overrides this value at runtime — including a value set explicitly
-    /// here or via `#[hegel::test(test_cases = ...)]`. This makes it easy to
-    /// scale a whole test suite up (a nightly deep run) or down (a quick
-    /// smoke pass) without editing source.
+    /// changes the value a `Settings` starts from, so a whole suite can be
+    /// scaled up (a nightly deep run) or down (a quick smoke pass) without
+    /// editing source. A value set here, or via
+    /// `#[hegel::test(test_cases = ...)]`, is compiled in and takes
+    /// precedence over the variable.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
         self
@@ -253,10 +259,10 @@ impl Settings {
     /// A fixed seed takes precedence over [`derandomize`](Self::derandomize).
     ///
     /// The `HEGEL_SEED` environment variable, when set and non-empty,
-    /// overrides this value at runtime — including a value set explicitly
-    /// here or via `#[hegel::test(seed = ...)]`: an integer is the seed to
-    /// use, and the literal value `none` clears a fixed seed (matching the
-    /// `--seed` CLI flag's vocabulary).
+    /// changes the seed a `Settings` starts from: an integer is the seed to
+    /// use, and the literal value `none` clears one a profile set (matching
+    /// the `--seed` CLI flag's vocabulary). A seed set here, or via
+    /// `#[hegel::test(seed = ...)]`, takes precedence over the variable.
     pub fn seed(mut self, seed: Option<u64>) -> Self {
         self.seed = seed;
         self
@@ -267,9 +273,9 @@ impl Settings {
     /// [`seed`](Self::seed) is set.
     ///
     /// The `HEGEL_DERANDOMIZE` environment variable, when set and
-    /// non-empty, overrides this value at runtime: `true`, `1` or `yes`
-    /// turns it on and `false`, `0` or `no` turns it off, whatever the
-    /// profile or the test's own settings say.
+    /// non-empty, changes the value a `Settings` starts from, whatever the
+    /// profile says: `true`, `1` or `yes` turns it on and `false`, `0` or
+    /// `no` turns it off. A value set here takes precedence over it.
     pub fn derandomize(mut self, derandomize: bool) -> Self {
         self.derandomize = derandomize;
         self
@@ -278,9 +284,10 @@ impl Settings {
     /// Set the database path for storing failing examples, or `None` to disable.
     ///
     /// The `HEGEL_DATABASE` environment variable, when set and non-empty,
-    /// overrides this value at runtime: the literal value `disabled` turns
-    /// the database off (matching the `--database` CLI flag's keyword), and
-    /// any other value is used as the database path.
+    /// changes the database a `Settings` starts from: the literal value
+    /// `disabled` turns the database off (matching the `--database` CLI
+    /// flag's keyword), and any other value is used as the database path.
+    /// A value set here takes precedence over it.
     pub fn database(mut self, database: Option<String>) -> Self {
         self.database = match database {
             None => Database::Disabled,
@@ -314,9 +321,10 @@ impl Settings {
     /// the failure output. Has effect only on the native backend.
     ///
     /// The `HEGEL_PRINT_BLOB` environment variable, when set and non-empty,
-    /// overrides this value at runtime: `true`, `1` or `yes` turns it on
-    /// and `false`, `0` or `no` turns it off, so a failure can be turned
-    /// into a reproducer line for one run without editing the test.
+    /// changes the value a `Settings` starts from: `true`, `1` or `yes`
+    /// turns it on and `false`, `0` or `no` turns it off, so the reproducer
+    /// line can be turned on or off for one run without editing the test.
+    /// A value set here takes precedence over it.
     pub fn print_blob(mut self, print_blob: bool) -> Self {
         self.print_blob = print_blob;
         self
@@ -382,61 +390,11 @@ impl Settings {
     /// the observed distribution.
     ///
     /// The `HEGEL_STATISTICS` environment variable, when set to anything
-    /// but `"0"` or the empty string, turns this on at runtime without
-    /// editing source.
+    /// but `"0"` or the empty string, turns this on in the settings a
+    /// `Settings` starts from, without editing source. A value set here
+    /// takes precedence over it.
     pub fn show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
-        self
-    }
-
-    /// Apply environment-variable overrides to these settings. Called once
-    /// per run, after all builder configuration, so the environment wins
-    /// over values set in source.
-    pub(crate) fn with_env_overrides(self) -> Self {
-        self.with_env_overrides_from(env_var)
-    }
-
-    fn with_env_overrides_from(mut self, env: impl Fn(&str) -> Option<String>) -> Self {
-        if let Some(value) = env("HEGEL_TEST_CASES") {
-            if !value.is_empty() {
-                match value.parse::<u64>() {
-                    Ok(n) if n > 0 => self.test_cases = n,
-                    _ => panic!("HEGEL_TEST_CASES must be a positive integer, got {value:?}"),
-                }
-            }
-        }
-        if let Some(value) = env("HEGEL_DATABASE") {
-            if !value.is_empty() {
-                self.database = if value == "disabled" {
-                    Database::Disabled
-                } else {
-                    Database::Path(value)
-                };
-            }
-        }
-        if let Some(value) = env("HEGEL_STATISTICS") {
-            if !value.is_empty() && value != "0" {
-                self.show_statistics = true;
-            }
-        }
-        if let Some(value) = env("HEGEL_SEED") {
-            if !value.is_empty() {
-                self.seed = if value == "none" {
-                    None
-                } else {
-                    match value.parse::<u64>() {
-                        Ok(n) => Some(n),
-                        Err(_) => panic!("HEGEL_SEED must be an integer or 'none', got {value:?}"),
-                    }
-                };
-            }
-        }
-        if let Some(b) = env_bool(&env, "HEGEL_DERANDOMIZE") {
-            self.derandomize = b;
-        }
-        if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB") {
-            self.print_blob = b;
-        }
         self
     }
 
@@ -509,25 +467,13 @@ where
     Hegel::new(test_fn).run();
 }
 
-fn env_var(key: &str) -> Option<String> {
-    std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
-}
-
-/// The boolean vocabulary shared by the `--derandomize` flag and the
-/// boolean environment overrides.
+/// The boolean vocabulary of the `--derandomize` flag, shared with the
+/// engine's `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB` variables.
 pub(crate) fn parse_bool(s: &str) -> Option<bool> {
     match s {
         "true" | "1" | "yes" => Some(true),
         "false" | "0" | "no" => Some(false),
         _ => None,
-    }
-}
-
-fn env_bool(env: impl Fn(&str) -> Option<String>, key: &str) -> Option<bool> {
-    let value = env(key).filter(|value| !value.is_empty())?;
-    match parse_bool(&value) {
-        Some(b) => Some(b),
-        None => panic!("{key} must be true or false, got {value:?}"),
     }
 }
 
@@ -581,8 +527,9 @@ where
     }
 
     /// Run exactly one test case, the behavior of `#[hegel::main]` binaries.
-    /// Applied after the environment overrides in [`run`](Self::run), so
-    /// `HEGEL_TEST_CASES` cannot undo it. Also suppresses
+    /// Applied in [`run`](Self::run) over whatever the settings say, so
+    /// neither `test_cases` nor `HEGEL_TEST_CASES` (which only sets the
+    /// value a [`Settings`] starts from) can undo it. Also suppresses
     /// [`HealthCheck::TooSlow`] and [`HealthCheck::TestCasesTooLarge`]: both
     /// judge how a run accumulates valid test cases, which is meaningless
     /// for a run of one.
@@ -622,7 +569,7 @@ where
     ///
     /// Panics if any test case fails.
     pub fn run(self) {
-        let mut settings = self.settings.with_env_overrides();
+        let mut settings = self.settings;
         if self.single_test_case {
             settings = settings.for_single_test_case();
         }
