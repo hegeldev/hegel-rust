@@ -628,7 +628,13 @@ impl GraphShrinker {
     /// could not fully produce, they are grafted into it and not counted
     /// (up to [`WARM_UP_GRAFTS`]) — the edited value may lead to structure
     /// the incumbent never had — and on accept the tie alternatives no
-    /// clean replay settled on are pruned.
+    /// clean replay settled on are pruned. An accept stands, and its
+    /// ledger is topped up to [`nd::ANCHOR_SEED_RUNS`] runs, unchecked by
+    /// the deadline, before its bound seeds the anchor (decision 54):
+    /// stopped at the accept itself, four straight clean replays would
+    /// seed 0.51 whatever the candidate's true rate, and an anchor that
+    /// never climbs lets a deletion that halves the reproduction rate pass
+    /// (experiment 020).
     async fn judge(
         &mut self,
         probe: &mut dyn GraphProbe,
@@ -642,8 +648,12 @@ impl GraphShrinker {
         let mut settled: Vec<(usize, usize)> = Vec::new();
         let mut grafts = 0;
         let mut shared = Arc::new(candidate.clone());
+        let mut accepted = false;
         loop {
-            if self.expired() {
+            if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
+                break;
+            }
+            if !accepted && self.expired() {
                 self.timed_out = true;
                 return Ok(Verdict::Rejected);
             }
@@ -671,7 +681,8 @@ impl GraphShrinker {
             } else if out.failed {
                 let run = out.run();
                 self.graft(&run);
-                if matches!(edit, Edit::Value { .. })
+                if !accepted
+                    && matches!(edit, Edit::Value { .. })
                     && grafts < WARM_UP_GRAFTS
                     && candidate.walk_verdict(&run) == Walked::Gap
                     && candidate.insert(&run)
@@ -682,17 +693,18 @@ impl GraphShrinker {
                 }
             }
             evidence.record(clean);
+            if accepted {
+                continue;
+            }
             if !clean && self.sweep == SweepMode::Fast {
                 return Ok(Verdict::Rejected);
             }
             match nd::gauntlet(&evidence, self.anchor, min_fails) {
-                GauntletVerdict::Accept => break,
+                GauntletVerdict::Accept if !exercised => return Ok(Verdict::Rejected),
+                GauntletVerdict::Accept => accepted = true,
                 GauntletVerdict::Reject => return Ok(Verdict::Rejected),
                 GauntletVerdict::Continue => {}
             }
-        }
-        if !exercised {
-            return Ok(Verdict::Rejected);
         }
         if matches!(edit, Edit::Value { .. }) {
             candidate.retain_settled(&settled);

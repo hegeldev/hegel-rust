@@ -343,15 +343,21 @@ settlement, 019: an edit no failing run drew is an unfalsifiable claim), with th
 alternatives no judging replay settled on pruned; a deletion needs no exercise. A failing
 unclean replay of any candidate is grafted into the incumbent unless foreign. The order
 is `GraphKey` — fewer edges, then fewer reachable nodes, then the edge values in
-breadth-first shrink rank — and a candidate must be strictly smaller. An accept raises the
-anchor to the ledger's bound capped at `nd::anchor_ceiling()` (LCB(20/20), decision 77's
-cap), keeps the standing witness when it is smaller and still a whole walk of the new
-graph, and installs graph, witness, anchor and longest run on the counterexample, which
-persists (`record_nd_incumbent`). Debug verbosity logs `nd shrink start`, `nd graph
-accept` and `nd shrink done` lines with edge counts and anchors. Measured outside the
-engine only (experiments 018–019: ideal graphs on `block`, `shift` and `loop`; `list`
-minimal with the span pass's analogue); the engine build's cost against the pool's (016's
-bodies) is not yet measured.
+breadth-first shrink rank — and a candidate must be strictly smaller. An accept stands,
+and its ledger is topped up to `ANCHOR_SEED_RUNS` runs, unchecked by the deadline, before
+its bound moves the anchor (decision 54 applied to the graph, decision 79: stopped at the
+accept, four straight clean replays seed 0.51 whatever the true rate, and an anchor that
+never climbs lets a deletion that halves reproduction pass); an unexercised value edit is
+rejected at the accept point without the top-up. The anchor rises to the topped-up bound
+capped at `nd::anchor_ceiling()` (LCB(20/20), decision 77's cap); the accept keeps the
+standing witness when it is smaller and still a whole walk of the new graph, and installs
+graph, witness, anchor and longest run on the counterexample, which persists
+(`record_nd_incumbent`). Debug verbosity logs `nd shrink start`, `nd graph accept` and
+`nd shrink done` lines with edge counts and anchors. Measured through the pipeline in
+experiment 020 (`experiments/graph-live`): block4 ~750 executions, shift4 ~800, block8
+~2.4k, list ~200, every graph the ideal; loop4 within an edge of the ideal at 3k–38k;
+loop8 (511 shapes) runs to the deadline one or two edges short — the deletion-evidence
+problem 019 (f6) named, still open.
 
 ### Targeting under ND handling
 
@@ -524,7 +530,23 @@ root crate's changelog covers only the user-facing behavior.
   the same spans open, the same kinds, no span of their own — are one state to the graph,
   which serves them one value; the other arm's run is foreign and is never stored.
   Generators' spans keep arms apart; a bare `if` in a test body over the engine's own
-  draws does not (decision 78).
+  draws does not (decision 78). The aliased states also make the stored graph claim
+  runs the body cannot make: `twobranch` in experiment 020 stores 4 malformed paths
+  beside its 4 right ones in every episode, `branch` 2 beside 2 in 12/20 — reproduction
+  is unharmed (60/60 at one execution) and the cost is small (730 executions against the
+  pool's 4 727), but the counterexample over-claims.
+- **Per-shape rarity at the bar**: the discovery bar's 0-of-10 gate judges the raw single
+  run before the batch has learned anything, so a failure with many structures — easy for
+  generation, ~8% per shape for a one-run replay — is gated out about half the time, and
+  when its first failure comes late in the run there is no re-sighting to spend another
+  attempt on (shift8 in 020: 4/8 unconfirmed at 5 000 cases; block8, failing early,
+  confirms 10/10). The continuation budget `len + max(4, len/8)` also cuts off replays
+  whose arms are longer than the stored run's (shift: "out of data" in 3/10 gate
+  replays).
+- **Deletion evidence on large graphs**: a deletion is accepted on 20 clean replays, and
+  20 replays of a graph with hundreds of shapes never walk its rare edges; a rarely-walked
+  edge is deleted, grafted back by the replay that walks it, and deleted again (loop8 in
+  020, 019's (f6)).
 - **Origin instability**: a cross-thread panic re-raised on the test thread via
   `resume_unwind` (a ferried payload) collapses to `Panic at <unknown>`; a plain
   `join().unwrap()` instead pins the origin to the join site and loses the message; a

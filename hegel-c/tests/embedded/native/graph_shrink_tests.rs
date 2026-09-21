@@ -178,6 +178,15 @@ fn values_shrink_by_binary_search_toward_the_simplest_under_the_gauntlet() {
     assert!(shrinker.replays() > 0);
 }
 
+#[test]
+fn an_accept_tops_its_ledger_up_before_seeding_the_anchor() {
+    let (mut shrinker, mut probe) = start(two_ints, &[run(&[(A, value(7)), (B, value(8))])], 0.5);
+    shrink(&mut shrinker, &mut probe);
+    assert_eq!(probe.adopted[0].1, nd::anchor_ceiling());
+    assert_eq!(shrinker.anchor(), nd::anchor_ceiling());
+    assert!(shrinker.replays() >= probe.adopted.len() as u64 * nd::ANCHOR_SEED_RUNS);
+}
+
 fn hidden_coin(tc: &mut NativeTestCase, lcg: &mut Lcg) -> Option<bool> {
     int(tc, 1, 10)?;
     let y = if lcg.coin(0.5) {

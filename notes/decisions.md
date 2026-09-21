@@ -1130,3 +1130,38 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     directed: "build out an implementation that's good enough to productionise"; the
     design points are 019's; the span pass and the two rules are the implementation's,
     each forced by a failing test.)
+
+## 2026-09-21
+
+79. **The graph shrinker's accepts are topped up before they seed the anchor, and the
+    confirmation batch replays the graph it grafts into** (`graph_shrink.rs`,
+    `test_runner.rs`; experiment 020). Experiment 020 measured decision 78's build through
+    the real pipeline on 016's and 019's bodies and found two regressions against the
+    pool-era rules. (1) `GraphShrinker::judge` stopped at the gauntlet's accept and seeded
+    the anchor from that ledger — LCB(4/4) = 0.51 in every episode, the bias decision 54
+    removed with the `ANCHOR_SEED_RUNS` top-up; with the anchor never climbing, a deletion
+    that halves the reproduction rate cleared 0.8 × 0.51, a replay taking the deleted arm
+    failed and re-grafted it with a fresh value, and the value and delete passes shrank and
+    deleted it again: 227–2 900 accepts per episode, graphs one arm short, `loop` collapsing
+    to the zero-piece run, unspanned bodies churning to the 300 s deadline at 1.2 M
+    executions. Now an accept stands and its ledger is topped up to `ANCHOR_SEED_RUNS`,
+    unchecked by the deadline, before its bound moves the anchor; an unexercised value edit
+    is still rejected at the accept point without paying the top-up. Deterministic bodies
+    reach `anchor_ceiling()` at the first accept, γ = 1 applies, and a live arm's deletion is
+    rejected at its first unclean replay: block4 31k → 750 executions, shift4 278k → 800,
+    every block/shift/list graph the ideal. (2) `nd_evidence_batch` replayed the raw graph
+    throughout while grafting failing replays into a copy it never replayed, so the bar
+    judged the single discovery run's per-shape rate (0.725⁸ ≈ 8% on block8: 6/10
+    discoveries "unconfirmed", no blob). Now the next replay walks the grafted graph —
+    019's warm-up (f) — and block8 confirms 10/10 with the ideal 256-shape graph at ~2.4k
+    executions. Still open, recorded as risks: the bar's 0-of-10 gate against a raw
+    per-shape rate under 10% when the first failure comes late in the run (shift8: 4/8
+    unconfirmed at 5000 cases); deletion by 20 clean replays of a graph with hundreds of
+    shapes deletes rarely-walked edges that later replays graft back (loop8: 11/31 edges
+    against the ideal 11/33 at the deadline; 019 (f6)); the continuation budget
+    `len + max(4, len/8)` cutting off replays whose arms are longer than the stored run's
+    (shift: 3/10 gate replays "out of data"); and same-address arms (decision 78's
+    limitation) storing malformed paths — with the anchor fixed `twobranch` converges at
+    730 executions (the pool's 4 727) and reproduces 60/60, but half its stored paths
+    (4 of 8) are runs the body cannot make, `branch` likewise in 12/20. (Found by measurement — DRM: "Sounds good. Please do." to the measurement
+    proposed at the end of decision 78's turn.)

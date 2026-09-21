@@ -2066,9 +2066,12 @@ impl<'a> Engine<'a> {
     /// expired `deadline` (passed only by the final replay's review)
     /// rejects before the next replay — a batch cut short proves nothing;
     /// the accept extension runs unchecked, bounded by
-    /// [`nd::ANCHOR_SEED_RUNS`]. Every replay is of `graph` as given — the
-    /// evidence is about one counterexample — and every failing run is
-    /// grafted into the copy the batch returns (decision 78).
+    /// [`nd::ANCHOR_SEED_RUNS`]. Every failing run is grafted into the
+    /// graph (unless foreign) and the next replay walks the grafted graph
+    /// (experiment 020): the counterexample under confirmation is the one
+    /// the batch will store, and a failure with many structures — each
+    /// reproducing rarely from a single run — confirms as the batch learns
+    /// them.
     async fn nd_evidence_batch(
         &mut self,
         origin: &str,
@@ -2080,29 +2083,43 @@ impl<'a> Engine<'a> {
         let mut witness = None;
         let mut grafted = (*graph).clone();
         let mut grafted_longest = longest;
-        let max_size = nd::continuation_budget(longest);
         let capture_entry = self.capture_replays;
         self.capture_replays = true;
+        let mut current = graph;
+        let mut accepted = false;
         let bar_accepted = loop {
-            if deadline.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d)) {
+            if accepted && evidence.runs() >= nd::ANCHOR_SEED_RUNS {
+                break true;
+            }
+            if !accepted
+                && deadline.is_some_and(|d| crate::sys::Instant::now().is_some_and(|now| now >= d))
+            {
                 break false;
             }
             let replay = self
-                .nd_replay_graph(Arc::clone(&graph), max_size, Some(origin))
+                .nd_replay_graph(
+                    Arc::clone(&current),
+                    nd::continuation_budget(grafted_longest),
+                    Some(origin),
+                )
                 .await?;
             evidence.record(replay.failed);
             if replay.failed {
-                graft_failure(&mut grafted, &mut grafted_longest, &replay.run);
+                if graft_failure(&mut grafted, &mut grafted_longest, &replay.run) {
+                    current = Arc::new(grafted.clone());
+                }
                 if witness.is_none() {
                     witness = Some(replay.run);
                 }
             }
+            if accepted {
+                continue;
+            }
             match nd::discovery_bar(&evidence) {
                 nd::BarVerdict::Accept => {
                     if witness.is_some() {
-                        break true;
-                    }
-                    if evidence.runs() >= nd::CONFIRM_CAP {
+                        accepted = true;
+                    } else if evidence.runs() >= nd::CONFIRM_CAP {
                         break false;
                     }
                 }
@@ -2110,15 +2127,6 @@ impl<'a> Engine<'a> {
                 nd::BarVerdict::Continue => {}
             }
         };
-        while bar_accepted && evidence.runs() < nd::ANCHOR_SEED_RUNS {
-            let replay = self
-                .nd_replay_graph(Arc::clone(&graph), max_size, Some(origin))
-                .await?;
-            evidence.record(replay.failed);
-            if replay.failed {
-                graft_failure(&mut grafted, &mut grafted_longest, &replay.run);
-            }
-        }
         self.capture_replays = capture_entry;
         Ok(NdBatch {
             bar_accepted,
@@ -3239,16 +3247,19 @@ fn run_of(run: &RunResult) -> Run {
 
 /// Graft a failing replay into `graph` (unless foreign to it) and stretch
 /// `longest` to it.
-fn graft_failure(graph: &mut Graph, longest: &mut usize, run: &RunResult) {
-    graft_run(graph, longest, &run.nodes, &run.spans);
+fn graft_failure(graph: &mut Graph, longest: &mut usize, run: &RunResult) -> bool {
+    graft_run(graph, longest, &run.nodes, &run.spans)
 }
 
 /// Graft a failing run — its nodes and the spans they were realized under
-/// — into `graph` (unless foreign to it) and stretch `longest` to it.
-fn graft_run(graph: &mut Graph, longest: &mut usize, nodes: &[ChoiceNode], spans: &[Span]) {
-    if graph.graft(&Run::from_nodes(nodes, spans)) {
+/// — into `graph` (unless foreign to it) and stretch `longest` to it,
+/// returning whether the graph changed.
+fn graft_run(graph: &mut Graph, longest: &mut usize, nodes: &[ChoiceNode], spans: &[Span]) -> bool {
+    let grafted = graph.graft(&Run::from_nodes(nodes, spans));
+    if grafted {
         *longest = (*longest).max(crate::native::core::flattened_len(nodes));
     }
+    grafted
 }
 
 /// The engine side of the shrinker's [`ShrinkProbe`] for a deterministic

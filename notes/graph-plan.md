@@ -88,3 +88,9 @@ live set over whole timelines (`for_counterexample`) survives only as a test sea
 - Shrinking a clone's records (they are deleted whole or kept).
 - An engine-side cost measurement of the graph shrink against the pool's (016's bodies);
   the experiments measured the harness only.
+
+Outcome (2026-09-21, experiment 020, decision 79): the cost measurement was made through
+the pipeline and found the graph port had dropped decision 54's anchor top-up and the bar
+was replaying the raw run; both fixed, and the warm-up (019 (f)) is now the confirmation
+batch's behaviour. Still to do from this list: deletion weighing settlement evidence
+(loop8 runs to the deadline one or two edges short), value coupling, clone records.

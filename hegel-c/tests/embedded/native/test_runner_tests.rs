@@ -3150,6 +3150,63 @@ fn an_out_of_attempts_review_evicts_without_a_batch() {
 }
 
 #[test]
+fn the_evidence_batch_replays_the_graph_it_grafts_into() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let execs = AtomicUsize::new(0);
+    let served: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+    let bug = "arm";
+    with_engine(
+        nd_settings(),
+        None,
+        |ds| {
+            let Ok(a) = rbool(ds) else {
+                return TestCaseResult::Overrun;
+            };
+            let n = execs.fetch_add(1, Ordering::SeqCst);
+            ds.start_span(1001).unwrap();
+            let piece = if n % 2 == 0 {
+                rbool(ds).map(|_| ())
+            } else {
+                rint(ds, 0, 1_000_000).map(|x| served.lock().unwrap().push(x))
+            };
+            ds.stop_span(false).unwrap();
+            if piece.is_err() {
+                return TestCaseResult::Overrun;
+            }
+            if a { boom(bug) } else { TestCaseResult::Valid }
+        },
+        async |ctx| {
+            let origin = format!("Panic: {bug}");
+            ctx.nd_flip();
+            let boolean = crate::hegel_label_t::HEGEL_LABEL_BOOLEAN as u64;
+            let raw = Arc::new(Graph::from_run(&Run {
+                steps: vec![
+                    crate::native::graph::Step {
+                        addr: vec![(boolean, 0)],
+                        value: ChoiceValue::Boolean(true),
+                    },
+                    crate::native::graph::Step {
+                        addr: vec![(1001, 0), (boolean, 0)],
+                        value: ChoiceValue::Boolean(true),
+                    },
+                ],
+            }));
+            let batch = ctx.nd_evidence_batch(&origin, raw, 2, None).await.unwrap();
+            assert!(batch.bar_accepted);
+            assert_eq!(batch.evidence.runs(), nd::ANCHOR_SEED_RUNS);
+            assert_eq!(batch.graph.edge_count(), 3, "the int arm is grafted");
+            let served = served.lock().unwrap();
+            assert_eq!(served.len(), (nd::ANCHOR_SEED_RUNS / 2) as usize);
+            assert!(
+                served.iter().all(|&x| x == served[0]),
+                "every int-arm replay after the first is served the grafted value: {served:?}"
+            );
+        },
+    );
+}
+
+#[test]
 fn an_expired_deadline_rejects_the_evidence_batch() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let execs = AtomicUsize::new(0);
