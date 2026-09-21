@@ -133,6 +133,42 @@ fn drive_to_overrun(tc: &TestCase) {
     );
 }
 
+/// A generator that reports how many spans were open on the instance while
+/// it was drawing.
+struct SpanDepthProbe;
+
+impl gs::Generator<usize> for SpanDepthProbe {
+    fn do_draw(&self, tc: &TestCase) -> usize {
+        tc.open_span_depth()
+    }
+}
+
+impl gs::PrintableGenerator<usize> for SpanDepthProbe {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> usize {
+        gs::draw_and_print_value(self, tc, printer)
+    }
+}
+
+/// Every draw entry point runs its generator inside exactly one span of its
+/// own (labelled with the generator's label), closed again once the draw
+/// returns.
+#[test]
+fn every_draw_runs_its_generator_inside_one_span() {
+    let (_run, tc) = emitting_test_case();
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw_silent(SpanDepthProbe), 1);
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw(SpanDepthProbe), 1);
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(
+        tc.draw_and_print(SpanDepthProbe, &mut PrettyPrinter::noop()),
+        1
+    );
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw_silent(gs::vecs(SpanDepthProbe).min_size(1))[0], 2);
+    assert_eq!(tc.open_span_depth(), 0);
+}
+
 #[test]
 fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;

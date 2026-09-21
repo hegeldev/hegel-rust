@@ -7,6 +7,7 @@ use std::sync::Arc;
 const MAP_LABEL: u64 = label_from_name("hegel.map");
 const FLAT_MAP_LABEL: u64 = label_from_name("hegel.flat_map");
 const FILTER_LABEL: u64 = label_from_name("hegel.filter");
+const FILTER_ATTEMPT_LABEL: u64 = label_from_name("hegel.filter.attempt");
 
 /// The core trait for all generators.
 ///
@@ -14,13 +15,24 @@ const FILTER_LABEL: u64 = label_from_name("hegel.filter");
 /// the [`TestCase`] passed to [`do_draw`](Self::do_draw).
 pub trait Generator<T> {
     /// Produce a value.
+    ///
+    /// Called by the [`TestCase`] draw methods, which run it inside a span
+    /// labelled with [`label`](Self::label). An implementation that draws
+    /// from component generators should draw them through
+    /// [`TestCase::draw_silent`] (or [`TestCase::draw_and_print`]) rather
+    /// than calling their `do_draw` directly, so each component's choices
+    /// get a span of their own; only a generator that merely forwards to a
+    /// wrapped generator, without drawing anything else, should call the
+    /// wrapped `do_draw` directly, so the forwarding layer doesn't register
+    /// as a second span.
     #[doc(hidden)]
     fn do_draw(&self, tc: &TestCase) -> T;
 
     /// The label identifying this generator to the engine.
     ///
-    /// A label is an opaque `u64` with no meaning beyond identity: the engine
-    /// treats two spans with the same label as coming from the same
+    /// Every draw from this generator runs inside a span carrying this
+    /// label. A label is an opaque `u64` with no meaning beyond identity: the
+    /// engine treats two spans with the same label as coming from the same
     /// generator, and so as candidates for swapping, duplicating and
     /// reordering when it shrinks and mutates test cases. Two generators that
     /// draw the same shape of value should share a label, and generators
@@ -258,10 +270,11 @@ pub trait PrintableGenerator<T>: Generator<T> {
     ///
     /// A compositional implementation draws each inner generator with
     /// [`TestCase::draw_and_print`], the framework's one entry point for
-    /// printed inner draws; a generator that merely forwards to an inner
+    /// printed inner draws, which also opens the span grouping the inner
+    /// generator's choices; a generator that merely forwards to an inner
     /// printable generator without printing or drawing anything itself calls
     /// the inner generator's `do_draw_and_print` directly instead, so the
-    /// forwarding layer doesn't register as a second region.
+    /// forwarding layer doesn't register as a second region or span.
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
 
     /// Convert this generator into a type-erased boxed printable generator,
@@ -416,10 +429,7 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> U {
-        tc.start_span(self.label());
-        let result = (self.f)(self.source.do_draw(tc));
-        tc.stop_span(false);
-        result
+        (self.f)(tc.draw_silent(&self.source))
     }
 }
 
@@ -510,13 +520,10 @@ where
     F: Fn(T) -> U + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
-        tc.start_span(self.label());
         printer.begin_group(self.open.chars().count(), &self.open);
         let input = tc.draw_and_print(&self.source, printer);
         printer.end_group(")");
-        let result = (self.f)(input);
-        tc.stop_span(false);
-        result
+        (self.f)(input)
     }
 }
 
@@ -535,12 +542,9 @@ where
     /// The one flat-map body both draw paths run; only how the derived
     /// generator is drawn (silently or printing) is injected.
     fn draw_flat_mapped(&self, tc: &TestCase, draw_next: impl FnOnce(G2, &TestCase) -> U) -> U {
-        tc.start_span(combine_labels(&[FLAT_MAP_LABEL, self.source.label()]));
-        let intermediate = self.source.do_draw(tc);
+        let intermediate = tc.draw_silent(&self.source);
         let next_gen = (self.f)(intermediate);
-        let result = draw_next(next_gen, tc);
-        tc.stop_span(false);
-        result
+        draw_next(next_gen, tc)
     }
 }
 
@@ -555,7 +559,7 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> U {
-        self.draw_flat_mapped(tc, |next_gen, tc| next_gen.do_draw(tc))
+        self.draw_flat_mapped(tc, |next_gen, tc| tc.draw_silent(next_gen))
     }
 }
 
@@ -584,17 +588,18 @@ where
     /// The one filtering loop both draw paths run: each attempt draws
     /// inside a speculative print region, so a rejected attempt discards
     /// whatever the injected `draw` printed — only the accepted value's
-    /// representation survives. The silent path passes the no-op printer
-    /// and a print-free `draw`.
+    /// representation survives — and inside a span of its own, closed as
+    /// discarded when the attempt is rejected so the shrinker can remove
+    /// it. The silent path passes the no-op printer and a print-free
+    /// `draw`.
     fn draw_filtered(
         &self,
         tc: &TestCase,
-        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> T {
         for _ in 0..3 {
-            tc.start_span(label);
+            tc.start_span(FILTER_ATTEMPT_LABEL);
             let mut speculation = printer.speculate();
             let value = draw(&self.source, tc, speculation.printer());
             if (self.predicate)(&value) {
@@ -620,12 +625,9 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
-        self.draw_filtered(
-            tc,
-            self.label(),
-            &mut PrettyPrinter::noop(),
-            |source, tc, _| source.do_draw(tc),
-        )
+        self.draw_filtered(tc, &mut PrettyPrinter::noop(), |source, tc, _| {
+            tc.draw_silent(source)
+        })
     }
 }
 
@@ -635,7 +637,7 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        self.draw_filtered(tc, self.label(), printer, |source, tc, printer| {
+        self.draw_filtered(tc, printer, |source, tc, printer| {
             tc.draw_and_print(source, printer)
         })
     }

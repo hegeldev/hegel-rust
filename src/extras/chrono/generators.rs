@@ -629,7 +629,8 @@ impl<S> NaiveWeekGenerator<S> {
 
 impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
     fn do_draw(&self, tc: &TestCase) -> NaiveWeek {
-        let (date, start) = crate::generators::tuples2(&self.date_gen, &self.start_gen).do_draw(tc);
+        let (date, start) =
+            tc.draw_silent(crate::generators::tuples2(&self.date_gen, &self.start_gen));
         date.week(start)
     }
 }
@@ -747,7 +748,7 @@ where
             .min_value(self.min_value)
             .max_value(self.max_value)
             .do_draw(tc);
-        let tz = self.tz_gen.do_draw(tc);
+        let tz = tc.draw_silent(&self.tz_gen);
         match tz.from_local_datetime(&naive).earliest() {
             Some(dt) => dt,
             None => {

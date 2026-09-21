@@ -165,12 +165,12 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
 
     let construct = if is_tuple {
         let draws = field_names.iter().map(|name| {
-            quote! { self.#name.do_draw(__tc) }
+            quote! { __tc.draw_silent(&self.#name) }
         });
         quote! { #name(#(#draws,)*) }
     } else {
         let generate_fields = field_names.iter().map(|name| {
-            quote! { #name: self.#name.do_draw(__tc) }
+            quote! { #name: __tc.draw_silent(&self.#name) }
         });
         quote! { #name { #(#generate_fields,)* } }
     };
@@ -253,10 +253,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 }
 
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(self.label());
-                    let __result = #construct;
-                    __tc.stop_span(false);
-                    __result
+                    #construct
                 }
             }
 
@@ -272,11 +269,8 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    __tc.start_span(self.label());
                     #print_body
-                    let __result = #print_construct;
-                    __tc.stop_span(false);
-                    __result
+                    #print_construct
                 }
             }
 

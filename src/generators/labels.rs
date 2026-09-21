@@ -53,7 +53,7 @@ pub const fn label_from_name(name: &str) -> u64 {
 ///     }
 ///
 ///     fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
-///         (self.inner.do_draw(tc), self.inner.do_draw(tc))
+///         (tc.draw_silent(&self.inner), tc.draw_silent(&self.inner))
 ///     }
 /// }
 /// ```

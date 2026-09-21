@@ -100,10 +100,7 @@ macro_rules! impl_tuple {
             }
 
             fn do_draw(&self, tc: &TestCase) -> ($($T,)+) {
-                tc.start_span(self.label());
-                let result = ($(self.$field.do_draw(tc),)+);
-                tc.stop_span(false);
-                result
+                ($(tc.draw_silent(&self.$field),)+)
             }
         }
 
@@ -116,7 +113,6 @@ macro_rules! impl_tuple {
                 tc: &TestCase,
                 printer: &mut PrettyPrinter,
             ) -> ($($T,)+) {
-                tc.start_span(self.label());
                 printer.begin_group(1, "(");
                 let mut index = 0usize;
                 let result = ($(
@@ -133,7 +129,6 @@ macro_rules! impl_tuple {
                     printer.text(",");
                 }
                 printer.end_group(")");
-                tc.stop_span(false);
                 result
             }
         }

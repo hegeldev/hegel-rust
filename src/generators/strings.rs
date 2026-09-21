@@ -573,14 +573,11 @@ impl IpAddressGenerator {
 
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
     fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
-        tc.start_span(self.label());
-        let addr = if tc.generate_integer_i64(0, 1) == 0 {
+        if tc.generate_integer_i64(0, 1) == 0 {
             std::net::IpAddr::V4(tc.generate_ipv4())
         } else {
             std::net::IpAddr::V6(tc.generate_ipv6())
-        };
-        tc.stop_span(false);
-        addr
+        }
     }
 }
 

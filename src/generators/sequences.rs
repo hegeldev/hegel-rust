@@ -66,9 +66,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SubsequenceGenerator
             );
         }
         let max_size = self.max_size.map_or(n, |m| m.min(n));
-        tc.start_span(self.label());
         let mut indices = draw_index_sample(tc, n, self.min_size, max_size);
-        tc.stop_span(false);
         indices.sort_unstable();
         indices
             .into_iter()
@@ -136,9 +134,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for PermutationGenerator
 
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let n = self.elements.len();
-        tc.start_span(self.label());
         let indices = draw_index_sample(tc, n, n, n);
-        tc.stop_span(false);
         indices
             .into_iter()
             .map(|i| self.elements[i].clone())
@@ -246,14 +242,12 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, 
                 invalid_argument!("Cannot generate a non-empty sample from an empty sequence");
             }
             let max_size = if n == 0 { Some(0) } else { self.max_size };
-            tc.start_span(self.label());
             let mut collection = Collection::new(tc, self.min_size, max_size);
             let mut result = Vec::new();
             while collection.more() {
                 let i = tc.generate_integer_i64(0, n as i64 - 1) as usize;
                 result.push(self.elements[i].clone());
             }
-            tc.stop_span(false);
             result
         } else {
             if self.min_size > n {
@@ -264,9 +258,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, 
                 );
             }
             let max_size = self.max_size.map_or(n, |m| m.min(n));
-            tc.start_span(self.label());
             let indices = draw_index_sample(tc, n, self.min_size, max_size);
-            tc.stop_span(false);
             indices
                 .into_iter()
                 .map(|i| self.elements[i].clone())

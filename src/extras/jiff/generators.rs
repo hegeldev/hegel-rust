@@ -695,8 +695,10 @@ where
     TZ: Generator<TimeZone>,
 {
     fn do_draw(&self, tc: &TestCase) -> Zoned {
-        let (ts, tz) =
-            crate::generators::tuples2(&self.timestamp_gen, &self.timezone_gen).do_draw(tc);
+        let (ts, tz) = tc.draw_silent(crate::generators::tuples2(
+            &self.timestamp_gen,
+            &self.timezone_gen,
+        ));
         Zoned::new(ts, tz)
     }
 }

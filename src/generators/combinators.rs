@@ -92,25 +92,16 @@ pub trait PrintableAlternatives<T>: Alternatives<T> {
     fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, index: usize) -> T;
 }
 
-/// The choice structure every `one_of` draw shares — a span around a
-/// uniform index draw followed by the chosen alternative — with the
-/// alternative dispatch (and whether it draws silently or printing)
-/// injected. Using this from both draw paths is what keeps their choice
-/// streams identical.
-fn draw_one_of<T>(
-    tc: &TestCase,
-    label: u64,
-    max_index: usize,
-    draw_at: impl FnOnce(usize) -> T,
-) -> T {
-    tc.start_span(label);
+/// The choice structure every `one_of` draw shares — a uniform index draw
+/// followed by the chosen alternative — with the alternative dispatch (and
+/// whether it draws silently or printing) injected. Using this from both
+/// draw paths is what keeps their choice streams identical.
+fn draw_one_of<T>(tc: &TestCase, max_index: usize, draw_at: impl FnOnce(usize) -> T) -> T {
     let index = integers::<usize>()
         .min_value(0)
         .max_value(max_index)
         .do_draw(tc);
-    let result = draw_at(index);
-    tc.stop_span(false);
-    result
+    draw_at(index)
 }
 
 impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
@@ -119,7 +110,7 @@ impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
-        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+        draw_one_of(tc, self.alternatives.max_index(), |index| {
             self.alternatives.draw_at(tc, index)
         })
     }
@@ -127,7 +118,7 @@ impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
 
 impl<'a, T, A: PrintableAlternatives<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, A> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+        draw_one_of(tc, self.alternatives.max_index(), |index| {
             self.alternatives.draw_at_and_print(tc, printer, index)
         })
     }
@@ -138,7 +129,7 @@ impl<T, B: Generator<T>> Alternatives<T> for Vec<B> {
         self.len() - 1
     }
     fn draw_at(&self, tc: &TestCase, index: usize) -> T {
-        self[index].do_draw(tc)
+        tc.draw_silent(&self[index])
     }
     fn label(&self) -> u64 {
         combine_labels(&self.iter().map(Generator::label).collect::<Vec<_>>())
@@ -163,7 +154,7 @@ impl<T, G: Generator<T>> Alternatives<T> for OneOfLast<G> {
         0
     }
     fn draw_at(&self, tc: &TestCase, _index: usize) -> T {
-        self.0.do_draw(tc)
+        tc.draw_silent(&self.0)
     }
     fn label(&self) -> u64 {
         combine_labels(&[self.0.label()])
@@ -182,7 +173,7 @@ impl<T, G: Generator<T>, R: Alternatives<T>> Alternatives<T> for OneOfCons<G, R>
     }
     fn draw_at(&self, tc: &TestCase, index: usize) -> T {
         if index == 0 {
-            self.0.do_draw(tc)
+            tc.draw_silent(&self.0)
         } else {
             self.1.draw_at(tc, index - 1)
         }
@@ -287,12 +278,10 @@ impl<T, G> OptionalGenerator<G, T> {
     fn draw_optional(
         &self,
         tc: &TestCase,
-        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl FnOnce(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> Option<T> {
-        tc.start_span(label);
-        let result = if tc.generate_boolean(0.5) {
+        if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
             let value = draw(&self.inner, tc, printer);
             printer.end_group(")");
@@ -300,9 +289,7 @@ impl<T, G> OptionalGenerator<G, T> {
         } else {
             printer.text("None");
             None
-        };
-        tc.stop_span(false);
-        result
+        }
     }
 }
 
@@ -315,12 +302,9 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        self.draw_optional(
-            tc,
-            self.label(),
-            &mut PrettyPrinter::noop(),
-            |inner, tc, _| inner.do_draw(tc),
-        )
+        self.draw_optional(tc, &mut PrettyPrinter::noop(), |inner, tc, _| {
+            tc.draw_silent(inner)
+        })
     }
 }
 
@@ -329,7 +313,7 @@ where
     G: PrintableGenerator<T>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
-        self.draw_optional(tc, self.label(), printer, |inner, tc, printer| {
+        self.draw_optional(tc, printer, |inner, tc, printer| {
             tc.draw_and_print(inner, printer)
         })
     }

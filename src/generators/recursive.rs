@@ -28,7 +28,7 @@ trait SubtreeDraw<T>: Send + Sync {
 }
 
 /// The erased core of a silent draw: ignores the printer and draws the leaf
-/// and branch generators through [`Generator::do_draw`].
+/// and branch generators through [`TestCase::draw_silent`].
 struct SilentCore<G, F, R> {
     leaf: Arc<G>,
     branch: Arc<F>,
@@ -42,7 +42,7 @@ where
     R: Generator<T>,
 {
     fn draw_leaf(&self, tc: &TestCase, _printer: &mut PrettyPrinter) -> T {
-        self.leaf.do_draw(tc)
+        tc.draw_silent(&*self.leaf)
     }
 
     fn draw_branch(
@@ -51,7 +51,7 @@ where
         subtrees: SubtreeGenerator<T>,
         _printer: &mut PrettyPrinter,
     ) -> T {
-        (self.branch)(subtrees).do_draw(tc)
+        tc.draw_silent((self.branch)(subtrees))
     }
 }
 
@@ -133,7 +133,6 @@ impl<T> SubtreeGenerator<T> {
     /// The one leaf-or-branch body both draw paths run; the silent path
     /// passes the no-op printer.
     fn draw_subtree(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        tc.start_span(self.label);
         let branch = match tc.with_ctc(|ctc| ctc.recursion_branch(&self.recursion, self.depth)) {
             Ok(branch) => branch,
             Err(rc) => raise_for_rc(rc),
@@ -154,7 +153,6 @@ impl<T> SubtreeGenerator<T> {
                 raise_for_rc(rc);
             }
         }
-        tc.stop_span(false);
         result
     }
 }

@@ -543,10 +543,10 @@ impl TestCase {
             local.span_depth > 0 || local.printing_depth > 0
         };
         if mid_draw {
-            return generator.do_draw(self);
+            return self.draw_silent(generator);
         }
         let Some(display_name) = self.allocate_display_name(name, repeatable) else {
-            return generator.do_draw(self);
+            return self.draw_silent(generator);
         };
         let _printing = PrintingDrawScope::new(self);
         self.with_printer(|printer| {
@@ -566,8 +566,18 @@ impl TestCase {
     /// Unlike [`draw`](Self::draw), this accepts any plain [`Generator`] —
     /// no printability required — and will not print the value in the
     /// failing-test summary.
+    ///
+    /// Like every draw, this runs the generator inside a span labelled with
+    /// its [`label`](crate::generators::Generator::label), so a generator
+    /// that draws from component generators should draw them through this
+    /// (or [`draw_and_print`](Self::draw_and_print)) rather than calling
+    /// their `do_draw` directly: that is what groups each component's
+    /// choices for the shrinker.
     pub fn draw_silent<T>(&self, generator: impl Generator<T>) -> T {
-        generator.do_draw(self)
+        self.start_span(generator.label());
+        let value = generator.do_draw(self);
+        self.stop_span(false);
+        value
     }
 
     /// Draw a value from a generator, printing its representation to
@@ -577,19 +587,24 @@ impl TestCase {
     /// generator from its own
     /// [`do_draw_and_print`](PrintableGenerator::do_draw_and_print) (and how
     /// [`draw`](Self::draw) runs its argument): routing every inner draw
-    /// through this one entry point keeps the printed region of a draw a
+    /// through this one entry point keeps the printed region of a draw, and
+    /// the span grouping its choices for the shrinker (labelled with the
+    /// generator's [`label`](crate::generators::Generator::label)), a
     /// framework concern rather than something each generator re-implements.
     ///
     /// A generator that merely forwards to an inner printable generator
     /// without printing or drawing anything itself should call the inner
     /// generator's `do_draw_and_print` directly instead, so the forwarding
-    /// layer doesn't register as a second region.
+    /// layer doesn't register as a second region or span.
     pub fn draw_and_print<T>(
         &self,
         generator: impl PrintableGenerator<T>,
         printer: &mut PrettyPrinter,
     ) -> T {
-        generator.do_draw_and_print(self, printer)
+        self.start_span(generator.label());
+        let value = generator.do_draw_and_print(self, printer);
+        self.stop_span(false);
+        value
     }
 
     /// Assume a condition is true. If false, reject the current test input.
@@ -981,6 +996,9 @@ impl TestCase {
     /// Open a span labelled `label` (see
     /// [`Generator::label`](crate::generators::Generator::label)) grouping
     /// the draws made until the matching [`stop_span`](Self::stop_span).
+    /// Every draw already runs inside a span labelled with its generator's
+    /// label, so a generator only needs this for spans it must close with
+    /// `discard = true` (a rejected attempt, say).
     #[doc(hidden)]
     pub fn start_span(&self, label: u64) {
         self.local.borrow_mut().span_depth += 1;

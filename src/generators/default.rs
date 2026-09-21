@@ -405,7 +405,7 @@ macro_rules! derive_generator {
         impl<'a> $crate::generators::Generator<$struct_type> for $gen_name<'a> {
             fn do_draw(&self, __tc: &$crate::TestCase) -> $struct_type {
                 $struct_type {
-                    $($field_name: $crate::generators::Generator::do_draw(&self.$field_name, __tc),)*
+                    $($field_name: __tc.draw_silent(&self.$field_name),)*
                 }
             }
         }

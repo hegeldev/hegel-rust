@@ -320,7 +320,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 Fields::Unit => quote! { #i => #enum_name::#variant_name },
                 _ => {
                     let field_name = variant_to_field[&variant.ident.to_string()];
-                    quote! { #i => self.#field_name.do_draw(__tc) }
+                    quote! { #i => __tc.draw_silent(&self.#field_name) }
                 }
             }
         })
@@ -446,15 +446,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 }
 
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(self.label());
                     let index: usize = #variant_index_draw;
-
-                    let __result = match index {
+                    match index {
                         #(#generate_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
-                    };
-                    __tc.stop_span(false);
-                    __result
+                    }
                 }
             }
 
@@ -469,15 +465,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    __tc.start_span(self.label());
                     let index: usize = #variant_index_draw;
-
-                    let __result = match index {
+                    match index {
                         #(#print_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
-                    };
-                    __tc.stop_span(false);
-                    __result
+                    }
                 }
             }
         }
@@ -652,7 +644,7 @@ fn generate_variant_generator(
         let field_constructions: Vec<_> = field_idents
             .iter()
             .map(|ident| {
-                quote! { #ident: self.#ident.do_draw(__tc) }
+                quote! { #ident: __tc.draw_silent(&self.#ident) }
             })
             .collect();
         let print_idents: Vec<_> = (0..field_idents.len())
@@ -676,7 +668,7 @@ fn generate_variant_generator(
         let field_generates: Vec<_> = field_idents
             .iter()
             .map(|ident| {
-                quote! { self.#ident.do_draw(__tc) }
+                quote! { __tc.draw_silent(&self.#ident) }
             })
             .collect();
         let print_idents: Vec<_> = (0..field_idents.len())
