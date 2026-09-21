@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.46.2 - 2026-09-21
+
+This patch fixes usage errors and internal errors raised inside a test body — a non-finite `tc.target()` score, a generator bound with `max < min`, an empty `sampled_from`, ... — aborting the run with no output at all. The run still fails as before, but the error message is now printed like any other panic, instead of the process (or `#[hegel::test]`) exiting with a bare failure and nothing explaining why ([#47](https://github.com/hegeldev/hegel-rust/issues/47)).
+
 ## 0.46.1 - 2026-09-17
 
 This release updates the `hegeltest-c` dependency to 0.43.1.
