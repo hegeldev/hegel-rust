@@ -98,6 +98,10 @@ path = "tests/fixtures/threaded_rejects.rs"
 name = "fixture_main_profile"
 path = "tests/fixtures/main_profile.rs"
 
+[[bin]]
+name = "fixture_target_nan"
+path = "tests/fixtures/target_nan.rs"
+
 [dependencies]
 parking_lot = "0.12"
 hegeltest-macros = { version = "=0.46.1", path = "hegel-macros" }

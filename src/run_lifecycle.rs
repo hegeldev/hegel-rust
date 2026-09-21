@@ -314,11 +314,11 @@ pub(crate) fn run_test_case(
         Err(e) if e.downcast_ref::<LoopDone>().is_some() => (TestCaseResult::Valid, None, None),
         Err(e) => {
             let e = match e.downcast::<InvalidArgument>() {
-                Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
+                Ok(invalid) => panic!("{}", invalid.0),
                 Err(e) => e,
             };
             let e = match e.downcast::<InternalError>() {
-                Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
+                Ok(internal) => panic!("{}", internal.0),
                 Err(e) => e,
             };
             let (thread_name, thread_id, location, backtrace) =
