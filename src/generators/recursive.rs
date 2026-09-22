@@ -353,3 +353,7 @@ where
         _phantom: PhantomData,
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/embedded/generators/recursive_tests.rs"]
+mod tests;

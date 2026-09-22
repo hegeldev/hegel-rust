@@ -151,11 +151,9 @@ fn test_recursive_on_an_exhausted_stream_is_an_overrun() {
 }
 
 /// Exhausts the stream *inside* the leaf generator (catching the unwind, as
-/// the test body itself may) so that the value still completes: the
-/// finished-value check then runs against an already-aborted stream and
-/// must surface the overrun rather than accept the value. The leaf is a
-/// hand-written generator so that no span bookkeeping runs between the
-/// exhaustion and the finished-value check.
+/// the test body itself may) so that the leaf still returns a value: the
+/// draw must then surface the overrun rather than complete the recursive
+/// value on an already-aborted stream.
 #[test]
 fn test_recursive_completing_on_an_exhausted_stream_is_an_overrun() {
     struct ExhaustingLeaf;
