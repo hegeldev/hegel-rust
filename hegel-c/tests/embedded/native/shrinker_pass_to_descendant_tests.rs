@@ -6,7 +6,6 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,11 +21,11 @@ fn int_node(value: i128) -> ChoiceNode {
     )
 }
 
-fn lab(start: usize, end: usize, label: &str) -> Span {
+fn lab(start: usize, end: usize, label: u64) -> Span {
     Span {
         start,
         end,
-        label: label.to_string(),
+        label,
         depth: 0,
         parent: None,
         discarded: false,
@@ -43,8 +42,8 @@ fn pass_to_descendant_replaces_outer_with_inner_same_label() {
         int_node(5),
     ];
     let mut spans = Spans::new();
-    spans.push(lab(0, 5, "tree"));
-    spans.push(lab(2, 4, "tree"));
+    spans.push(lab(0, 5, 1));
+    spans.push(lab(2, 4, 1));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -71,8 +70,8 @@ fn pass_to_descendant_replaces_outer_with_inner_same_label() {
 fn pass_to_descendant_skips_different_labels() {
     let initial = vec![int_node(1), int_node(2), int_node(3)];
     let mut spans = Spans::new();
-    spans.push(lab(0, 3, "outer"));
-    spans.push(lab(1, 2, "inner"));
+    spans.push(lab(0, 3, 1));
+    spans.push(lab(1, 2, 2));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -90,8 +89,8 @@ fn pass_to_descendant_skips_different_labels() {
 fn pass_to_descendant_skips_equal_length_descendant() {
     let initial = vec![int_node(7), int_node(8)];
     let mut spans = Spans::new();
-    spans.push(lab(0, 2, "tree"));
-    spans.push(lab(0, 2, "tree"));
+    spans.push(lab(0, 2, 1));
+    spans.push(lab(0, 2, 1));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -116,9 +115,9 @@ fn pass_to_descendant_handles_multiple_descendants() {
         int_node(6),
     ];
     let mut spans = Spans::new();
-    spans.push(lab(0, 6, "tree"));
-    spans.push(lab(1, 4, "tree"));
-    spans.push(lab(2, 3, "tree"));
+    spans.push(lab(0, 6, 1));
+    spans.push(lab(1, 4, 1));
+    spans.push(lab(2, 3, 1));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -136,8 +135,8 @@ fn pass_to_descendant_handles_multiple_descendants() {
 fn pass_to_descendant_safe_when_indices_outrange_after_shrink() {
     let initial = vec![int_node(1), int_node(2)];
     let mut spans = Spans::new();
-    spans.push(lab(0, 5, "tree"));
-    spans.push(lab(1, 3, "tree"));
+    spans.push(lab(0, 5, 1));
+    spans.push(lab(1, 3, 1));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {

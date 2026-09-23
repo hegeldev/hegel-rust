@@ -26,10 +26,7 @@ fn take_nodes_and_take_spans_return_recorded_data() {
     let spans = NativeDataSource::take_spans(&handle);
     assert_eq!(nodes.len(), 1);
     assert_eq!(spans.len(), 1);
-    assert_eq!(
-        spans[0].label,
-        crate::native::draws::LABEL_INTEGER.to_string()
-    );
+    assert_eq!(spans[0].label, crate::native::draws::LABEL_INTEGER);
 }
 
 #[test]
@@ -42,10 +39,10 @@ fn start_and_stop_span_return_ok() {
 
     let spans = NativeDataSource::take_spans(&handle);
     assert_eq!(spans.len(), 2);
-    assert_eq!(spans[0].label, "42");
+    assert_eq!(spans[0].label, 42);
     assert_eq!(spans[0].start, spans[0].end);
     assert!(!spans[0].discarded);
-    assert_eq!(spans[1].label, "17");
+    assert_eq!(spans[1].label, 17);
     assert_eq!(spans[1].start, spans[1].end);
     assert!(spans[1].discarded);
 }

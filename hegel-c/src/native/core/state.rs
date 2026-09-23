@@ -1,8 +1,7 @@
-use crate::native::{HashMap, HashSet};
+use crate::native::HashMap;
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -1194,7 +1193,7 @@ impl NativeVariables {
 }
 
 /// A span within the choice sequence, labelled by draw kind or by the
-/// numeric label of an enclosing `start_span` call.
+/// label of an enclosing `start_span` call.
 ///
 /// Recorded to enable span-mutation exploration (see `try_span_mutation`)
 /// and to expose the structure of a test case to the shrinker, mutator,
@@ -1203,7 +1202,7 @@ impl NativeVariables {
 pub struct Span {
     pub start: usize,
     pub end: usize,
-    pub label: String,
+    pub label: u64,
     /// Depth of this span in the span tree. The top-level span has depth 0.
     pub depth: u32,
     /// Index of the directly-enclosing span, or `None` for the top-level span.
@@ -1224,30 +1223,6 @@ pub struct Span {
 /// deep, several times anything a plausible `max_depth` produces, yet
 /// usually below the depth where the frontend's drawing stack overflows.
 pub const MAX_DEPTH: u32 = 1000;
-
-/// A tag identifying a structural-coverage class for a span label.
-///
-/// Two tags compare equal iff they were produced from the same label, and
-/// [`structural_coverage`] interns them so that callers also get
-/// pointer-equal results for equal labels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CoverageTag {
-    pub label: u64,
-}
-
-static STRUCTURAL_COVERAGE_CACHE: Lazy<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    Lazy::new(|| Mutex::new(HashMap::default()));
-
-/// Look up (or insert) the [`CoverageTag`] for `label`.
-///
-/// Repeated calls with the same `label` return the same `&'static`
-/// reference.
-pub fn structural_coverage(label: u64) -> &'static CoverageTag {
-    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock();
-    cache
-        .entry(label)
-        .or_insert_with(|| Box::leak(Box::new(CoverageTag { label })))
-}
 
 /// A collection of spans recorded during a single test case, with
 /// wrap-around signed indexing semantics on top of [`Vec<Span>`].
@@ -1573,20 +1548,6 @@ pub struct NativeTestCase {
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
     pub has_discards: bool,
-    /// Structural-coverage tags accumulated by closing non-discarded
-    /// spans. When a span closes without `discard`, every label collected
-    /// by it (including its non-discarded descendants) is added here as a
-    /// [`structural_coverage`] tag. Discarded spans drop their labels
-    /// (and their descendants' labels) on the floor.
-    pub tags: HashSet<&'static CoverageTag>,
-    /// Per-open-span sets of labels awaiting promotion into [`Self::tags`].
-    ///
-    /// Each `start_span` pushes a fresh `{label}` frame; `stop_span`
-    /// pops it and either merges the frame into its parent (non-discard)
-    /// or discards it (discard). When the outermost frame closes
-    /// without discard, its labels are converted to [`CoverageTag`]s
-    /// and added to `tags`.
-    labels_for_structure_stack: Vec<HashSet<u64>>,
     /// Optional observer notified after each draw and on conclusion.
     /// Set by [`Self::for_choices`] and called by each draw method and
     /// by [`Self::freeze`].
@@ -1678,8 +1639,6 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
-            tags: HashSet::default(),
-            labels_for_structure_stack: Vec::new(),
             observer,
             trailing_template,
         }
@@ -1862,15 +1821,12 @@ impl NativeTestCase {
         self.spans.push(Span {
             start,
             end: start,
-            label: label.to_string(),
+            label,
             depth,
             parent,
             discarded: false,
         });
         self.span_stack.push(idx);
-        let mut frame = HashSet::default();
-        frame.insert(label);
-        self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH {
             self.conclude(Status::Invalid, None);
             self.freeze();
@@ -1898,15 +1854,6 @@ impl NativeTestCase {
         }
         if discard {
             self.has_discards = true;
-        }
-        let labels = self.labels_for_structure_stack.pop().unwrap_or_default();
-        if !discard {
-            if let Some(parent) = self.labels_for_structure_stack.last_mut() {
-                parent.extend(labels);
-            } else {
-                self.tags
-                    .extend(labels.into_iter().map(structural_coverage));
-            }
         }
     }
 

@@ -1,8 +1,10 @@
 use super::*;
+use crate::native::HashSet;
 use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
 use crate::native::core::choices::{BooleanChoice, ChoiceKind};
 use crate::native::rng::EngineRng;
+use alloc::string::ToString;
 
 #[test]
 fn spans_get_mut_returns_mutable_reference() {
@@ -10,7 +12,7 @@ fn spans_get_mut_returns_mutable_reference() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "test".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -37,7 +39,7 @@ fn spans_trivial_handles_simplest_forced_and_oob() {
     spans.push(Span {
         start: 0,
         end: 2,
-        label: "outer".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -63,14 +65,14 @@ fn spans_into_vec_consumes_and_returns_inner() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "one".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let v = spans.into_vec();
     assert_eq!(v.len(), 1);
-    assert_eq!(v[0].label, "one");
+    assert_eq!(v[0].label, 1);
 }
 
 #[test]
@@ -78,14 +80,14 @@ fn spans_from_vec() {
     let v = vec![Span {
         start: 0,
         end: 3,
-        label: "x".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     }];
     let spans = Spans::from(v);
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0usize].label, "x");
+    assert_eq!(spans[0usize].label, 1);
 }
 
 #[test]
@@ -94,14 +96,14 @@ fn spans_deref_to_slice() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "deref".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let slice: &[Span] = &spans;
     assert_eq!(slice.len(), 1);
-    assert_eq!(slice[0].label, "deref");
+    assert_eq!(slice[0].label, 1);
 }
 
 #[test]
@@ -111,14 +113,14 @@ fn spans_into_iterator() {
         spans.push(Span {
             start: i,
             end: i + 1,
-            label: i.to_string(),
+            label: i as u64,
             depth: 0,
             parent: None,
             discarded: false,
         });
     }
-    let labels: Vec<&str> = (&spans).into_iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, vec!["0", "1", "2"]);
+    let labels: Vec<u64> = (&spans).into_iter().map(|s| s.label).collect();
+    assert_eq!(labels, vec![0, 1, 2]);
 }
 
 #[test]
@@ -187,7 +189,7 @@ fn spans_get_returns_span_by_index() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "first".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -195,13 +197,13 @@ fn spans_get_returns_span_by_index() {
     spans.push(Span {
         start: 1,
         end: 2,
-        label: "second".to_string(),
+        label: 2,
         depth: 0,
         parent: None,
         discarded: false,
     });
-    assert_eq!(spans.get(0).unwrap().label, "first");
-    assert_eq!(spans.get(1).unwrap().label, "second");
+    assert_eq!(spans.get(0).unwrap().label, 1);
+    assert_eq!(spans.get(1).unwrap().label, 2);
     assert!(spans.get(2).is_none());
 }
 
@@ -211,14 +213,14 @@ fn spans_as_slice_returns_slice() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "a".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let sl = spans.as_slice();
     assert_eq!(sl.len(), 1);
-    assert_eq!(sl[0].label, "a");
+    assert_eq!(sl[0].label, 1);
 }
 
 struct NoopObserver;
@@ -450,7 +452,7 @@ fn draw_string_notifies_observer() {
 }
 
 #[test]
-fn stop_span_extends_parent_label_stack() {
+fn stop_span_closes_nested_spans_innermost_first() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     tc.start_span(1);
     tc.start_span(2);
@@ -1362,7 +1364,7 @@ fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
     spans.push(Span {
         start: 5,
         end: 7,
-        label: "stale".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
