@@ -19,6 +19,7 @@ pub struct VecGenerator<G, T> {
     pub(crate) min_size: usize,
     pub(crate) max_size: Option<usize>,
     pub(crate) unique_by: Option<fn(&T, &T) -> bool>,
+    pub(crate) label: u64,
     pub(crate) _phantom: PhantomData<fn(T)>,
 }
 
@@ -94,7 +95,7 @@ where
     G: Generator<T>,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[VEC_LABEL, self.elements.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
@@ -134,6 +135,7 @@ where
 /// ```
 pub fn vecs<T, G: Generator<T>>(elements: G) -> VecGenerator<G, T> {
     VecGenerator {
+        label: combine_labels(&[VEC_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -147,6 +149,7 @@ pub struct HashSetGenerator<G, T> {
     elements: G,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -213,7 +216,7 @@ where
     T: Eq + Hash,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[HASH_SET_LABEL, self.elements.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
@@ -240,6 +243,7 @@ where
 /// See [`HashSetGenerator`] for builder methods.
 pub fn hashsets<T, G: Generator<T>>(elements: G) -> HashSetGenerator<G, T> {
     HashSetGenerator {
+        label: combine_labels(&[HASH_SET_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -253,6 +257,7 @@ pub struct HashMapGenerator<K, V, KT, VT> {
     values: V,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(KT, VT)>,
 }
 
@@ -277,7 +282,7 @@ where
     KT: Eq + std::hash::Hash,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[HASH_MAP_LABEL, self.keys.label(), self.values.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
@@ -378,6 +383,7 @@ pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     values: V,
 ) -> HashMapGenerator<K, V, KT, VT> {
     HashMapGenerator {
+        label: combine_labels(&[HASH_MAP_LABEL, keys.label(), values.label()]),
         keys,
         values,
         min_size: 0,
@@ -391,6 +397,7 @@ pub struct BTreeSetGenerator<G, T> {
     elements: G,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -453,7 +460,7 @@ where
     T: Ord,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[BTREE_SET_LABEL, self.elements.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
@@ -493,6 +500,7 @@ where
 /// ```
 pub fn btree_sets<T, G: Generator<T>>(elements: G) -> BTreeSetGenerator<G, T> {
     BTreeSetGenerator {
+        label: combine_labels(&[BTREE_SET_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -506,6 +514,7 @@ pub struct BTreeMapGenerator<K, V, KT, VT> {
     values: V,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(KT, VT)>,
 }
 
@@ -530,7 +539,7 @@ where
     KT: Ord,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[BTREE_MAP_LABEL, self.keys.label(), self.values.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> BTreeMap<KT, VT> {
@@ -626,6 +635,7 @@ pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     values: V,
 ) -> BTreeMapGenerator<K, V, KT, VT> {
     BTreeMapGenerator {
+        label: combine_labels(&[BTREE_MAP_LABEL, keys.label(), values.label()]),
         keys,
         values,
         min_size: 0,
@@ -637,13 +647,15 @@ pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
 /// Generator for fixed-size arrays `[T; N]`. Created by [`arrays()`].
 pub struct ArrayGenerator<G, T, const N: usize> {
     element: G,
+    label: u64,
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
+impl<G: Generator<T>, T, const N: usize> ArrayGenerator<G, T, N> {
     #[doc(hidden)]
     pub fn new(element: G) -> Self {
         ArrayGenerator {
+            label: combine_labels(&[ARRAY_LABEL, element.label()]),
             element,
             _phantom: PhantomData,
         }
@@ -683,7 +695,7 @@ impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
     for ArrayGenerator<G, T, N>
 {
     fn label(&self) -> u64 {
-        combine_labels(&[ARRAY_LABEL, self.element.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> [T; N] {

@@ -183,6 +183,7 @@ pub struct RecursiveGenerator<T, G, F, R> {
     branch: Arc<F>,
     max_depth: usize,
     max_leaves: usize,
+    label: u64,
     _phantom: PhantomData<fn() -> (T, R)>,
 }
 
@@ -268,7 +269,7 @@ where
     R: Generator<T> + 'static,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[RECURSIVE_LABEL, self.leaf.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
@@ -346,6 +347,7 @@ where
     R: Generator<T> + 'static,
 {
     RecursiveGenerator {
+        label: combine_labels(&[RECURSIVE_LABEL, leaf.label()]),
         leaf: Arc::new(leaf),
         branch: Arc::new(branch),
         max_depth: DEFAULT_MAX_DEPTH,

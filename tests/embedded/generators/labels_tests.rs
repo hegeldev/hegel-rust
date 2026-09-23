@@ -50,37 +50,6 @@ fn label_from_name_matches_the_published_fnv1a_vectors() {
     assert_eq!(label_from_name("foobar"), 0x85944171f73967e8);
 }
 
-/// The word-at-a-time hash behind the default label must still tell names
-/// apart wherever they differ: in a whole word, in the tail past the last
-/// full word, in a trailing NUL that zero-padding could hide, and in length
-/// alone.
-#[test]
-fn label_from_type_name_distinguishes_names() {
-    let names = [
-        "",
-        "\0",
-        "a",
-        "b",
-        "abcdefgh",
-        "abcdefgh\0",
-        "abcdefghi",
-        "abcdefghj",
-        "abcdefgi",
-        "mycrate::gens::Alpha",
-        "mycrate::gens::Wrapped<bool>",
-    ];
-    for (i, a) in names.iter().enumerate() {
-        assert_eq!(label_from_type_name(a), label_from_type_name(a));
-        for b in &names[i + 1..] {
-            assert_ne!(
-                label_from_type_name(a),
-                label_from_type_name(b),
-                "{a:?} vs {b:?}"
-            );
-        }
-    }
-}
-
 #[test]
 fn default_labels_come_from_the_type_name() {
     struct Alpha;
@@ -94,7 +63,7 @@ fn default_labels_come_from_the_type_name() {
     use crate::generators::Generator;
     assert_eq!(
         Alpha.label(),
-        label_from_type_name(std::any::type_name::<Alpha>())
+        label_from_name(std::any::type_name::<Alpha>())
     );
     assert_ne!(Alpha.label(), Beta.label());
 }

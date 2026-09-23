@@ -307,7 +307,14 @@ pub struct ValuesReusable<'a, T> {
     values: &'a HashMap<i64, T>,
 }
 
+const VALUES_REUSABLE_LABEL: u64 = label_from_name("hegel.pool.values_reusable");
+const VALUES_CONSUMED_LABEL: u64 = label_from_name("hegel.pool.values_consumed");
+
 impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
+    fn label(&self) -> u64 {
+        VALUES_REUSABLE_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> &'a T {
         tc.assume(!self.values.is_empty());
         let variable_id = pool_generate(tc, self.pool, false);
@@ -335,6 +342,10 @@ pub struct ValuesConsumed<'a, T> {
 }
 
 impl<T> Generator<T> for ValuesConsumed<'_, T> {
+    fn label(&self) -> u64 {
+        VALUES_CONSUMED_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool, true);

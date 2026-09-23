@@ -14,9 +14,14 @@ const OPTIONAL_LABEL: u64 = label_from_name("hegel.optional");
 /// Generator that picks from a fixed list of values. Created by [`sampled_from()`].
 pub struct SampledFromGenerator<'a, T: Clone> {
     elements: Cow<'a, [T]>,
+    label: u64,
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         let indices = integers::<usize>()
             .min_value(0)
@@ -51,7 +56,10 @@ where
     if elements.is_empty() {
         invalid_argument!("Collection passed to sampled_from cannot be empty");
     }
-    SampledFromGenerator { elements }
+    SampledFromGenerator {
+        elements,
+        label: label_from_name(std::any::type_name::<SampledFromGenerator<'a, T>>()),
+    }
 }
 
 /// Generator that chooses between alternatives of the same type. Created by
@@ -65,6 +73,7 @@ where
 /// usual boxing rules (see [`Generator::boxed`](super::Generator::boxed)).
 pub struct OneOfGenerator<'a, T, A = Vec<BoxedPrintableGenerator<'a, T>>> {
     alternatives: A,
+    label: u64,
     _phantom: PhantomData<&'a fn() -> T>,
 }
 
@@ -80,6 +89,7 @@ pub trait Alternatives<T> {
     /// The alternatives' labels (see [`Generator::label`]) combined into
     /// one, so that the containing [`OneOfGenerator`]'s label reflects what
     /// it chooses between. Defaults to a label derived from the type name.
+    /// Called once, when the containing generator is built.
     fn label(&self) -> u64 {
         label_from_name(std::any::type_name::<Self>())
     }
@@ -106,7 +116,7 @@ fn draw_one_of<T>(tc: &TestCase, max_index: usize, draw_at: impl FnOnce(usize) -
 
 impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
     fn label(&self) -> u64 {
-        combine_labels(&[ONE_OF_LABEL, self.alternatives.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
@@ -210,10 +220,7 @@ where
     if generators.is_empty() {
         invalid_argument!("one_of requires at least one generator");
     }
-    OneOfGenerator {
-        alternatives: generators,
-        _phantom: PhantomData,
-    }
+    one_of_from_alternatives(generators)
 }
 
 #[doc(hidden)]
@@ -221,6 +228,7 @@ pub fn one_of_from_alternatives<'a, T, A: Alternatives<T>>(
     alternatives: A,
 ) -> OneOfGenerator<'a, T, A> {
     OneOfGenerator {
+        label: combine_labels(&[ONE_OF_LABEL, alternatives.label()]),
         alternatives,
         _phantom: PhantomData,
     }
@@ -269,6 +277,7 @@ macro_rules! __one_of_alternatives {
 /// Generator that produces `Some(value)` or `None`. Created by [`optional()`].
 pub struct OptionalGenerator<G, T> {
     inner: G,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -298,7 +307,7 @@ where
     G: Generator<T>,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[OPTIONAL_LABEL, self.inner.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> Option<T> {
@@ -322,6 +331,7 @@ where
 /// Generate `Option<T>` values: either `Some(value)` from the inner generator, or `None`.
 pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
     OptionalGenerator {
+        label: combine_labels(&[OPTIONAL_LABEL, inner.label()]),
         inner,
         _phantom: PhantomData,
     }

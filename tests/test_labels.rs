@@ -225,6 +225,27 @@ fn self_referential_deferred_definitions_have_a_label() {
     assert_ne!(unset_handle.label(), a.label());
 }
 
+/// A handle can be built into other generators before its definition is
+/// set, and those generators compute their labels as they are built, so an
+/// unset handle has a label too: a fixed stand-in that the definition, once
+/// set, replaces.
+#[test]
+fn unset_deferred_handles_have_a_stand_in_label() {
+    let first = gs::deferred::<i32>();
+    let second = gs::deferred::<i32>();
+    let stand_in = first.generator().label();
+    assert_eq!(stand_in, second.generator().label());
+    assert_eq!(
+        gs::vecs(first.generator()).label(),
+        gs::vecs(second.generator()).label()
+    );
+
+    let handle = first.generator();
+    first.set(ints());
+    assert_eq!(handle.label(), ints().label());
+    assert_ne!(handle.label(), stand_in);
+}
+
 #[test]
 fn recursive_generators_label_every_subtree_alike() {
     let recursive = || {

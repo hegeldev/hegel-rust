@@ -46,8 +46,14 @@ pub trait Generator<T> {
     /// same one; see [`combine_labels`](super::combine_labels) for how. A
     /// generator that merely wraps another without changing what it draws
     /// should return the wrapped generator's label.
+    ///
+    /// This is called on every draw, so compute the label once — at
+    /// construction, stored in a field, or as a `const` from
+    /// [`label_from_name`](super::label_from_name) for a generator with no
+    /// components — rather than in this method. The default hashes the type
+    /// name each time it is called.
     fn label(&self) -> u64 {
-        super::labels::label_from_type_name(std::any::type_name::<Self>())
+        label_from_name(std::any::type_name::<Self>())
     }
 
     /// Transform generated values using a function.
@@ -66,6 +72,7 @@ pub trait Generator<T> {
         F: Fn(T) -> U + Send + Sync,
     {
         Mapped {
+            label: combine_labels(&[MAP_LABEL, self.label()]),
             source: self,
             f: Arc::new(f),
             _phantom: PhantomData,
@@ -94,6 +101,7 @@ pub trait Generator<T> {
         F: Fn(T) -> G + Send + Sync,
     {
         FlatMapped {
+            label: combine_labels(&[FLAT_MAP_LABEL, self.label()]),
             source: self,
             f,
             _phantom: PhantomData,
@@ -118,6 +126,7 @@ pub trait Generator<T> {
         F: Fn(&T) -> bool + Send + Sync,
     {
         Filtered {
+            label: combine_labels(&[FILTER_LABEL, self.label()]),
             source: self,
             predicate,
             _phantom: PhantomData,
@@ -416,6 +425,7 @@ impl<T, G: PrintableGenerator<T>> PrintableGenerator<T> for &G {
 pub struct Mapped<T, U, F, G> {
     source: G,
     f: Arc<F>,
+    label: u64,
     _phantom: PhantomData<fn(T) -> U>,
 }
 
@@ -425,7 +435,7 @@ where
     F: Fn(T) -> U + Send + Sync,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[MAP_LABEL, self.source.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> U {
@@ -487,6 +497,7 @@ where
             source: self.source,
             f: self.f,
             open: format!("{function}("),
+            label: self.label,
             _phantom: PhantomData,
         }
     }
@@ -497,6 +508,7 @@ pub struct PrintedAsCall<T, U, F, G> {
     source: G,
     f: Arc<F>,
     open: String,
+    label: u64,
     _phantom: PhantomData<fn(T) -> U>,
 }
 
@@ -506,7 +518,7 @@ where
     F: Fn(T) -> U + Send + Sync,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[MAP_LABEL, self.source.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> U {
@@ -531,6 +543,7 @@ where
 pub struct FlatMapped<T, U, G2, F, G1> {
     source: G1,
     f: F,
+    label: u64,
     _phantom: PhantomData<fn(T) -> (U, G2)>,
 }
 
@@ -555,7 +568,7 @@ where
     F: Fn(T) -> G2 + Send + Sync,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[FLAT_MAP_LABEL, self.source.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> U {
@@ -578,6 +591,7 @@ where
 pub struct Filtered<T, F, G> {
     source: G,
     predicate: F,
+    label: u64,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -621,7 +635,7 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[FILTER_LABEL, self.source.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {

@@ -32,47 +32,34 @@ pub const fn label_from_name(name: &str) -> u64 {
     fnv1a(FNV_OFFSET_BASIS, name.as_bytes())
 }
 
-/// The default [`Generator::label`](super::Generator::label): a hash of the
-/// generator's type name.
-///
-/// Computed on every draw, since `std::any::type_name` cannot be evaluated
-/// at compile time, so it folds the name in eight bytes at a step rather
-/// than byte by byte like [`label_from_name`]; a type name is a few dozen
-/// bytes and this keeps the label a small fraction of a draw's cost.
-pub(crate) const fn label_from_type_name(name: &str) -> u64 {
-    let mut bytes = name.as_bytes();
-    let mut hash = FNV_OFFSET_BASIS ^ bytes.len() as u64;
-    while let Some((word, rest)) = bytes.split_first_chunk::<8>() {
-        hash = (hash ^ u64::from_le_bytes(*word)).wrapping_mul(FNV_PRIME);
-        bytes = rest;
-    }
-    let mut tail = [0u8; 8];
-    let mut i = 0;
-    while i < bytes.len() {
-        tail[i] = bytes[i];
-        i += 1;
-    }
-    (hash ^ u64::from_le_bytes(tail)).wrapping_mul(FNV_PRIME)
-}
-
 /// The span label for a generator built from other generators.
 ///
 /// Combines the given labels, in order, into one — the same function
 /// libhegel exports as `hegel_label_combine`. Pass the generator's own label
 /// (from [`label_from_name`]) first and its components' labels after it, so
 /// that a pair of integers and a pair of strings get different labels while
-/// every pair of integers gets the same one:
+/// every pair of integers gets the same one. Combine once, when the
+/// generator is built, and keep the result: `label` is asked for on every
+/// draw.
 ///
 /// ```
 /// use hegel::generators::{self as gs, Generator};
 ///
+/// const PAIRS_LABEL: u64 = gs::label_from_name("mycrate.pairs");
+///
 /// struct Pairs<G> {
 ///     inner: G,
+///     label: u64,
+/// }
+///
+/// fn pairs<T, G: Generator<T>>(inner: G) -> Pairs<G> {
+///     let label = gs::combine_labels(&[PAIRS_LABEL, inner.label()]);
+///     Pairs { inner, label }
 /// }
 ///
 /// impl<T, G: Generator<T>> Generator<(T, T)> for Pairs<G> {
 ///     fn label(&self) -> u64 {
-///         gs::combine_labels(&[gs::label_from_name("mycrate.pairs"), self.inner.label()])
+///         self.label
 ///     }
 ///
 ///     fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
