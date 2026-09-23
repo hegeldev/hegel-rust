@@ -47,7 +47,7 @@ pub trait Generator<T> {
     /// generator that merely wraps another without changing what it draws
     /// should return the wrapped generator's label.
     fn label(&self) -> u64 {
-        label_from_name(std::any::type_name::<Self>())
+        super::labels::label_from_type_name(std::any::type_name::<Self>())
     }
 
     /// Transform generated values using a function.

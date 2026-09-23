@@ -972,8 +972,7 @@ impl TestCase {
     /// itself (returning `HEGEL_E_CONCURRENT_USE`), and clones each carry their
     /// own handle and lock.
     pub(crate) fn with_ctc<R>(&self, f: impl FnOnce(&CTestCase) -> R) -> R {
-        let handle = Arc::clone(&self.handle.borrow());
-        f(&handle)
+        f(&self.handle.borrow())
     }
 
     /// The number of currently-open spans on this instance. Lets a generator

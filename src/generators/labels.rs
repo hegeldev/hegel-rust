@@ -32,6 +32,29 @@ pub const fn label_from_name(name: &str) -> u64 {
     fnv1a(FNV_OFFSET_BASIS, name.as_bytes())
 }
 
+/// The default [`Generator::label`](super::Generator::label): a hash of the
+/// generator's type name.
+///
+/// Computed on every draw, since `std::any::type_name` cannot be evaluated
+/// at compile time, so it folds the name in eight bytes at a step rather
+/// than byte by byte like [`label_from_name`]; a type name is a few dozen
+/// bytes and this keeps the label a small fraction of a draw's cost.
+pub(crate) const fn label_from_type_name(name: &str) -> u64 {
+    let mut bytes = name.as_bytes();
+    let mut hash = FNV_OFFSET_BASIS ^ bytes.len() as u64;
+    while let Some((word, rest)) = bytes.split_first_chunk::<8>() {
+        hash = (hash ^ u64::from_le_bytes(*word)).wrapping_mul(FNV_PRIME);
+        bytes = rest;
+    }
+    let mut tail = [0u8; 8];
+    let mut i = 0;
+    while i < bytes.len() {
+        tail[i] = bytes[i];
+        i += 1;
+    }
+    (hash ^ u64::from_le_bytes(tail)).wrapping_mul(FNV_PRIME)
+}
+
 /// The span label for a generator built from other generators.
 ///
 /// Combines the given labels, in order, into one — the same function
