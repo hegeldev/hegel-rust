@@ -2663,4 +2663,12 @@ mod float_categories {
             assert!(s.is_subnormal() && s <= 1e-320, "{s:e}");
         }
     }
+
+    #[test]
+    fn float_below_is_the_finite_predecessor() {
+        assert_eq!(float_below(1.0), 1.0f64.next_down());
+        assert_eq!(float_below(0.1), 0.1f64.next_down());
+        assert_eq!(float_below(float_pow2(513)), float_pow2(513).next_down());
+        assert!(float_below(f64::MIN_POSITIVE).is_subnormal());
+    }
 }
