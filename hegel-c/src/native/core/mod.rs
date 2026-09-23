@@ -63,9 +63,11 @@ pub const DIRICHLET_ALPHA_DIFFUSE: f64 = 0.12;
 pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 
 /// The float categories' Dirichlet concentrations, one per field of
-/// `FloatGenerationParameters`. The special categories have low concentrations,
-/// so a case's weights are lumpy: most sit near zero while one or two spike,
-/// the way the integer set's do. The point categories — NaN, `±∞`, `±MAX`,
+/// `FloatGenerationParameters`. The special categories have low concentrations
+/// and the total is small (about 7.5), so a case's weights are lumpy: most sit
+/// near zero while one or two spike, the way the integer set's do, and a run
+/// of a hundred cases visits a hundred distinct mixtures rather than a hundred
+/// near-copies of the mean. The point categories — NaN, `±∞`, `±MAX`,
 /// `±2^53` and `±0`, a handful of distinct values each — sit at half the
 /// concentration of the band categories, whose values are all different, so a
 /// draw is not spent on the same few landmarks as often. The default draw — a coin flip
@@ -74,23 +76,23 @@ pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 /// concentration as the specials together, so its mean weight is one half and
 /// it stays the bulk of most cases. A new float category needs a concentration
 /// here, a field on `FloatGenerationParameters`, and a slot in its `ALPHAS`.
-pub const DIRICHLET_ALPHA_FLOAT_ENDPOINT: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_ZERO: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_SUBNORMAL: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_ONE: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_INTEGER: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_HALF_INTEGER: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NAN: f64 = 0.25;
-pub const DIRICHLET_ALPHA_FLOAT_INFINITY: f64 = 0.25;
-pub const DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE: f64 = 0.25;
-pub const DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER: f64 = 0.25;
-pub const DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO: f64 = 0.25;
-pub const DIRICHLET_ALPHA_FLOAT_BINADE_EDGE: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_NON_DYADIC: f64 = 0.5;
-pub const DIRICHLET_ALPHA_FLOAT_DEFAULT: f64 = 8.0;
+pub const DIRICHLET_ALPHA_FLOAT_ENDPOINT: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NEAR_ZERO: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_SUBNORMAL: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NEAR_ONE: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_INTEGER: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_HALF_INTEGER: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NAN: f64 = 0.125;
+pub const DIRICHLET_ALPHA_FLOAT_INFINITY: f64 = 0.125;
+pub const DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE: f64 = 0.125;
+pub const DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER: f64 = 0.125;
+pub const DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO: f64 = 0.125;
+pub const DIRICHLET_ALPHA_FLOAT_BINADE_EDGE: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_NON_DYADIC: f64 = 0.25;
+pub const DIRICHLET_ALPHA_FLOAT_DEFAULT: f64 = 4.0;
 
 /// Minimum range width (`max_value - min_value`) at which the category mixture
 /// is applied. Below this the ordinary piecewise distribution (uniform on

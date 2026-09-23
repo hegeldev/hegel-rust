@@ -1481,18 +1481,14 @@ fn float_default_sample(fc: &FloatChoice, rng: &mut EngineRng) -> Result<f64, In
 }
 
 /// A magnitude with every binade the admitted range touches equally likely,
-/// as [`log_uniform_magnitude`] draws it, under a coin-flipped sign. Where a
-/// side's top is a user bound (below `MAX`), magnitudes under one ulp of that
-/// bound are left out: they vanish against any value near it, and on a range
-/// reaching down to zero they would otherwise take nearly all the mass.
+/// as [`log_uniform_magnitude`] draws it, under a coin-flipped sign. The
+/// binades run all the way down to the smallest admitted nonzero magnitude,
+/// finite top bound or not: the magnitudes far below a bound are where
+/// cancellation and underflow bugs live, and the uniform half of the default
+/// draw already covers the range's own scale.
 fn float_log_uniform_sample(fc: &FloatChoice, rng: &mut EngineRng) -> Option<f64> {
     signed_magnitude_sample(fc, rng, |lo, hi, rng| {
-        let floor = if hi < f64::MAX {
-            hi - float_below(hi)
-        } else {
-            lo
-        };
-        Some(log_uniform_magnitude(lo.max(floor), hi, rng))
+        Some(log_uniform_magnitude(lo, hi, rng))
     })
 }
 
