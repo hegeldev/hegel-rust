@@ -246,6 +246,35 @@ fn unset_deferred_handles_have_a_stand_in_label() {
     assert_ne!(handle.label(), stand_in);
 }
 
+/// A hand-written generator may still ask its components for their labels
+/// on every call rather than once when built. If such a generator holds a
+/// handle to the very definition it implements, computing the definition's
+/// label re-enters the handle; the handle answers with its stand-in label
+/// instead of recursing.
+#[test]
+fn a_definition_whose_label_asks_its_own_handle_terminates() {
+    struct Recomputing(gs::BoxedGenerator<'static, i32>);
+    impl Generator<i32> for Recomputing {
+        fn label(&self) -> u64 {
+            gs::combine_labels(&[gs::label_from_name("recomputing"), self.0.label()])
+        }
+        fn do_draw(&self, tc: &hegel::TestCase) -> i32 {
+            tc.draw_silent(&self.0)
+        }
+    }
+
+    let stand_in = gs::deferred_silent::<i32>().generator().label();
+    let definition = gs::deferred_silent::<i32>();
+    let handle = definition.generator();
+    let self_reference = definition.generator();
+    definition.set(Recomputing(self_reference));
+    assert_eq!(
+        handle.label(),
+        gs::combine_labels(&[gs::label_from_name("recomputing"), stand_in])
+    );
+    assert_eq!(handle.label(), handle.label());
+}
+
 #[test]
 fn recursive_generators_label_every_subtree_alike() {
     let recursive = || {
