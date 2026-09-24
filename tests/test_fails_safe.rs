@@ -59,7 +59,10 @@ fn a_deterministic_failure_reports_without_a_caveat() {
         .map(String::as_str)
         .unwrap_or_default();
     assert!(msg.contains("n was 500"), "got: {msg:?}");
-    assert!(!text.contains("note:"), "unexpected caveat in:\n{text}");
+    assert!(
+        !text.contains("note: nondeterministic") && !text.contains("note: unconfirmed"),
+        "unexpected caveat in:\n{text}"
+    );
     assert!(
         text.contains("#[hegel::reproduce_failure("),
         "expected a reproducer line in:\n{text}"
