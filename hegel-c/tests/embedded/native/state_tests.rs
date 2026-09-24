@@ -375,7 +375,10 @@ fn draw_float_notifies_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
-    let v = tc.draw_float(0.0, 10.0, false, false, 5e-324).ok().unwrap();
+    let v = tc
+        .draw_float(FloatWidth::F64, 0.0, 10.0, false, false, 5e-324)
+        .ok()
+        .unwrap();
     assert_eq!(v, 2.5);
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((2.5_f64.to_bits(), false)));
@@ -462,7 +465,14 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
     for seed in 0..200u64 {
         let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         let v = tc
-            .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true, 5e-324)
+            .draw_float(
+                FloatWidth::F64,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+                true,
+                true,
+                5e-324,
+            )
             .ok()
             .unwrap();
         if v.is_nan() {
@@ -476,7 +486,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 fn draw_float_half_bounded_below_explores_finite_range() {
     let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
     let v = tc
-        .draw_float(1.0, f64::INFINITY, false, false, 5e-324)
+        .draw_float(FloatWidth::F64, 1.0, f64::INFINITY, false, false, 5e-324)
         .ok()
         .unwrap();
     assert!(v >= 1.0 && !v.is_nan());
@@ -507,7 +517,7 @@ fn for_simplest_draws_integer_clamped_to_range_when_target_above() {
 fn for_simplest_draws_float_at_zero() {
     let mut tc = NativeTestCase::for_simplest(BUFFER_SIZE).unwrap();
     let v = tc
-        .draw_float(-10.0, 10.0, false, false, 5e-324)
+        .draw_float(FloatWidth::F64, -10.0, 10.0, false, false, 5e-324)
         .ok()
         .unwrap();
     assert_eq!(v, 0.0);
@@ -956,13 +966,12 @@ fn generation_parameters_draw_is_valid_lumpy_and_mostly_normal() {
     );
 }
 
-fn float_weights(f: &FloatGenerationParameters) -> [f64; 18] {
+fn float_weights(f: &FloatGenerationParameters) -> [f64; 17] {
     [
         f.endpoint_probability,
         f.near_zero_probability,
         f.subnormal_probability,
         f.near_one_probability,
-        f.near_minus_one_probability,
         f.integer_probability,
         f.half_integer_probability,
         f.near_max_for_add_probability,
@@ -975,7 +984,7 @@ fn float_weights(f: &FloatGenerationParameters) -> [f64; 18] {
         f.signed_zero_probability,
         f.binade_edge_probability,
         f.non_dyadic_probability,
-        f.uniform_probability,
+        f.default_probability,
     ]
 }
 
@@ -991,7 +1000,6 @@ fn float_generation_parameters_follow_their_own_alphas_and_draw_independently() 
         DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
         DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
         DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
-        DIRICHLET_ALPHA_FLOAT_NEAR_MINUS_ONE,
         DIRICHLET_ALPHA_FLOAT_INTEGER,
         DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
         DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
@@ -1004,7 +1012,7 @@ fn float_generation_parameters_follow_their_own_alphas_and_draw_independently() 
         DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
         DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
         DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
-        DIRICHLET_ALPHA_FLOAT_UNIFORM,
+        DIRICHLET_ALPHA_FLOAT_DEFAULT,
     ];
     let alpha_total: f64 = alphas.iter().sum();
     let defaults = float_weights(&float_default);
@@ -1213,7 +1221,13 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let mut at_max = 0;
     let mut integral = 0;
     for _ in 0..total {
-        let v = biased_float_sample(&fc, &mut rng, FloatGenerationParameters::default()).unwrap();
+        let v = biased_float_sample(
+            &fc,
+            FloatWidth::F64,
+            &mut rng,
+            FloatGenerationParameters::default(),
+        )
+        .unwrap();
         assert!(v.is_finite(), "drew non-finite {v}");
         if v.abs() == f64::MAX {
             at_max += 1;
@@ -1230,7 +1244,7 @@ fn biased_float_sample_full_finite_range_does_not_collapse_to_max() {
     let integral_fraction = integral as f64 / total as f64;
     assert!(
         integral_fraction > 0.2,
-        "only {integral_fraction} of draws were integer-valued; lex bias missing?"
+        "only {integral_fraction} of draws were integer-valued; default draw missing?"
     );
 }
 
@@ -1775,4 +1789,886 @@ fn spans_nested_past_max_depth_conclude_invalid() {
         tc.start_span(1);
     }
     assert_eq!(tc.status(), Some(Status::Invalid));
+}
+
+mod float_categories {
+    use super::*;
+
+    const ENDPOINT: usize = 0;
+    const NEAR_ZERO: usize = 1;
+    const SUBNORMAL: usize = 2;
+    const NEAR_ONE: usize = 3;
+    const INTEGER: usize = 4;
+    const HALF_INTEGER: usize = 5;
+    const NEAR_MAX_FOR_ADD: usize = 6;
+    const NEAR_MAX_FOR_MUL: usize = 7;
+    const NEAR_SQRT_MIN_POSITIVE: usize = 8;
+    const NAN: usize = 9;
+    const INFINITY: usize = 10;
+    const MAX_MAGNITUDE: usize = 11;
+    const MAX_EXACT_INTEGER: usize = 12;
+    const SIGNED_ZERO: usize = 13;
+    const BINADE_EDGE: usize = 14;
+    const NON_DYADIC: usize = 15;
+    const DEFAULT: usize = 16;
+    const N_CATEGORIES: usize = 17;
+
+    const F32_MAX: f64 = f32::MAX as f64;
+    const F32_MIN_POSITIVE: f64 = f32::MIN_POSITIVE as f64;
+    const TWO_53: f64 = 9007199254740992.0;
+    const TWO_24: f64 = 16777216.0;
+
+    fn choice(min: f64, max: f64) -> FloatChoice {
+        FloatChoice {
+            min_value: min,
+            max_value: max,
+            allow_nan: false,
+            allow_infinity: false,
+            smallest_nonzero_magnitude: 5e-324,
+        }
+    }
+
+    fn unbounded() -> FloatChoice {
+        FloatChoice {
+            min_value: f64::NEG_INFINITY,
+            max_value: f64::INFINITY,
+            allow_nan: true,
+            allow_infinity: true,
+            smallest_nonzero_magnitude: 5e-324,
+        }
+    }
+
+    fn half_bounded(min: f64, max: f64) -> FloatChoice {
+        FloatChoice {
+            allow_infinity: true,
+            ..choice(min, max)
+        }
+    }
+
+    fn with_snm(fc: FloatChoice, snm: f64) -> FloatChoice {
+        FloatChoice {
+            smallest_nonzero_magnitude: snm,
+            ..fc
+        }
+    }
+
+    /// All the mass on one category, so a draw exercises exactly that sampler
+    /// or, when it has nothing valid to offer, the fall-through to the default
+    /// draw.
+    fn only(category: usize) -> FloatGenerationParameters {
+        let mut weights = [0.0; N_CATEGORIES];
+        weights[category] = 1.0;
+        FloatGenerationParameters::from_weights(weights)
+    }
+
+    fn draws_at(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        params: FloatGenerationParameters,
+        seed: u64,
+        n: usize,
+    ) -> Vec<f64> {
+        let mut rng = EngineRng::seeded(seed);
+        (0..n)
+            .map(|_| {
+                let v = biased_float_sample(fc, width, &mut rng, params).unwrap();
+                assert!(fc.validate(v), "{v:?} is invalid for {fc:?}");
+                v
+            })
+            .collect()
+    }
+
+    fn draws(fc: &FloatChoice, params: FloatGenerationParameters, seed: u64, n: usize) -> Vec<f64> {
+        draws_at(fc, FloatWidth::F64, params, seed, n)
+    }
+
+    fn category_draws_at(fc: &FloatChoice, width: FloatWidth, category: usize) -> Vec<f64> {
+        draws_at(fc, width, only(category), 1000 + category as u64, 2000)
+    }
+
+    fn category_draws(fc: &FloatChoice, category: usize) -> Vec<f64> {
+        category_draws_at(fc, FloatWidth::F64, category)
+    }
+
+    /// Whether `v` is exactly representable as an `f32`.
+    fn is_f32(v: f64) -> bool {
+        f64::from(v as f32) == v
+    }
+
+    fn seen(vs: &[f64], target: f64) -> bool {
+        vs.iter().any(|v| v.to_bits() == target.to_bits())
+    }
+
+    fn assert_exactly_set(vs: &[f64], set: &[f64]) {
+        for v in vs {
+            assert!(
+                set.iter().any(|s| s.to_bits() == v.to_bits()),
+                "{v:?} is not one of {set:?}"
+            );
+        }
+        for s in set {
+            assert!(seen(vs, *s), "{s:?} never drawn");
+        }
+    }
+
+    fn in_band(v: f64, (lo, hi): (f64, f64)) -> bool {
+        v.abs() >= lo && v.abs() <= hi
+    }
+
+    fn all_choices() -> Vec<FloatChoice> {
+        vec![
+            unbounded(),
+            choice(f64::NEG_INFINITY, f64::INFINITY),
+            choice(-f64::MAX, f64::MAX),
+            choice(0.0, 1.0),
+            choice(-1.0, 1.0),
+            choice(100.0, 200.0),
+            choice(-200.0, -100.0),
+            choice(0.05, 10.0),
+            choice(0.2, 0.8),
+            choice(0.75, 1.25),
+            choice(1.0, 4.0),
+            with_snm(choice(-1.0, 1.0), 1e-3),
+            with_snm(choice(-100.0, 100.0), 10.0),
+            choice(f64::from(f32::MIN), F32_MAX),
+            half_bounded(f64::NEG_INFINITY, 0.0),
+            half_bounded(1.0, f64::INFINITY),
+            half_bounded(f64::NEG_INFINITY, -1e300),
+            choice(-0.0, 0.0),
+            choice(-0.0, -0.0),
+            choice(3.5, 3.5),
+            choice(1e300, f64::MAX),
+            choice(5e-324, 5e-324),
+            choice(float_pow2(-1022) / 1e12, float_pow2(-1022) / 1e3),
+        ]
+    }
+
+    #[test]
+    fn every_category_stays_valid_on_every_range() {
+        for fc in all_choices() {
+            for width in [FloatWidth::F64, FloatWidth::F32] {
+                for category in 0..N_CATEGORIES {
+                    draws_at(&fc, width, only(category), 7 + category as u64, 300);
+                }
+                draws_at(&fc, width, FloatGenerationParameters::default(), 99, 300);
+                let mut rng = EngineRng::seeded(5);
+                for _ in 0..50 {
+                    let params = FloatGenerationParameters::draw(&mut rng).unwrap();
+                    draws_at(&fc, width, params, 6, 20);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn singleton_range_only_ever_draws_its_value() {
+        let fc = choice(3.5, 3.5);
+        for category in 0..N_CATEGORIES {
+            for v in category_draws(&fc, category) {
+                assert_eq!(v, 3.5);
+            }
+        }
+    }
+
+    #[test]
+    fn endpoint_category_draws_edges_and_neighbours() {
+        assert_exactly_set(
+            &category_draws(&unbounded(), ENDPOINT),
+            &[f64::INFINITY, f64::NEG_INFINITY, f64::MAX, -f64::MAX],
+        );
+        assert_exactly_set(
+            &category_draws(&choice(0.0, 1.0), ENDPOINT),
+            &[0.0, 1.0, 5e-324, 1.0f64.next_down()],
+        );
+        assert_exactly_set(
+            &category_draws_at(&choice(0.0, 1.0), FloatWidth::F32, ENDPOINT),
+            &[
+                0.0,
+                1.0,
+                f64::from(f32::from_bits(1)),
+                f64::from(1.0f32.next_down()),
+            ],
+        );
+        assert_exactly_set(
+            &category_draws_at(&unbounded(), FloatWidth::F32, ENDPOINT),
+            &[f64::INFINITY, f64::NEG_INFINITY, F32_MAX, -F32_MAX],
+        );
+        assert_exactly_set(
+            &category_draws(&choice(100.0, 200.0), ENDPOINT),
+            &[
+                100.0,
+                200.0,
+                100.0f64.next_up(),
+                101.0,
+                199.0,
+                200.0f64.next_down(),
+            ],
+        );
+    }
+
+    #[test]
+    fn near_zero_category_is_log_uniform_below_a_tenth() {
+        let vs = category_draws(&unbounded(), NEAR_ZERO);
+        let mut tiny = 0;
+        let (mut positive, mut negative) = (0, 0);
+        for &v in &vs {
+            assert!(v != 0.0 && v.abs() < 0.1 && !v.is_subnormal(), "{v:e}");
+            if v.abs() < 1e-100 {
+                tiny += 1;
+            }
+            if v > 0.0 {
+                positive += 1;
+            } else {
+                negative += 1;
+            }
+        }
+        let tiny_fraction = tiny as f64 / vs.len() as f64;
+        assert!(
+            tiny_fraction > 0.2,
+            "only {tiny_fraction} of near-zero draws were below 1e-100"
+        );
+        assert!(positive > 500 && negative > 500, "{positive} / {negative}");
+
+        for v in category_draws(&choice(0.05, 10.0), NEAR_ZERO) {
+            assert!((0.05..0.1).contains(&v), "{v}");
+        }
+
+        let vs = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_ZERO);
+        assert!(
+            vs.iter()
+                .all(|&v| v.abs() >= F32_MIN_POSITIVE && v.abs() < 0.1)
+        );
+        assert!(vs.iter().filter(|&&v| v.abs() < 1e-20).count() > 500);
+    }
+
+    #[test]
+    fn subnormal_category_matches_the_width() {
+        let vs = category_draws(&unbounded(), SUBNORMAL);
+        assert!(vs.iter().all(|v| v.is_subnormal()), "{vs:?}");
+        assert!(vs.iter().any(|&v| v < 0.0) && vs.iter().any(|&v| v > 0.0));
+
+        let vs = category_draws_at(&unbounded(), FloatWidth::F32, SUBNORMAL);
+        for &v in &vs {
+            assert!(
+                v.abs() >= f64::from(f32::from_bits(1)) && v.abs() < F32_MIN_POSITIVE,
+                "{v:e}"
+            );
+            assert!(!v.is_subnormal(), "{v:e}");
+        }
+        assert!(vs.iter().any(|&v| v < 0.0) && vs.iter().any(|&v| v > 0.0));
+    }
+
+    #[test]
+    fn near_one_category_reaches_ulp_neighbours_and_exact_values_on_both_signs() {
+        let vs = category_draws(&unbounded(), NEAR_ONE);
+        let mut sides = [[0; 2]; 2];
+        for &v in &vs {
+            let mag = v.abs();
+            assert!(mag > 0.5 && mag < 1.5, "{v}");
+            if mag != 1.0 {
+                sides[usize::from(v < 0.0)][usize::from(mag > 1.0)] += 1;
+            }
+        }
+        for side in sides.iter().flatten() {
+            assert!(*side > 250, "{sides:?}");
+        }
+        for sign in [1.0, -1.0] {
+            assert!(seen(&vs, sign));
+            assert!(seen(&vs, sign * 1.0f64.next_up()));
+            assert!(seen(&vs, sign * 1.0f64.next_down()));
+        }
+
+        for v in category_draws(&choice(0.0, 1.0), NEAR_ONE) {
+            assert!(v > 0.5 && v <= 1.0, "{v}");
+        }
+        for v in category_draws(&choice(1.0, 2.0), NEAR_ONE) {
+            assert!((1.0..1.5).contains(&v), "{v}");
+        }
+        for v in category_draws(&choice(-1.0, -0.75), NEAR_ONE) {
+            assert!((-1.0..=-0.75).contains(&v), "{v}");
+        }
+
+        let vs = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_ONE);
+        for &v in &vs {
+            assert!(is_f32(v) && v.abs() > 0.5 && v.abs() < 1.5, "{v}");
+        }
+        for sign in [1.0, -1.0] {
+            assert!(seen(&vs, sign));
+            assert!(seen(&vs, sign * f64::from(1.0f32.next_up())));
+            assert!(seen(&vs, sign * f64::from(1.0f32.next_down())));
+        }
+        for v in category_draws_at(&choice(0.0, 1.0), FloatWidth::F32, NEAR_ONE) {
+            assert!(is_f32(v) && v > 0.5 && v <= 1.0, "{v}");
+        }
+    }
+
+    /// The sign is a coin flip, but a sign on which the range admits nothing
+    /// for the category yields to the other rather than falling through to
+    /// the uniform, so a one-sided range gets the category every time.
+    #[test]
+    fn sign_yields_to_the_side_the_range_admits() {
+        let fc = choice(-f64::MAX, 0.5);
+        for v in category_draws(&fc, NEAR_MAX_FOR_ADD) {
+            assert!(v <= -float_pow2(127), "{v:e}");
+        }
+        for v in category_draws(&fc, NEAR_MAX_FOR_MUL) {
+            assert!(v <= -float_pow2(63), "{v:e}");
+        }
+        for v in category_draws(&choice(-0.5, 1e300), NEAR_MAX_FOR_MUL) {
+            assert!(v >= float_pow2(63), "{v:e}");
+        }
+        for v in category_draws(&choice(-2.0, 0.25), NEAR_ONE) {
+            assert!(v > -1.5 && v < -0.5, "{v}");
+        }
+    }
+
+    /// Integers and half-integers spread over the binades of magnitude, so
+    /// small values (1, 2, 0.5, 2.5, …) come up as often as the huge ones a
+    /// uniform draw over `±2^53` would produce almost exclusively.
+    #[test]
+    fn integer_categories_are_log_uniform_over_their_binades() {
+        let vs = category_draws(&unbounded(), INTEGER);
+        let (mut positive, mut negative, mut small) = (0, 0, 0);
+        for &v in &vs {
+            assert!(v == v.trunc() && v != 0.0 && v.abs() <= TWO_53, "{v}");
+            if v > 0.0 {
+                positive += 1;
+            } else {
+                negative += 1;
+            }
+            if v.abs() < 1000.0 {
+                small += 1;
+            }
+        }
+        assert!(positive > 500 && negative > 500, "{positive} / {negative}");
+        assert!(
+            small > 250,
+            "only {small} of {} integers were below 1000",
+            vs.len()
+        );
+        assert!(seen(&vs, 1.0) && seen(&vs, -1.0));
+        assert!(seen(&vs, TWO_53) || seen(&vs, -TWO_53));
+        assert_exactly_set(
+            &category_draws(&choice(0.0, 10.0), INTEGER),
+            &(1..=10).map(f64::from).collect::<Vec<_>>(),
+        );
+        assert_exactly_set(
+            &category_draws(&choice(-3.0, 0.5), INTEGER),
+            &[-1.0, -2.0, -3.0],
+        );
+
+        let halves = category_draws(&unbounded(), HALF_INTEGER);
+        let mut small = 0;
+        for &v in &halves {
+            assert!(
+                v.fract().abs() == 0.5 && v.abs() < 4503599627370496.0,
+                "{v}"
+            );
+            if v.abs() < 1000.0 {
+                small += 1;
+            }
+        }
+        assert!(
+            small > 250,
+            "only {small} of {} half-integers were below 1000",
+            halves.len()
+        );
+        assert!(seen(&halves, 0.5) && seen(&halves, -0.5));
+        assert!(seen(&halves, 1.5) || seen(&halves, -1.5));
+        assert_exactly_set(
+            &category_draws(&choice(0.0, 3.0), HALF_INTEGER),
+            &[0.5, 1.5, 2.5],
+        );
+        assert_exactly_set(
+            &category_draws(&choice(-2.0, 0.6), HALF_INTEGER),
+            &[0.5, -0.5, -1.5],
+        );
+
+        let vs = category_draws_at(&unbounded(), FloatWidth::F32, INTEGER);
+        assert!(
+            vs.iter()
+                .all(|&v| v == v.trunc() && v != 0.0 && v.abs() <= TWO_24)
+        );
+        assert!(seen(&vs, TWO_24) || seen(&vs, -TWO_24));
+        assert!(seen(&vs, 1.0) || seen(&vs, -1.0));
+        let halves = category_draws_at(&unbounded(), FloatWidth::F32, HALF_INTEGER);
+        assert!(
+            halves
+                .iter()
+                .all(|&v| v.fract().abs() == 0.5 && v.abs() < TWO_24 / 2.0)
+        );
+        assert!(halves.iter().all(|&v| is_f32(v)));
+    }
+
+    #[test]
+    fn log_uniform_integer_weights_binades_evenly() {
+        let mut rng = EngineRng::seeded(78);
+        let n = 44_000;
+        let mut counts = [0u32; 11];
+        for _ in 0..n {
+            let v = log_uniform_integer(0, 1023, &mut rng);
+            counts[(64 - v.leading_zeros()) as usize] += 1;
+        }
+        for (b, &c) in counts.iter().enumerate() {
+            let share = c as f64 / n as f64;
+            assert!((share - 1.0 / 11.0).abs() < 0.015, "bucket {b}: {share}");
+        }
+        for _ in 0..1000 {
+            let v = log_uniform_integer(6, 9, &mut rng);
+            assert!((6..=9).contains(&v), "{v}");
+        }
+        assert_eq!(log_uniform_integer(1 << 53, 1 << 53, &mut rng), 1 << 53);
+    }
+
+    #[test]
+    fn overflow_and_underflow_bands_make_pairs_misbehave() {
+        let adds = category_draws(&unbounded(), NEAR_MAX_FOR_ADD);
+        for &v in &adds {
+            assert!(in_band(v, NEAR_MAX_FOR_ADD_BANDS[0]), "{v:e}");
+            assert!((v + v).is_infinite());
+        }
+        assert!(adds.iter().any(|&v| v < 0.0) && adds.iter().any(|&v| v > 0.0));
+        let adds = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_MAX_FOR_ADD);
+        for &v in &adds {
+            assert!(in_band(v, NEAR_MAX_FOR_ADD_BANDS[1]), "{v:e}");
+            assert!((v as f32 + v as f32).is_infinite());
+            assert!((v + v).is_finite());
+        }
+
+        let muls = category_draws(&unbounded(), NEAR_MAX_FOR_MUL);
+        assert!(muls.iter().all(|&v| in_band(v, NEAR_MAX_FOR_MUL_BANDS[0])));
+        let overflowing = muls
+            .windows(2)
+            .filter(|w| (w[0] * w[1]).is_infinite())
+            .count();
+        assert!(
+            overflowing > 300 && overflowing < muls.len() - 300,
+            "{overflowing}"
+        );
+        let muls = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_MAX_FOR_MUL);
+        assert!(muls.iter().all(|&v| in_band(v, NEAR_MAX_FOR_MUL_BANDS[1])));
+        let overflowing = muls
+            .windows(2)
+            .filter(|w| (w[0] as f32 * w[1] as f32).is_infinite())
+            .count();
+        assert!(
+            overflowing > 300 && overflowing < muls.len() - 300,
+            "{overflowing}"
+        );
+
+        let tinies = category_draws(&unbounded(), NEAR_SQRT_MIN_POSITIVE);
+        assert!(
+            tinies
+                .iter()
+                .all(|&v| in_band(v, NEAR_SQRT_MIN_POSITIVE_BANDS[0]))
+        );
+        let underflowing = tinies
+            .windows(2)
+            .filter(|w| (w[0] * w[1]).is_subnormal())
+            .count();
+        assert!(
+            underflowing > 300 && underflowing < tinies.len() - 300,
+            "{underflowing}"
+        );
+        let tinies = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_SQRT_MIN_POSITIVE);
+        assert!(
+            tinies
+                .iter()
+                .all(|&v| in_band(v, NEAR_SQRT_MIN_POSITIVE_BANDS[1]))
+        );
+        let underflowing = tinies
+            .windows(2)
+            .filter(|w| (w[0] as f32 * w[1] as f32).is_subnormal())
+            .count();
+        assert!(
+            underflowing > 300 && underflowing < tinies.len() - 300,
+            "{underflowing}"
+        );
+    }
+
+    #[test]
+    fn nan_category_varies_sign_and_payload() {
+        let vs = category_draws(&unbounded(), NAN);
+        let (mut negative, mut canonical, mut signalling, mut other_payload) = (0, 0, 0, 0);
+        for &v in &vs {
+            assert!(v.is_nan());
+            let bits = v.to_bits();
+            if bits >> 63 == 1 {
+                negative += 1;
+            }
+            let payload = bits & ((1u64 << 52) - 1);
+            if payload == 1 << 51 {
+                canonical += 1;
+            } else if payload >> 51 == 0 {
+                signalling += 1;
+            } else {
+                other_payload += 1;
+            }
+        }
+        assert!(negative > 500, "{negative}");
+        assert!(canonical > 500, "{canonical}");
+        assert!(signalling > 200, "{signalling}");
+        assert!(other_payload > 200, "{other_payload}");
+        assert!(
+            !category_draws(&choice(0.0, 1.0), NAN)
+                .iter()
+                .any(|v| v.is_nan())
+        );
+    }
+
+    #[test]
+    fn point_categories_draw_exactly_their_landmarks() {
+        let fc = unbounded();
+        assert_exactly_set(
+            &category_draws(&fc, INFINITY),
+            &[f64::INFINITY, f64::NEG_INFINITY],
+        );
+        assert_exactly_set(&category_draws(&fc, MAX_MAGNITUDE), &[f64::MAX, -f64::MAX]);
+        assert_exactly_set(
+            &category_draws_at(&fc, FloatWidth::F32, MAX_MAGNITUDE),
+            &[F32_MAX, -F32_MAX],
+        );
+        assert_exactly_set(&category_draws(&fc, MAX_EXACT_INTEGER), &[TWO_53, -TWO_53]);
+        assert_exactly_set(
+            &category_draws_at(&fc, FloatWidth::F32, MAX_EXACT_INTEGER),
+            &[TWO_24, -TWO_24],
+        );
+        assert_exactly_set(&category_draws(&fc, SIGNED_ZERO), &[0.0, -0.0]);
+
+        assert_exactly_set(
+            &category_draws(&half_bounded(1.0, f64::INFINITY), INFINITY),
+            &[f64::INFINITY],
+        );
+        assert_exactly_set(
+            &category_draws(&half_bounded(f64::NEG_INFINITY, 0.0), INFINITY),
+            &[f64::NEG_INFINITY],
+        );
+        assert_exactly_set(
+            &category_draws_at(
+                &choice(f64::from(f32::MIN), F32_MAX),
+                FloatWidth::F32,
+                MAX_MAGNITUDE,
+            ),
+            &[F32_MAX, -F32_MAX],
+        );
+        assert_exactly_set(
+            &category_draws_at(&choice(0.0, 1e8), FloatWidth::F32, MAX_EXACT_INTEGER),
+            &[TWO_24],
+        );
+        assert!(
+            !category_draws(&choice(0.0, 1e8), MAX_EXACT_INTEGER)
+                .iter()
+                .all(|&v| v == TWO_24),
+            "an f64 draw offered f32's landmark"
+        );
+        assert_exactly_set(&category_draws(&choice(0.0, 1.0), SIGNED_ZERO), &[0.0]);
+        assert_exactly_set(&category_draws(&choice(-1.0, -0.0), SIGNED_ZERO), &[-0.0]);
+    }
+
+    #[test]
+    fn binade_edge_category_draws_powers_of_two_and_predecessors() {
+        let vs = category_draws(&unbounded(), BINADE_EDGE);
+        let (mut powers, mut predecessors, mut negative) = (0, 0, 0);
+        let mut exponents = std::collections::HashSet::new();
+        for &v in &vs {
+            let mantissa = float_mantissa(v);
+            if mantissa == 0 {
+                assert!(v.is_normal(), "{v:e}");
+                powers += 1;
+            } else {
+                assert_eq!(mantissa, FLOAT_MANTISSA_MASK, "{v:e}");
+                predecessors += 1;
+            }
+            if v < 0.0 {
+                negative += 1;
+            }
+            exponents.insert(float_biased_exponent(v));
+        }
+        assert!(
+            powers > 500 && predecessors > 500,
+            "{powers} / {predecessors}"
+        );
+        assert!(negative > 500, "{negative}");
+        assert!(exponents.len() > 500, "{}", exponents.len());
+
+        assert_exactly_set(
+            &category_draws(&choice(1.0, 4.0), BINADE_EDGE),
+            &[1.0, 2.0, 4.0, 2.0f64.next_down(), 4.0f64.next_down()],
+        );
+        assert_exactly_set(
+            &category_draws(&choice(-8.0, -3.0), BINADE_EDGE),
+            &[-4.0, -8.0, -(4.0f64.next_down()), -(8.0f64.next_down())],
+        );
+        assert_exactly_set(&category_draws(&choice(2.0, 2.0), BINADE_EDGE), &[2.0]);
+        for v in category_draws(&choice(0.0, 1e-310), BINADE_EDGE) {
+            assert!(v == 0.0 || v.is_subnormal(), "{v:e}");
+        }
+
+        let vs = category_draws_at(&unbounded(), FloatWidth::F32, BINADE_EDGE);
+        let mut exponents = std::collections::HashSet::new();
+        let (mut powers, mut predecessors) = (0, 0);
+        for &v in &vs {
+            assert!(is_f32(v), "{v:e}");
+            let bits = (v as f32).to_bits();
+            let mantissa = bits & ((1u32 << 23) - 1);
+            if mantissa == 0 {
+                assert!((v as f32).is_normal(), "{v:e}");
+                powers += 1;
+            } else {
+                assert_eq!(mantissa, (1u32 << 23) - 1, "{v:e}");
+                predecessors += 1;
+            }
+            exponents.insert((bits >> 23) & 0xFF);
+        }
+        assert!(
+            powers > 500 && predecessors > 500,
+            "{powers} / {predecessors}"
+        );
+        assert!(exponents.len() > 100, "{}", exponents.len());
+        assert_exactly_set(
+            &category_draws_at(&choice(1.0, 4.0), FloatWidth::F32, BINADE_EDGE),
+            &[
+                1.0,
+                2.0,
+                4.0,
+                f64::from(2.0f32.next_down()),
+                f64::from(4.0f32.next_down()),
+            ],
+        );
+    }
+
+    #[test]
+    fn non_dyadic_category_draws_small_non_integers_or_fits_the_range() {
+        let vs = category_draws(&unbounded(), NON_DYADIC);
+        let mut long_fraction = 0;
+        for &v in &vs {
+            assert!(v.is_finite() && v.abs() <= 101.0 && v != v.trunc(), "{v}");
+            if (v * 100.0).fract() != 0.0 {
+                long_fraction += 1;
+            }
+        }
+        assert!(long_fraction > 500, "{long_fraction}");
+        assert!(vs.iter().any(|&v| v < 0.0) && vs.iter().any(|&v| v > 0.0));
+        assert!(
+            vs.iter().filter(|v| v.abs().to_string().len() <= 5).count() > 50,
+            "no short decimals"
+        );
+
+        for v in category_draws(&choice(0.0, 1.0), NON_DYADIC) {
+            assert!(v > 0.0 && v < 1.0 && v != v.trunc(), "{v}");
+        }
+        for v in category_draws(&choice(-1.0, -0.5), NON_DYADIC) {
+            assert!((-1.0..=-0.5).contains(&v), "{v}");
+        }
+        let fitted = category_draws(&choice(100.0, 200.0), NON_DYADIC);
+        assert!(fitted.iter().all(|&v| (100.0..=200.0).contains(&v)));
+        assert!(fitted.iter().filter(|&&v| v > 101.0).count() > 1000);
+    }
+
+    /// The default is a coin flip between the continuous uniform and the
+    /// log-uniform, so a bounded range shows both an ordinary middle and a
+    /// spread over its small scales, reaching all the way down to the deep
+    /// binades far below the top bound.
+    #[test]
+    fn default_draw_is_half_uniform_half_log_uniform() {
+        let vs = category_draws(&choice(0.0, 10.0), DEFAULT);
+        let (mut tiny, mut deep, mut upper_half) = (0, 0, 0);
+        for &v in &vs {
+            assert!((0.0..=10.0).contains(&v), "{v:e}");
+            if v < 1e-6 {
+                tiny += 1;
+            }
+            if v != 0.0 && v < 1e-100 {
+                deep += 1;
+            }
+            if v > 5.0 {
+                upper_half += 1;
+            }
+        }
+        let tiny_fraction = tiny as f64 / vs.len() as f64;
+        assert!(
+            (0.35..0.6).contains(&tiny_fraction),
+            "{tiny_fraction} of default draws on [0, 10] were below 1e-6; expected \
+             nearly all of the log-uniform half"
+        );
+        assert!(
+            deep > 200,
+            "{deep} of {} default draws on [0, 10] were below 1e-100; the log-uniform \
+             half must reach the deep binades under a finite bound",
+            vs.len()
+        );
+        let upper_fraction = upper_half as f64 / vs.len() as f64;
+        assert!(
+            (0.15..0.35).contains(&upper_fraction),
+            "{upper_fraction} of default draws on [0, 10] were above 5; expected \
+             about half of the uniform half"
+        );
+
+        let vs = category_draws(&choice(1e-8, 2e4), DEFAULT);
+        let below_one = vs.iter().filter(|&&v| v < 1.0).count() as f64 / vs.len() as f64;
+        assert!((0.25..0.5).contains(&below_one), "{below_one}");
+
+        let vs = category_draws(&unbounded(), DEFAULT);
+        let finite: Vec<f64> = vs.iter().copied().filter(|v| v.is_finite()).collect();
+        assert!(finite.len() > 1900, "{}", finite.len());
+        let (mut positive, mut negative, mut tiny) = (0, 0, 0);
+        for &v in &finite {
+            if v > 0.0 {
+                positive += 1;
+            } else if v < 0.0 {
+                negative += 1;
+            }
+            if v != 0.0 && v.abs() < 1e-200 {
+                tiny += 1;
+            }
+        }
+        assert!(positive > 500 && negative > 500, "{positive} / {negative}");
+        assert!(tiny > 120, "{tiny}");
+        assert!(finite.iter().any(|&v| v.abs() > 1e100));
+
+        let vs = category_draws(&choice(-1.0, 1.0), DEFAULT);
+        assert!(vs.iter().all(|&v| v.abs() <= 1.0));
+        let below = vs.iter().filter(|&&v| v != 0.0 && v.abs() < 1e-10).count();
+        assert!(below > 150, "{below}");
+
+        let wide = category_draws(&choice(-f64::MAX, f64::MAX), DEFAULT);
+        assert!(wide.iter().all(|v| v.is_finite()));
+        let clamped = category_draws(&with_snm(choice(-1.0, 1.0), 0.5), DEFAULT);
+        assert!(clamped.iter().all(|&v| v == 0.0 || v.abs() >= 0.5));
+    }
+
+    /// A category the range rules out sends its mass to the default draw, not
+    /// to the next category in weight order. On `[0.3, 0.45]`, inside one
+    /// binade, both halves of the default are a plain uniform, so the
+    /// fall-through shows as the right mean and no collapse onto a few values.
+    #[test]
+    fn unavailable_category_falls_through_to_the_default() {
+        let fc = choice(0.3, 0.45);
+        for category in [
+            NEAR_ZERO,
+            SUBNORMAL,
+            NEAR_ONE,
+            INTEGER,
+            HALF_INTEGER,
+            NEAR_MAX_FOR_ADD,
+            NEAR_MAX_FOR_MUL,
+            NEAR_SQRT_MIN_POSITIVE,
+            NAN,
+            INFINITY,
+            MAX_MAGNITUDE,
+            MAX_EXACT_INTEGER,
+            SIGNED_ZERO,
+            BINADE_EDGE,
+        ] {
+            let vs = category_draws(&fc, category);
+            let mean = vs.iter().sum::<f64>() / vs.len() as f64;
+            assert!(
+                (mean - 0.375).abs() < 0.01,
+                "category {category}: mean {mean}"
+            );
+            let distinct: std::collections::HashSet<u64> = vs.iter().map(|v| v.to_bits()).collect();
+            assert!(
+                distinct.len() > 1900,
+                "category {category}: {}",
+                distinct.len()
+            );
+        }
+    }
+
+    #[test]
+    fn category_weights_control_the_mix() {
+        let fc = choice(0.0, 1.0);
+        let mut weights = [0.0; N_CATEGORIES];
+        weights[INTEGER] = 0.5;
+        weights[DEFAULT] = 0.5;
+        let half_integers = draws(
+            &fc,
+            FloatGenerationParameters::from_weights(weights),
+            3,
+            20_000,
+        );
+        let integral = half_integers.iter().filter(|&&v| v == v.trunc()).count() as f64
+            / half_integers.len() as f64;
+        assert!((integral - 0.5).abs() < 0.03, "{integral}");
+
+        let mut weights = [0.0; N_CATEGORIES];
+        weights[NAN] = 0.25;
+        weights[SIGNED_ZERO] = 0.25;
+        weights[DEFAULT] = 0.5;
+        let vs = draws(
+            &unbounded(),
+            FloatGenerationParameters::from_weights(weights),
+            4,
+            20_000,
+        );
+        let nan = vs.iter().filter(|v| v.is_nan()).count() as f64 / vs.len() as f64;
+        let zero = vs.iter().filter(|&&v| v == 0.0).count() as f64 / vs.len() as f64;
+        assert!((nan - 0.25).abs() < 0.03, "{nan}");
+        assert!((zero - 0.25).abs() < 0.03, "{zero}");
+    }
+
+    #[test]
+    fn default_weights_surface_every_category_on_the_unbounded_range() {
+        let vs = draws(
+            &unbounded(),
+            FloatGenerationParameters::default(),
+            11,
+            20_000,
+        );
+        let rate = |pred: &dyn Fn(f64) -> bool| {
+            vs.iter().filter(|&&v| pred(v)).count() as f64 / vs.len() as f64
+        };
+        let checks: [(&str, &dyn Fn(f64) -> bool); 9] = [
+            ("nan", &|v| v.is_nan()),
+            ("infinite", &|v| v.is_infinite()),
+            ("zero", &|v| v == 0.0),
+            ("subnormal", &|v| v.is_subnormal()),
+            ("near ±1", &|v| {
+                v.abs() != 1.0 && (v.abs() - 1.0).abs() < 1e-9
+            }),
+            ("half integer", &|v| v.is_finite() && v.fract().abs() == 0.5),
+            ("top binade", &|v| {
+                v.is_finite() && v.abs() >= float_pow2(1023)
+            }),
+            ("max exact integer", &|v| {
+                v.abs() == TWO_53 || v.abs() == TWO_24
+            }),
+            ("tiny", &|v| v != 0.0 && v.abs() < 1e-200),
+        ];
+        for (name, pred) in checks {
+            let r = rate(pred);
+            assert!(r > 0.01, "{name} rate {r:.4}");
+        }
+    }
+
+    #[test]
+    fn log_uniform_magnitude_weights_binades_evenly() {
+        let mut rng = EngineRng::seeded(77);
+        let (lo, hi) = (float_pow2(-10), float_pow2(10));
+        let mut counts = [0u32; 21];
+        let n = 42_000;
+        for _ in 0..n {
+            let v = log_uniform_magnitude(lo, hi, &mut rng);
+            assert!((lo..=hi).contains(&v), "{v}");
+            counts[(float_biased_exponent(v) as i64 - 1013) as usize] += 1;
+        }
+        for (i, &c) in counts.iter().enumerate() {
+            let share = c as f64 / n as f64;
+            assert!((share - 1.0 / 21.0).abs() < 0.015, "binade {i}: {share}");
+        }
+        for _ in 0..1000 {
+            let v = log_uniform_magnitude(1.5, 1.75, &mut rng);
+            assert!((1.5..=1.75).contains(&v), "{v}");
+            let s = log_uniform_magnitude(5e-324, 1e-320, &mut rng);
+            assert!(s.is_subnormal() && s <= 1e-320, "{s:e}");
+        }
+    }
+
+    #[test]
+    fn float_below_is_the_finite_predecessor() {
+        assert_eq!(float_below(1.0), 1.0f64.next_down());
+        assert_eq!(float_below(0.1), 0.1f64.next_down());
+        assert_eq!(float_below(float_pow2(513)), float_pow2(513).next_down());
+        assert!(float_below(f64::MIN_POSITIVE).is_subnormal());
+    }
 }
