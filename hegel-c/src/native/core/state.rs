@@ -6,7 +6,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use once_cell::race::OnceBox;
 
@@ -14,12 +14,15 @@ use rand::{Rng, RngExt};
 
 use crate::native::rng::EngineRng;
 
+#[cfg(any(test, feature = "__bench"))]
+use super::ExternalReplay;
 use super::MAX_CLONE_DEPTH;
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind, ChoiceValue,
     EngineError, FloatChoice, IntegerChoice, InterestingOrigin, RealizedStream, Status,
     StringChoice,
 };
+use super::replay::{Divergence, Replay, Resolved};
 use super::{
     BOUNDARY_PROBABILITY, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE, DIRICHLET_ALPHA_ENDPOINT,
     DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_DEFAULT,
@@ -1539,25 +1542,6 @@ pub struct FamilyCore {
     /// the label plus the numeric observation for `event_value`. Family-wide
     /// so clone-stream events land on the same test case.
     pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
-    /// Set when a state machine with `max_concurrency > 1` was requested on
-    /// any stream of this family: the test asked for real concurrency, so
-    /// its behaviour depends on thread scheduling and the run driving this
-    /// family is nondeterministic. Set even when the creation itself is
-    /// rejected (see [`Self::reject_concurrent_machine`]). The engine reads
-    /// this after each execution and flips the whole run into
-    /// nondeterministic mode.
-    concurrent_machine: AtomicBool,
-    /// Set by the engine on every test case of a run that is not (yet)
-    /// known to be nondeterministic: a state machine creation with
-    /// `max_concurrency > 1` must then fail with an assume violation, so
-    /// the case is discarded like a failed assumption while
-    /// [`Self::concurrent_machine`] still tells the engine to flip the run.
-    /// Every later case is stamped as nondeterministic up front, so its
-    /// whole execution — including draws made before the machine is
-    /// created — can be emitted for the failure report. Defaults to false
-    /// (allow), which standalone handles (blob replays, embeddings driving
-    /// the engine directly) keep.
-    reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<FreshIds>,
@@ -1577,37 +1561,9 @@ impl FamilyCore {
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
             events: Mutex::new(Vec::new()),
-            concurrent_machine: AtomicBool::new(false),
-            reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(FreshIds::default()),
             generation_parameters: OnceBox::new(),
         }
-    }
-
-    /// Record that a state machine with `max_concurrency > 1` was requested
-    /// on a stream of this family (see [`Self::concurrent_machine`]).
-    pub(crate) fn set_concurrent_machine(&self) {
-        self.concurrent_machine.store(true, Ordering::Relaxed);
-    }
-
-    /// Whether a state machine with `max_concurrency > 1` was requested on
-    /// any stream of this family.
-    pub(crate) fn concurrent_machine(&self) -> bool {
-        self.concurrent_machine.load(Ordering::Relaxed)
-    }
-
-    /// Set whether a state machine creation with `max_concurrency > 1`
-    /// must be rejected on this family (see
-    /// [`Self::reject_concurrent_machine`]).
-    pub(crate) fn set_reject_concurrent_machine(&self, reject: bool) {
-        self.reject_concurrent_machine
-            .store(reject, Ordering::Relaxed);
-    }
-
-    /// Whether a state machine creation with `max_concurrency > 1` must be
-    /// rejected on this family.
-    pub(crate) fn reject_concurrent_machine(&self) -> bool {
-        self.reject_concurrent_machine.load(Ordering::Relaxed)
     }
 
     /// Record this test case's swarm parameters. Called once when the root
@@ -1669,16 +1625,17 @@ impl FamilyCore {
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
-/// During replay/shrinking, choices are drawn from a prefix.
+/// During replay/shrinking, choices are drawn from a [`Replay`]: the
+/// stored timelines this stream can serve from, and the family's live set.
 ///
 /// One `NativeTestCase` is one *stream* of a test-case family: the root
 /// stream, or a cloned stream created by [`Self::clone_stream`]. Each stream
-/// has its own prefix, RNG, nodes, and span structure, so streams driven
-/// from different threads generate independently; the conclusion, draw
-/// budget, and stateful bookkeeping are shared through [`FamilyCore`].
+/// has its own replay view, RNG, nodes, and span structure, so streams
+/// driven from different threads generate independently; the conclusion,
+/// draw budget, live set, and stateful bookkeeping are shared through
+/// [`FamilyCore`] and the replay.
 pub struct NativeTestCase {
-    prefix: Vec<ChoiceValue>,
-    prefix_nodes: Option<Vec<ChoiceNode>>,
+    replay: Replay,
     rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
@@ -1687,9 +1644,10 @@ pub struct NativeTestCase {
     /// status) lets `conclude_test` conclude before calling `freeze()`
     /// without triggering the idempotency early-return.
     frozen: bool,
-    /// Whether this test case belongs to a run already known to be
-    /// nondeterministic. Copied into every cloned stream.
-    is_nondeterministic: bool,
+    /// Whether the engine stamped this test case for capture: the client
+    /// buffers its output and, if it fails, its rendered diagnostic — the
+    /// material for the failure report. Copied into every cloned stream.
+    should_capture: bool,
     /// State shared with every other stream of this test case's family.
     pub(crate) family: Arc<FamilyCore>,
     /// This stream's position in the clone tree: empty for the root, the
@@ -1722,7 +1680,8 @@ pub struct NativeTestCase {
 }
 
 impl NativeTestCase {
-    #[cfg(test)]
+    /// A fresh randomly generated test case: the replay primitive's
+    /// fresh-generation tier under nondeterministic handling.
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
         Self::for_choices_and_template(&[], None, None, super::BUFFER_SIZE, None).with_random(rng)
     }
@@ -1760,8 +1719,7 @@ impl NativeTestCase {
             usize::MAX
         };
         Self::new_stream(
-            choices.to_vec(),
-            prefix_nodes.map(|n| n.to_vec()),
+            Replay::pun(choices.to_vec(), prefix_nodes.map(|n| n.to_vec())),
             None,
             trailing,
             max_size,
@@ -1772,27 +1730,99 @@ impl NativeTestCase {
         )
     }
 
+    /// Replay a pool of timelines as one test case under
+    /// [`Rescue::Continue`] (decision 74): every draw is served from the
+    /// first live timeline that fits it, and a run that leaves every
+    /// timeline continues with random draws up to `max_size` choices in
+    /// total. `max_size` is floored to the longest timeline's length. The
+    /// engine walks graphs ([`Self::for_graph`]); this is the live set's
+    /// test and experiment seam.
+    #[cfg(any(test, feature = "__bench"))]
+    pub fn for_counterexample(
+        timelines: &[Vec<ChoiceValue>],
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        let replay = Replay::counterexample(timelines.to_vec());
+        let max_size = max_size.max(replay.longest());
+        Self::new_stream(
+            replay,
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
+    /// Replay a test case every draw of which `resolver` decides
+    /// (experiment 017), drawing randomly where it declines, up to
+    /// `max_size` choices in total.
+    #[cfg(any(test, feature = "__bench"))]
+    pub fn for_external(
+        resolver: Box<dyn ExternalReplay>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        let replay = Replay::external(resolver);
+        let max_size = max_size.max(replay.longest());
+        Self::new_stream(
+            replay,
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
+    /// Walk a counterexample stored as a graph (decision 78): every draw
+    /// served by the graph where its state and address have an edge, at
+    /// random where they do not, up to `max_size` choices in total. See
+    /// [`Replay::graph`].
+    pub(crate) fn for_graph(
+        graph: Arc<crate::native::graph::Graph>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        Self::new_stream(
+            Replay::graph(graph),
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+        .with_random(rng)
+    }
+
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
     fn new_stream(
-        prefix: Vec<ChoiceValue>,
-        prefix_nodes: Option<Vec<ChoiceNode>>,
+        replay: Replay,
         rng: Option<EngineRng>,
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
-        is_nondeterministic: bool,
+        should_capture: bool,
         family: Arc<FamilyCore>,
         clone_id: Vec<usize>,
     ) -> Self {
         NativeTestCase {
-            prefix,
-            prefix_nodes,
+            replay,
             rng,
             max_size,
             nodes: Vec::new(),
             frozen: false,
-            is_nondeterministic,
+            should_capture,
             family,
             clone_id,
             clone_counter: 0,
@@ -1870,14 +1900,41 @@ impl NativeTestCase {
         &self.family
     }
 
-    /// Mark this test case as belonging to a nondeterministic run.
-    pub(crate) fn set_nondeterministic(&mut self) {
-        self.is_nondeterministic = true;
+    /// Where this test case's replay first left its stored counterexample,
+    /// if it did (decision 74): the family's first divergence.
+    pub fn divergence(&self) -> Option<Divergence> {
+        self.replay.divergence()
     }
 
-    /// Whether this test case belongs to a nondeterministic run.
-    pub(crate) fn is_nondeterministic(&self) -> bool {
-        self.is_nondeterministic
+    /// Which of the replayed pool's timelines are still live, in pool
+    /// order: at the end of a run, the timelines every draw of every
+    /// stream agreed with. `[true]` for a proposal replay, empty for fresh
+    /// generation and graph walks.
+    #[cfg(any(test, feature = "__bench"))]
+    pub fn live_timelines(&self) -> Vec<bool> {
+        self.replay.live()
+    }
+
+    /// Under a graph walk (decision 78), the graph edges this run settled
+    /// on, as `(node, edge index)`: see [`Replay::settled`].
+    pub fn settled_edges(&self) -> Vec<(usize, usize)> {
+        self.replay.settled()
+    }
+
+    /// Under a graph walk, whether the run ended where the graph ends: see
+    /// [`Replay::ended_on_end`].
+    pub fn ended_on_end(&self) -> bool {
+        self.replay.ended_on_end()
+    }
+
+    /// Stamp this test case for capture.
+    pub(crate) fn set_should_capture(&mut self) {
+        self.should_capture = true;
+    }
+
+    /// Whether the engine stamped this test case for capture.
+    pub(crate) fn should_capture(&self) -> bool {
+        self.should_capture
     }
 
     /// Create an independent cloned stream of this test case.
@@ -1901,13 +1958,9 @@ impl NativeTestCase {
             return Err(EngineError::InvalidTestCase);
         }
         let idx = self.nodes.len();
-        let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
-            Some(ChoiceValue::Clone(record)) => (
-                record.owned_values(),
-                record.realized_nodes().map(<[ChoiceNode]>::to_vec),
-            ),
-            _ => (Vec::new(), None),
-        };
+        let child_replay = self
+            .replay
+            .clone_child(&self.clone_id, idx, || self.open_span_frames());
         let child_rng = self.rng.as_mut().map(EngineRng::spawn);
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
@@ -1916,20 +1969,19 @@ impl NativeTestCase {
         let child_max_size = if child_rng.is_some() || child_template.is_some() {
             usize::MAX
         } else {
-            child_prefix.len()
+            child_replay.longest()
         };
         let mut child_id = self.clone_id.clone();
         child_id.push(self.clone_counter);
         self.clone_counter += 1;
 
         let child = Self::new_stream(
-            child_prefix,
-            child_prefix_nodes,
+            child_replay,
             child_rng,
             child_template,
             child_max_size,
             None,
-            self.is_nondeterministic,
+            self.should_capture,
             Arc::clone(&self.family),
             child_id,
         );
@@ -1998,6 +2050,23 @@ impl NativeTestCase {
     /// The number of currently-open spans.
     pub fn span_depth(&self) -> usize {
         self.span_stack.len()
+    }
+
+    /// The structural address of the next draw (experiment 019): the open
+    /// spans outermost first, each as its label and the number of earlier
+    /// siblings under the same parent with that label.
+    pub fn open_span_frames(&self) -> Vec<(u64, usize)> {
+        self.span_stack
+            .iter()
+            .map(|&idx| {
+                let span = &self.spans[idx];
+                let ordinal = self.spans.as_slice()[..idx]
+                    .iter()
+                    .filter(|s| s.parent == span.parent && s.label == span.label)
+                    .count();
+                (span.label, ordinal)
+            })
+            .collect()
     }
 
     /// Close the innermost currently-open span.
@@ -2533,35 +2602,39 @@ impl NativeTestCase {
         Ok(())
     }
 
-    /// Resolve a typed choice value from forced, prefix, or random.
+    /// Resolve a typed choice value from the replay, the trailing template,
+    /// or random.
     ///
-    /// `from_prefix` both validates a replayed prefix value against the
-    /// draw's constraint and extracts the typed payload, so a successful
-    /// replay hands back a value proven to fit the draw. A prefix value
-    /// that doesn't fit puns exactly as before: to the draw's `simplest()`
-    /// when the stale value was its original kind's simplest, and to
-    /// `unit()` otherwise.
+    /// `from_prefix` both validates a stored value against the draw's
+    /// constraint and extracts the typed payload, so a successful replay
+    /// hands back a value proven to fit the draw. Under [`Rescue::Pun`] a
+    /// stored value that doesn't fit puns exactly as before: to the draw's
+    /// `simplest()` when the stale value was its original kind's simplest,
+    /// and to `unit()` otherwise.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
         unit: impl FnOnce() -> Result<V, InternalError>,
-        from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
+        from_prefix: impl Fn(&ChoiceValue) -> Option<V>,
         random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
         let idx = self.nodes.len();
 
-        if idx < self.prefix.len() {
-            let prefix_value = &self.prefix[idx];
-            if let Some(v) = from_prefix(prefix_value) {
-                return Ok((v, false));
+        match self
+            .replay
+            .resolve(&self.clone_id, idx, || self.open_span_frames(), from_prefix)
+        {
+            Resolved::Served(v) => return Ok((v, false)),
+            Resolved::Misfit(stored, timeline) => {
+                let is_simplest = match self.replay.proposal_node(timeline, idx) {
+                    Some(pn) => *stored == pn.data.simplest_value()?,
+                    None => false,
+                };
+                return Ok((if is_simplest { simplest()? } else { unit()? }, false));
             }
-            let is_simplest = match self.prefix_nodes.as_ref().and_then(|pn| pn.get(idx)) {
-                Some(pn) => *prefix_value == pn.data.simplest_value()?,
-                None => false,
-            };
-            return Ok((if is_simplest { simplest()? } else { unit()? }, false));
+            Resolved::Exhausted => {}
         }
 
         if let Some(template) = self.trailing_template.as_mut() {

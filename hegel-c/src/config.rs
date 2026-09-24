@@ -24,7 +24,7 @@ use toml::Spanned;
 use toml::de::{DeString, DeTable, DeValue};
 
 use crate::profiles::{BASE, DEFAULT, ProfileDelta, ProfileError, is_valid_name};
-use crate::settings::{Backend, Database, HealthCheck, Phase, Verbosity};
+use crate::settings::{Backend, Database, HealthCheck, NondeterminismStrictness, Phase, Verbosity};
 
 /// The config file's name, looked for in the current directory and every
 /// ancestor.
@@ -353,6 +353,22 @@ fn assign(
                     return Err(err(
                         line_no,
                         format!("`backend` expects one of default|urandom, got {other:?}"),
+                    ));
+                }
+            });
+        }
+        "nondeterminism_strictness" => {
+            let s = expect_string(src, value, key)?;
+            delta.nondeterminism_strictness = Some(match s {
+                "quiet" => NondeterminismStrictness::Quiet,
+                "warn" => NondeterminismStrictness::Warn,
+                "error" => NondeterminismStrictness::Error,
+                other => {
+                    return Err(err(
+                        line_no,
+                        format!(
+                            "`nondeterminism_strictness` expects one of quiet|warn|error, got {other:?}"
+                        ),
                     ));
                 }
             });

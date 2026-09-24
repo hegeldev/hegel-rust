@@ -12,6 +12,7 @@ mod common;
 use common::exec::self_test;
 use hegel::TestCase;
 use hegel::generators as gs;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A correct-usage attribute compiles (exercising the `#[hegel::test]`
 /// wiring that injects `.reproduce_failure(...)`); at runtime an undecodable
@@ -64,6 +65,59 @@ fn repro_replay_fixture(tc: TestCase) {
 fn repro_replay_stacked_fixture(tc: TestCase) {
     let x: i32 = tc.draw(gs::integers());
     assert!(x < 5, "x was {x}");
+}
+
+static ND_FIXTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// Stage 1 nondeterministic fixture: every execution draws the same single
+/// choice, so the passing first execution and the failing second are a
+/// verdict flake on one fingerprint, flipping the run nondeterministic.
+/// From then on the failure reproduces from its choices every time.
+#[hegel::test(print_blob = true)]
+#[ignore = "fixture: run via exec::self_test"]
+fn nd_repro_print_blob_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
+    if ND_FIXTURE_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+        return;
+    }
+    assert!(x < 10, "x was at least ten");
+}
+
+/// Stage 2 nondeterministic fixture: replays the v2 blob passed via
+/// `HEGEL_TEST_ND_REPRO_BLOB`. Same draw as stage 1 without the
+/// first-execution pass, so the single replay reaches the assertion.
+#[hegel::test]
+#[hegel::reproduce_failure(std::env::var("HEGEL_TEST_ND_REPRO_BLOB").unwrap())]
+#[ignore = "fixture: run via exec::self_test"]
+fn nd_repro_replay_fixture(tc: TestCase) {
+    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
+    assert!(x < 10, "x was at least ten");
+}
+
+/// End-to-end for a nondeterministic run: the failure report carries the
+/// confirmation caveat, and its v2 blob replays through
+/// `#[hegel::reproduce_failure]`.
+#[test]
+fn nd_failure_reports_a_caveat_and_a_replayable_v2_blob() {
+    let out = self_test("nd_repro_print_blob_fixture")
+        .expect_failure("x was at least ten")
+        .run();
+    let combined = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        combined.contains("note: nondeterministic failure"),
+        "expected the confirmation caveat in the report:\n{combined}"
+    );
+    let re = regex::Regex::new(r#"reproduce_failure\("([^"]+)"\)"#).unwrap();
+    let blob = re
+        .captures(&combined)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| panic!("no reproduce_failure line in output:\n{combined}"));
+
+    self_test("nd_repro_replay_fixture")
+        .env("HEGEL_TEST_ND_REPRO_BLOB", &blob)
+        .expect_failure("x was at least ten")
+        .run();
 }
 
 /// End-to-end: a failing test prints a reproducer blob; pasting that blob

@@ -47,14 +47,14 @@ pub(crate) fn run_native(
 /// Runs the whole exploration. Suspends only at the offers, so it can be
 /// driven with a no-op waker (see [`crate::exchange`]).
 ///
-/// The engine only *explores* — database replay, generation, and shrinking —
-/// and every test case is non-final. Each returned
-/// [`Failure`](crate::backend::Failure) carries the origin the engine grouped
-/// on plus a reproduce blob; the caller replays each blob (via
-/// `hegel_test_case_from_blob`) to produce the final report and the panic
-/// message. `Err` is a [`RunError`] — a failure of the run itself (health
-/// check, nondeterminism) rather than of any test case; the embedding reports
-/// it through its own error channel.
+/// The engine owns the whole exploration — database replay, generation,
+/// shrinking, and the final replay of each failure it reports — and every
+/// test case is non-final. Each returned
+/// [`Failure`](crate::backend::Failure) carries the origin the engine
+/// grouped on, a reproduce blob when the failure has one, and the caveat
+/// when the run handled nondeterminism. `Err` is a [`RunError`] — a failure
+/// of the run itself (health check, nondeterminism) rather than of any test
+/// case; the embedding reports it through its own error channel.
 pub(crate) async fn run_native_async(
     settings: &Settings,
     database_key: Option<&str>,
@@ -67,25 +67,49 @@ pub(crate) async fn run_native_async(
 /// base64 failure blob, or `None` if the blob cannot be decoded (corrupt or
 /// from an incompatible Hegel version).
 ///
-/// The replay is a single deterministic test case: the embedding caller
-/// drives the returned data source directly (generate, spans, targets) and
-/// concludes it with [`DataSource::mark_complete`], deciding for itself
-/// whether the blob reproduced its failure (the property failed) or is stale
-/// (it passed). A blob whose choices no longer match the caller's generators
-/// surfaces as a stop-test error from the draw that overruns.
+/// The replay is a single test case: the embedding caller drives the
+/// returned data source directly (generate, spans, targets) and concludes
+/// it with [`DataSource::mark_complete`], deciding for itself whether the
+/// blob reproduced its failure (the property failed) or is stale (it
+/// passed). A deterministic blob replays exactly, and choices that no
+/// longer match the caller's generators surface as a stop-test error from
+/// the draw that overruns; a nondeterministic blob replays its whole
+/// counterexample as one test case (decision 74) with the stored entropy
+/// seed and continuation budget, so a replay that leaves every stored
+/// timeline completes with fresh draws instead.
 #[doc(hidden)]
 pub fn data_source_for_blob(
     settings: &Settings,
     blob: &str,
 ) -> Option<Box<dyn DataSource + Send + Sync>> {
-    let choices = crate::native::blob::decode_failure(blob)?;
-    if settings.verbosity == Verbosity::Debug {
-        settings.output.line(&format!(
-            "replaying failure blob: choices = {}",
-            choices.len()
-        ));
-    }
-    let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
+    let ntc = match crate::native::blob::decode_blob(blob)? {
+        crate::native::blob::DecodedBlob::Choices(choices) => {
+            if settings.verbosity == Verbosity::Debug {
+                settings.output.line(&format!(
+                    "replaying failure blob: choices = {}",
+                    choices.len()
+                ));
+            }
+            crate::native::core::NativeTestCase::for_choices(&choices, None, None)
+        }
+        crate::native::blob::DecodedBlob::Nd(state) => {
+            if settings.verbosity == Verbosity::Debug {
+                settings.output.line(&format!(
+                    "replaying nondeterministic failure blob: graph edges = {}, longest run = {}",
+                    state.graph.edge_count(),
+                    state.longest
+                ));
+            }
+            let budget = crate::native::nd::continuation_budget(state.longest as usize);
+            let rng = crate::native::rng::EngineRng::seeded(state.entropy);
+            crate::native::core::NativeTestCase::for_graph(
+                alloc::sync::Arc::new(state.graph),
+                rng,
+                budget,
+            )
+            .ok()?
+        }
+    };
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
     Some(Box::new(data_source))
 }

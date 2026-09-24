@@ -89,6 +89,13 @@ int main(void) {
         return 1;
     }
 
+    const char *caveat;
+    HEGEL_CHECK(hegel_failure_caveat, ctx, f, &caveat);
+    if (caveat != NULL) {
+        fprintf(stderr, "FAIL: expected no caveat for a deterministic failure, got: %s\n", caveat);
+        return 1;
+    }
+
     printf("got expected failure: origin=%s\n", origin);
 
     /* Result and failure are caller-owned snapshots, freed independently. */

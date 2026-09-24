@@ -135,6 +135,20 @@ pub enum Verbosity {
     Debug,
 }
 
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NondeterminismStrictness {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    Quiet,
+    /// Switch as under `Quiet`, printing a one-line notice once per run.
+    Warn,
+    /// Abort the run with a flaky-test / nondeterminism error, for suites
+    /// that use determinism as a lint.
+    Error,
+}
+
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -176,6 +190,11 @@ pub struct Settings {
     /// Whether test cases may make any number of choices. See
     /// [`Settings::unbounded_choices`].
     pub(crate) unbounded_choices: bool,
+    pub(crate) nondeterminism_strictness: NondeterminismStrictness,
+    /// Test-only: start the run in nondeterministic handling instead of
+    /// waiting for a detection flip, so tests exercise the ND machinery
+    /// deterministically. Not reachable from any public API.
+    pub(crate) nd_force: bool,
 }
 
 impl Settings {
@@ -212,6 +231,8 @@ impl Settings {
             backend: Backend::Default,
             config_path: None,
             unbounded_choices: false,
+            nondeterminism_strictness: NondeterminismStrictness::Quiet,
+            nd_force: false,
         }
     }
 
@@ -266,6 +287,13 @@ impl Settings {
     /// Set the verbosity level.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    /// Set how the run reacts when it detects nondeterministic test
+    /// behavior. Defaults to [`NondeterminismStrictness::Quiet`].
+    pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
+        self.nondeterminism_strictness = strictness;
         self
     }
 

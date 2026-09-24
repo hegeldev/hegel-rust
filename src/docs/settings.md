@@ -17,6 +17,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `show_statistics` | boolean | `false` | Print the end-of-run statistics report for events recorded with [`TestCase::event`](crate::TestCase::event) and [`TestCase::event_value`](crate::TestCase::event_value). |
 | `print_blob` | boolean | `true` | On failure, print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. |
 | `backend` | `default`, `urandom` | `default` | The source of randomness ([`Backend`](crate::Backend)): a seeded PRNG, or fresh bytes from `/dev/urandom` on every draw for Antithesis's fuzzer to control. |
+| `nondeterminism_strictness` | `quiet`, `warn`, `error` | `quiet` | How a run reacts when it detects nondeterministic test behavior ([`NondeterminismStrictness`](crate::NondeterminismStrictness)): switch to nondeterministic handling silently, switch with a one-line notice, or abort the run with a flaky-test error. |
 
 The "Values" column is the vocabulary `hegel.toml` and the command-line
 flags use. In Rust the same settings are the builder methods on

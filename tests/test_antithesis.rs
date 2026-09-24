@@ -10,8 +10,7 @@ mod common;
 use common::exec::self_test;
 use hegel::TestCase;
 use hegel::generators as gs;
-use hegel::stateful::machine;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::TempDir;
 
 #[hegel::test]
@@ -212,53 +211,44 @@ fn test_health_checks_still_run_outside_antithesis() {
         .run();
 }
 
-struct Counter {
-    value: AtomicI64,
-}
+static FLAKY_ONCE: AtomicBool = AtomicBool::new(false);
 
-#[hegel::concurrent_state_machine]
-impl Counter {
-    #[rule]
-    fn increment(&self, _: TestCase) {
-        self.value.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-/// A genuinely concurrent machine (two workers), which outside Antithesis
-/// prints the notice that the run is nondeterministic.
-#[hegel::test]
+/// A failure that reproduces on no replay: the first-interesting check
+/// misses, the run flips into nondeterministic handling and, under `warn`
+/// strictness, prints the notice — except inside Antithesis, which is
+/// deterministic and owns reproduction.
+#[hegel::test(nondeterminism_strictness = hegel::NondeterminismStrictness::Warn)]
 #[ignore = "fixture: run via exec::self_test"]
-fn antithesis_concurrent_machine_fixture(tc: TestCase) {
-    let m = Counter {
-        value: AtomicI64::new(0),
-    };
-    machine(m)
-        .min_concurrency(2)
-        .max_concurrency(2)
-        .run_concurrent(tc);
+fn antithesis_nondeterminism_notice_fixture(tc: TestCase) {
+    let _ = tc.draw(gs::booleans());
+    if !FLAKY_ONCE.swap(true, Ordering::SeqCst) {
+        panic!("flaky once");
+    }
 }
 
 #[test]
 fn test_nondeterminism_notice_is_not_printed_in_antithesis() {
     let output_dir = TempDir::new().unwrap();
-    let out = self_test("antithesis_concurrent_machine_fixture")
+    let out = self_test("antithesis_nondeterminism_notice_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .expect_failure("unconfirmed failure")
         .run();
     let text = format!("{}\n{}", out.stdout, out.stderr);
     assert!(
-        !text.contains("Concurrent state machine detected"),
+        !text.contains("Nondeterministic test behavior detected"),
         "Antithesis is deterministic and owns reproduction:\n{text}"
     );
 }
 
 #[test]
 fn test_nondeterminism_notice_is_printed_outside_antithesis() {
-    let out = self_test("antithesis_concurrent_machine_fixture")
+    let out = self_test("antithesis_nondeterminism_notice_fixture")
         .env_remove("ANTITHESIS_OUTPUT_DIR")
+        .expect_failure("unconfirmed failure")
         .run();
     let text = format!("{}\n{}", out.stdout, out.stderr);
     assert!(
-        text.contains("Concurrent state machine detected"),
+        text.contains("Nondeterministic test behavior detected"),
         "the notice must still appear outside Antithesis:\n{text}"
     );
 }

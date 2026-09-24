@@ -15,6 +15,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_context_new() -> *mut HegelContext;
             fn hegel_event(ctx: *mut HegelContext, tc: *mut HegelTestCase, label: *const c_char) -> hegel_result_t;
             fn hegel_event_value(ctx: *mut HegelContext, tc: *mut HegelTestCase, value: f64, label: *const c_char) -> hegel_result_t;
+            fn hegel_failure_caveat(ctx: *mut HegelContext, f: *const HegelFailure, out_caveat: *mut *const c_char) -> hegel_result_t;
             fn hegel_failure_free(ctx: *mut HegelContext, f: *mut HegelFailure) -> hegel_result_t;
             fn hegel_failure_origin(ctx: *mut HegelContext, f: *const HegelFailure, out_origin: *mut *const c_char) -> hegel_result_t;
             fn hegel_failure_reproduction_blob(ctx: *mut HegelContext, f: *const HegelFailure, out_blob: *mut *const c_char) -> hegel_result_t;
@@ -78,11 +79,13 @@ macro_rules! for_each_hegel_fn {
             fn hegel_run_result_free(ctx: *mut HegelContext, r: *mut HegelRunResult) -> hegel_result_t;
             fn hegel_run_result_status(ctx: *mut HegelContext, r: *const HegelRunResult, out_status: *mut hegel_run_status_t) -> hegel_result_t;
             fn hegel_run_start(ctx: *mut HegelContext, settings: *const HegelSettings, callback: hegel_output_callback_t, user_data: *mut c_void, out_run: *mut *mut HegelRun) -> hegel_result_t;
+            fn hegel_run_start_blob(ctx: *mut HegelContext, settings: *const HegelSettings, blob: *const c_char, callback: hegel_output_callback_t, user_data: *mut c_void, out_run: *mut *mut HegelRun) -> hegel_result_t;
             fn hegel_set_default_profile(ctx: *mut HegelContext, name: *const c_char) -> hegel_result_t;
             fn hegel_settings_free(ctx: *mut HegelContext, s: *mut HegelSettings) -> hegel_result_t;
             fn hegel_settings_get_backend(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut hegel_backend_t) -> hegel_result_t;
             fn hegel_settings_get_database(ctx: *mut HegelContext, s: *const HegelSettings, out_database: *mut *const c_char) -> hegel_result_t;
             fn hegel_settings_get_derandomize(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
+            fn hegel_settings_get_nondeterminism_strictness(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut hegel_nondeterminism_strictness_t) -> hegel_result_t;
             fn hegel_settings_get_phases(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut u32) -> hegel_result_t;
             fn hegel_settings_get_print_blob(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
             fn hegel_settings_get_report_multiple_failures(ctx: *mut HegelContext, s: *const HegelSettings, out: *mut bool) -> hegel_result_t;
@@ -99,6 +102,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_settings_set_database(ctx: *mut HegelContext, s: *mut HegelSettings, database: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_database_key(ctx: *mut HegelContext, s: *mut HegelSettings, key: *const c_char) -> hegel_result_t;
             fn hegel_settings_set_derandomize(ctx: *mut HegelContext, s: *mut HegelSettings, derandomize: bool) -> hegel_result_t;
+            fn hegel_settings_set_nondeterminism_strictness(ctx: *mut HegelContext, s: *mut HegelSettings, strictness: u32) -> hegel_result_t;
             fn hegel_settings_set_phases(ctx: *mut HegelContext, s: *mut HegelSettings, phases: u32) -> hegel_result_t;
             fn hegel_settings_set_print_blob(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
             fn hegel_settings_set_report_multiple_failures(ctx: *mut HegelContext, s: *mut HegelSettings, yes: bool) -> hegel_result_t;
@@ -127,9 +131,9 @@ macro_rules! for_each_hegel_fn {
             fn hegel_test_case_clone(ctx: *mut HegelContext, tc: *const HegelTestCase, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_free(ctx: *mut HegelContext, tc: *mut HegelTestCase) -> hegel_result_t;
             fn hegel_test_case_from_blob(ctx: *mut HegelContext, s: *const HegelSettings, blob: *const c_char, callback: hegel_output_callback_t, user_data: *mut c_void, out_test_case: *mut *mut HegelTestCase) -> hegel_result_t;
-            fn hegel_test_case_is_nondeterministic(ctx: *mut HegelContext, tc: *const HegelTestCase, out_is_nondeterministic: *mut bool) -> hegel_result_t;
             fn hegel_test_case_printer(ctx: *mut HegelContext, tc: *mut HegelTestCase, options: *const HegelPrinterOptions, out_printer: *mut *mut HegelPrinter) -> hegel_result_t;
             fn hegel_test_case_set_worker(ctx: *mut HegelContext, tc: *const HegelTestCase, worker_index: i64) -> hegel_result_t;
+            fn hegel_test_case_should_capture(ctx: *mut HegelContext, tc: *const HegelTestCase, out_should_capture: *mut bool) -> hegel_result_t;
             fn hegel_version(ctx: *mut HegelContext, out_version: *mut *const c_char) -> hegel_result_t;
         }
     };

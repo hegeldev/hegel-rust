@@ -50,7 +50,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::config::{self, ConfigFile};
-use crate::settings::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
+use crate::settings::{
+    Backend, Database, HealthCheck, NondeterminismStrictness, Phase, Settings, Verbosity,
+};
 use crate::sys::sync::{Lazy, Mutex};
 
 /// The environment variable naming the default profile. Overridden by
@@ -90,6 +92,7 @@ pub(crate) struct ProfileDelta {
     pub(crate) show_statistics: Option<bool>,
     pub(crate) print_blob: Option<bool>,
     pub(crate) backend: Option<Backend>,
+    pub(crate) nondeterminism_strictness: Option<NondeterminismStrictness>,
     /// Carried by registered snapshots only: `hegel.toml` has no key for
     /// it, since users lift the choice limit by suppressing
     /// `TestCasesTooLarge` rather than through a setting of their own.
@@ -132,6 +135,9 @@ impl ProfileDelta {
         if let Some(v) = self.backend {
             settings.backend = v;
         }
+        if let Some(v) = self.nondeterminism_strictness {
+            settings.nondeterminism_strictness = v;
+        }
         if let Some(v) = self.unbounded_choices {
             settings.unbounded_choices = v;
         }
@@ -153,6 +159,7 @@ impl ProfileDelta {
             show_statistics: Some(settings.show_statistics),
             print_blob: Some(settings.print_blob),
             backend: Some(settings.backend),
+            nondeterminism_strictness: Some(settings.nondeterminism_strictness),
             unbounded_choices: Some(settings.unbounded_choices),
         }
     }

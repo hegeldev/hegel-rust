@@ -19,7 +19,10 @@ pub(crate) mod sys;
 use self::sys as hegel_c;
 
 use crate::control::hegel_internal_error;
-use crate::runner::{Backend, Database, HealthCheck, Phase, Settings, TestLocation, Verbosity};
+use crate::runner::{
+    Backend, Database, HealthCheck, NondeterminismStrictness, Phase, Settings, TestLocation,
+    Verbosity,
+};
 use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::{CStr, CString, c_void};
@@ -163,6 +166,11 @@ impl SettingsHandle {
                     raw,
                     map_verbosity(settings.verbosity),
                 ));
+                require_ok(hegel_c::hegel_settings_set_nondeterminism_strictness(
+                    ctx,
+                    raw,
+                    map_nondeterminism_strictness(settings.nondeterminism_strictness),
+                ));
                 require_ok(match settings.seed {
                     Some(seed) => hegel_c::hegel_settings_set_seed(ctx, raw, seed, true),
                     None => hegel_c::hegel_settings_set_seed(ctx, raw, 0, false),
@@ -301,6 +309,7 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
     let mut show_statistics = false;
     let mut print_blob = false;
     let mut backend = hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT;
+    let mut strictness = hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_QUIET;
     // SAFETY: ctx and raw are live handles, and every out pointer is a valid
     // local.
     unsafe {
@@ -352,6 +361,11 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
             &mut print_blob,
         ));
         require_ok(hegel_c::hegel_settings_get_backend(ctx, raw, &mut backend));
+        require_ok(hegel_c::hegel_settings_get_nondeterminism_strictness(
+            ctx,
+            raw,
+            &mut strictness,
+        ));
     }
     let database = match cstr_opt(database) {
         None => Database::Unset,
@@ -370,6 +384,7 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
         show_statistics,
         print_blob,
         backend: backend_from_c(backend),
+        nondeterminism_strictness: nondeterminism_strictness_from_c(strictness),
     }
 }
 
@@ -411,13 +426,11 @@ pub(crate) fn register_profile(name: &str, settings: &Settings) -> Result<(), St
 }
 
 /// Engine-output trampoline passed to `hegel_run_start` /
-/// `hegel_test_case_from_blob`: `user_data` points at the [`OutputSink`] the
+/// `hegel_run_start_blob`: `user_data` points at the [`OutputSink`] the
 /// run resolved at start, and each engine output line is forwarded to it. The
 /// engine invokes this while it runs between test cases; the sink is
-/// `Send + Sync`, and
-/// the pointee stays alive for as long as the engine can emit — owned by the
-/// [`RunHandle`] for a run, borrowed across the creating call for a blob
-/// replay (whose only line is emitted during it).
+/// `Send + Sync`, and the pointee stays alive for as long as the engine can
+/// emit — owned by the [`RunHandle`].
 unsafe extern "C" fn engine_output_trampoline(
     user_data: *mut c_void,
     line: *const c_char,
@@ -479,6 +492,38 @@ impl RunHandle {
         Ok(run)
     }
 
+    /// [`start`](Self::start) for a blob-replay run (`hegel_run_start_blob`):
+    /// the engine replays the blob instead of exploring. Infallible from the
+    /// safe wrapper (an undecodable blob is the *run's* error, read off the
+    /// result), so unlike [`start`](Self::start) there is no error to return.
+    pub(crate) fn start_blob(
+        settings: &SettingsHandle,
+        blob: &str,
+        sink: Option<&OutputSink>,
+    ) -> Self {
+        let blob = cstring_lossy(blob);
+        let output = sink.map(|s| Box::into_raw(Box::new(s.clone())));
+        let (callback, user_data) = output_args(output.map(|p| p.cast_const()));
+        let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
+        // SAFETY: as in `start`; blob is a live NUL-terminated string for the
+        // duration of the call (libhegel copies it).
+        let rc = with_context(|ctx| unsafe {
+            hegel_c::hegel_run_start_blob(
+                ctx,
+                settings.as_ptr(),
+                blob.as_ptr(),
+                callback,
+                user_data,
+                &mut raw,
+            )
+        });
+        // Construct the handle before checking rc so an error path (raw is
+        // still null, which hegel_run_free accepts) releases the sink box.
+        let run = RunHandle { raw, output };
+        require_ok(rc);
+        run
+    }
+
     /// Pull the next test case the engine wants to run, or `None` when the run
     /// is finished. The returned handle holds its own reference to the test
     /// case (the run keeps a separate reference internally), so the frontend
@@ -527,8 +572,8 @@ impl Drop for RunHandle {
 /// drives it with.
 ///
 /// Every `CTestCase` owns an independent libhegel handle — from
-/// [`from_blob`](CTestCase::from_blob), [`next_test_case`](RunHandle::next_test_case),
-/// or [`clone_handle`](CTestCase::clone_handle) — and drops its reference via
+/// [`next_test_case`](RunHandle::next_test_case) or
+/// [`clone_handle`](CTestCase::clone_handle) — and drops its reference via
 /// `hegel_test_case_free` on drop; the shared test case is released once its
 /// last reference is gone. Frontend code that needs several owners of *one*
 /// handle (the lifecycle and the body's `TestCase`, a `TestCase` and its
@@ -546,38 +591,6 @@ unsafe impl Send for CTestCase {}
 unsafe impl Sync for CTestCase {}
 
 impl CTestCase {
-    /// Build a standalone test case that replays a base64 failure blob, with
-    /// engine output (the debug-verbosity replay trace) going to `sink`
-    /// (stderr when `None`). Owned by the caller (freed on drop). Returns
-    /// `Err` with libhegel's diagnostic if the blob is
-    /// null/non-UTF-8/undecodable.
-    pub(crate) fn from_blob(
-        settings: &SettingsHandle,
-        blob: &str,
-        sink: Option<&OutputSink>,
-    ) -> Result<Self, String> {
-        let c_blob = cstring_lossy(blob);
-        let (callback, user_data) = output_args(sink.map(ptr::from_ref));
-        let mut raw: *mut hegel_c::HegelTestCase = ptr::null_mut();
-        // SAFETY: settings is live; c_blob is a valid NUL-terminated string.
-        // The blob-replay trace is emitted synchronously during this call, so
-        // borrowing `sink` for its duration satisfies the trampoline contract.
-        let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_from_blob(
-                ctx,
-                settings.as_ptr(),
-                c_blob.as_ptr(),
-                callback,
-                user_data,
-                &mut raw,
-            )
-        });
-        if rc != hegel_result_t::HEGEL_OK {
-            return Err(last_error_string());
-        }
-        Ok(CTestCase { raw })
-    }
-
     /// Clone this handle via `hegel_test_case_clone`, yielding a new libhegel
     /// handle onto the same underlying test case. Clones have independent
     /// per-handle locks, so two of them may draw concurrently; this is how a
@@ -591,6 +604,20 @@ impl CTestCase {
             hegel_c::hegel_test_case_clone(ctx, self.raw, &mut raw)
         }));
         CTestCase { raw }
+    }
+
+    /// Whether the engine stamped this test case for capture
+    /// (`hegel_test_case_should_capture`): buffer its output and, on
+    /// failure, its diagnostic for the failure report. The engine stamps
+    /// the case before it starts, so the answer is stable for the case's
+    /// whole lifetime; blob-replay cases are always stamped.
+    pub(crate) fn should_capture(&self) -> bool {
+        let mut out = false;
+        // SAFETY: self.raw is a live handle; &mut out is a valid out-param.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_test_case_should_capture(ctx, self.raw, &mut out)
+        }));
+        out
     }
 
     /// Open a block on this handle via `hegel_test_case_block`: a new
@@ -618,20 +645,6 @@ impl CTestCase {
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_test_case_set_worker(ctx, self.raw, worker_index)
         }));
-    }
-
-    /// Whether this test case belongs to a run already known to be
-    /// nondeterministic (`hegel_test_case_is_nondeterministic`). The engine
-    /// stamps the case before it starts, so the answer is stable for the
-    /// case's whole lifetime; standalone handles (blob replays) are never
-    /// stamped.
-    pub(crate) fn is_nondeterministic(&self) -> bool {
-        let mut out = false;
-        // SAFETY: self.raw is a live handle; &mut out is a valid out-param.
-        require_ok(with_context(|ctx| unsafe {
-            hegel_c::hegel_test_case_is_nondeterministic(ctx, self.raw, &mut out)
-        }));
-        out
     }
 
     /// Draw an integer in `[min_value, max_value]` (both within `i64`).
@@ -1191,8 +1204,8 @@ impl CTestCase {
 impl Drop for CTestCase {
     fn drop(&mut self) {
         // SAFETY: every `CTestCase` is an independent libhegel handle this
-        // frontend created (from_blob, next_test_case, or clone_handle) and is
-        // freed exactly once here, dropping its reference to the test case.
+        // frontend created (next_test_case or clone_handle) and is freed
+        // exactly once here, dropping its reference to the test case.
         free_on_drop(|ctx| unsafe { hegel_c::hegel_test_case_free(ctx, self.raw) });
     }
 }
@@ -1691,15 +1704,18 @@ impl RunResult {
         }));
         let mut origin: *const c_char = ptr::null();
         let mut blob: *const c_char = ptr::null();
+        let mut caveat: *const c_char = ptr::null();
         // SAFETY: f is the failure snapshot allocated above; it is freed
-        // exactly once, after both strings have been copied out by cstr_opt.
+        // exactly once, after the strings have been copied out by cstr_opt.
         with_context(|ctx| unsafe {
             require_ok(hegel_c::hegel_failure_origin(ctx, f, &mut origin));
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
+            require_ok(hegel_c::hegel_failure_caveat(ctx, f, &mut caveat));
             let failure = Failure {
                 origin: cstr_opt(origin)
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no origin")),
                 reproduce_blob: cstr_opt(blob),
+                caveat: cstr_opt(caveat),
             };
             require_ok(hegel_c::hegel_failure_free(ctx, f));
             failure
@@ -1714,14 +1730,14 @@ impl Drop for RunResult {
     }
 }
 
-/// A distinct failure read out of a finished run: the origin the engine
-/// grouped the bug's test cases under (the string the frontend passed to
-/// `hegel_mark_complete` when it first reported the bug) and the reproduce
-/// blob the client replays to produce the diagnostic and re-raise the
-/// test's own panic.
+/// A distinct failure read out of a finished run: the origin it was
+/// grouped under (matching the origin the client reported the failing
+/// cases with), the reproduce blob when the engine produced one, and the
+/// confirmation caveat when the run handled nondeterminism.
 pub(crate) struct Failure {
     pub(crate) origin: String,
     pub(crate) reproduce_blob: Option<String>,
+    pub(crate) caveat: Option<String>,
 }
 
 fn rc_to_unit(rc: hegel_result_t) -> Result<(), hegel_result_t> {
@@ -1759,6 +1775,15 @@ fn cstr_opt(p: *const c_char) -> Option<String> {
         None
     } else {
         Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
+    }
+}
+
+fn map_nondeterminism_strictness(s: NondeterminismStrictness) -> u32 {
+    use hegel_c::hegel_nondeterminism_strictness_t as c;
+    match s {
+        NondeterminismStrictness::Quiet => c::HEGEL_NONDETERMINISM_QUIET as u32,
+        NondeterminismStrictness::Warn => c::HEGEL_NONDETERMINISM_WARN as u32,
+        NondeterminismStrictness::Error => c::HEGEL_NONDETERMINISM_ERROR as u32,
     }
 }
 
@@ -1824,6 +1849,17 @@ fn backend_from_c(backend: hegel_c::hegel_backend_t) -> Backend {
     match backend {
         hegel_c::hegel_backend_t::HEGEL_BACKEND_DEFAULT => Backend::Default,
         hegel_c::hegel_backend_t::HEGEL_BACKEND_URANDOM => Backend::Urandom,
+    }
+}
+
+fn nondeterminism_strictness_from_c(
+    s: hegel_c::hegel_nondeterminism_strictness_t,
+) -> NondeterminismStrictness {
+    use hegel_c::hegel_nondeterminism_strictness_t as c;
+    match s {
+        c::HEGEL_NONDETERMINISM_QUIET => NondeterminismStrictness::Quiet,
+        c::HEGEL_NONDETERMINISM_WARN => NondeterminismStrictness::Warn,
+        c::HEGEL_NONDETERMINISM_ERROR => NondeterminismStrictness::Error,
     }
 }
 

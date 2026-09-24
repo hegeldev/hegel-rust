@@ -57,8 +57,62 @@ pub mod __bench {
     pub use crate::native::bignum::BigInt;
     pub use crate::native::core::choices::{BytesChoice, FloatChoice, IntegerChoice, StringChoice};
     pub use crate::native::core::state::{FloatGenerationParameters, FloatWidth};
+    pub use crate::native::core::{ChoiceValue, CloneRecord};
     pub use crate::native::intervalsets::IntervalSet;
+    pub use crate::native::nd::seam_dump;
     pub use crate::native::rng::EngineRng;
+
+    pub fn blob_is_nd(blob: &str) -> Option<bool> {
+        Some(matches!(
+            crate::native::blob::decode_blob(blob)?,
+            crate::native::blob::DecodedBlob::Nd(_)
+        ))
+    }
+
+    pub struct BlobEdge {
+        pub addr: Vec<(u64, usize)>,
+        pub value: ChoiceValue,
+        pub target: usize,
+    }
+
+    pub struct BlobNode {
+        pub ident: alloc::string::String,
+        pub edges: Vec<BlobEdge>,
+    }
+
+    /// The counterexample graph behind a nondeterministic blob (experiment
+    /// 020): node 0 is `Start`, node 1 is `End`.
+    pub struct BlobGraph {
+        pub nodes: Vec<BlobNode>,
+        pub longest: u32,
+    }
+
+    pub fn blob_graph(blob: &str) -> Option<BlobGraph> {
+        let crate::native::blob::DecodedBlob::Nd(state) = crate::native::blob::decode_blob(blob)?
+        else {
+            return None;
+        };
+        Some(BlobGraph {
+            longest: state.longest,
+            nodes: state
+                .graph
+                .nodes()
+                .iter()
+                .map(|n| BlobNode {
+                    ident: alloc::format!("{:?}", n.ident),
+                    edges: n
+                        .edges
+                        .iter()
+                        .map(|e| BlobEdge {
+                            addr: e.addr.clone(),
+                            value: e.value.clone(),
+                            target: e.target,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
 
     pub fn biased_integer_sample(ic: &IntegerChoice, rng: &mut EngineRng) -> BigInt {
         crate::native::core::state::biased_integer_sample(
@@ -97,6 +151,98 @@ pub mod __bench {
     ) -> f64 {
         crate::native::core::state::biased_float_sample(fc, width, rng, params).unwrap()
     }
+
+    pub use crate::backend::{DataSource, Failure, TestCaseResult};
+    pub use crate::native::bignum::ToPrimitive;
+    pub use crate::native::core::{Divergence, ExternalReplay};
+
+    /// How `replay_case` builds its test case.
+    pub enum ReplayKind<'a> {
+        /// Fresh generation under a draw budget.
+        Fresh { budget: usize },
+        /// One sequence positionally, bare when `extend == 0`, else with up
+        /// to `extend` random draws past it (`Rescue::Pun`).
+        Sequence {
+            choices: &'a [ChoiceValue],
+            extend: usize,
+        },
+        /// A counterexample under the live set (decision 74), with up to
+        /// `extend` random draws past its longest timeline.
+        Set {
+            timelines: &'a [Vec<ChoiceValue>],
+            extend: usize,
+        },
+        /// Every draw decided by the resolver (experiment 017).
+        External {
+            resolver: alloc::boxed::Box<dyn ExternalReplay>,
+            budget: usize,
+        },
+    }
+
+    pub struct ReplayOutcome {
+        pub interesting: bool,
+        pub origin: Option<alloc::string::String>,
+        pub realized: Vec<ChoiceValue>,
+        pub divergence: Option<Divergence>,
+        pub live: Vec<bool>,
+    }
+
+    /// Run the caller's body once against a replayed test case and report
+    /// what it realized (experiments 004 and 017).
+    pub fn replay_case(
+        kind: ReplayKind<'_>,
+        seed: u64,
+        run_case: impl FnMut(alloc::boxed::Box<dyn DataSource + Send + Sync>),
+    ) -> Result<ReplayOutcome, alloc::string::String> {
+        use crate::native::core::{NativeTestCase, flattened_values_len};
+        let rng = EngineRng::seeded(seed);
+        let ntc = match kind {
+            ReplayKind::Fresh { budget } => NativeTestCase::for_probe(&[], rng, budget),
+            ReplayKind::Sequence { choices, extend: 0 } => {
+                Ok(NativeTestCase::for_choices(choices, None, None))
+            }
+            ReplayKind::Sequence { choices, extend } => {
+                NativeTestCase::for_probe(choices, rng, flattened_values_len(choices) + extend)
+            }
+            ReplayKind::Set { timelines, extend } => {
+                let longest = timelines
+                    .iter()
+                    .map(|t| flattened_values_len(t))
+                    .max()
+                    .unwrap_or(0);
+                NativeTestCase::for_counterexample(timelines, rng, longest + extend)
+            }
+            ReplayKind::External { resolver, budget } => {
+                NativeTestCase::for_external(resolver, rng, budget)
+            }
+        };
+        let ntc = ntc.map_err(|e| alloc::format!("{e:?}"))?;
+        let exchange = crate::exchange::CaseExchange::new();
+        let fut = async {
+            let (data_source, handle) = crate::native::data_source::NativeDataSource::new(ntc);
+            exchange.offer(alloc::boxed::Box::new(data_source)).await;
+            let nodes = crate::native::data_source::NativeDataSource::take_nodes(&handle);
+            let outcome = crate::native::data_source::NativeDataSource::take_outcome(&handle);
+            let (divergence, live) = {
+                let tc = handle.lock();
+                (tc.divergence(), tc.live_timelines())
+            };
+            (nodes, outcome, divergence, live)
+        };
+        let (nodes, outcome, divergence, live) = crate::exchange::drive(&exchange, fut, run_case);
+        let outcome = outcome.map_err(|e| alloc::format!("{e}"))?;
+        let (interesting, origin) = match outcome {
+            TestCaseResult::Interesting(f) => (true, Some(f.origin)),
+            _ => (false, None),
+        };
+        Ok(ReplayOutcome {
+            interesting,
+            origin,
+            realized: nodes.iter().map(|n| n.value()).collect(),
+            divergence,
+            live,
+        })
+    }
 }
 
 use crate::antithesis::{Reporter, TestLocation};
@@ -108,7 +254,9 @@ use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
-use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
+use crate::settings::{
+    Backend, Database, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
+};
 
 /// Result of a libhegel call. See "Calling convention" in the header
 /// preamble.
@@ -234,6 +382,11 @@ pub enum hegel_backend_t {
 }
 
 /// Aggregate outcome of a finished run, read via `hegel_run_result_status`.
+///
+/// Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
+/// 0.35 ABI break) is retired and must never be reused for a new meaning:
+/// bindings built against the old header may still compare against it
+/// (decision 27).
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -243,19 +396,17 @@ pub enum hegel_run_status_t {
     /// The property failed. Inspect each distinct counterexample.
     HEGEL_RUN_STATUS_FAILED = 1,
     /// The run itself failed — a failed health check, a nondeterminism
-    /// mismatch, a violated engine invariant — and produced no verdict on
-    /// the property. There are no failures to inspect; read the message with
-    /// `hegel_run_result_error`.
+    /// abort under `error` strictness, a violated engine invariant — and
+    /// produced no verdict on the property. There are no failures to
+    /// inspect; read the message with `hegel_run_result_error`.
+    ///
+    /// A failing nondeterministic run reports plain
+    /// `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
+    /// (`hegel_failure_caveat`) and, when confirmed, a reproduce blob. A
+    /// blobless failure is reported from what the caller captured while
+    /// running the stamped test cases (see
+    /// `hegel_test_case_should_capture`).
     HEGEL_RUN_STATUS_ERROR = 2,
-    /// The property failed on a run that was declared nondeterministic (a
-    /// test case created a state machine with `max_concurrency > 1`). The
-    /// failures carry no reproduce blob — there was no shrinking and there
-    /// is no final replay — so the caller should report the bug from
-    /// whatever it captured while running the discovering test case (the
-    /// engine stamps every case of such a run nondeterministic up front,
-    /// see `hegel_test_case_is_nondeterministic`, precisely so the caller
-    /// captures each case's output as it runs).
-    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
@@ -275,6 +426,23 @@ pub enum hegel_verbosity_t {
     HEGEL_VERBOSITY_DEBUG = 3,
 }
 
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+/// Set via `hegel_settings_set_nondeterminism_strictness`.
+#[repr(C)]
+#[derive(Copy, Clone)]
+#[allow(non_camel_case_types)]
+pub enum hegel_nondeterminism_strictness_t {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    HEGEL_NONDETERMINISM_QUIET = 0,
+    /// Switch as under quiet, printing a one-line notice once per run.
+    HEGEL_NONDETERMINISM_WARN = 1,
+    /// Abort the run with a flaky-test / nondeterminism error, for suites
+    /// that use determinism as a lint.
+    HEGEL_NONDETERMINISM_ERROR = 2,
+}
+
 /// A phase of the property-test loop, used as a bit flag.
 ///
 /// A bitwise OR of these is passed to `hegel_settings_set_phases`. The
@@ -291,8 +459,9 @@ pub enum hegel_phase_t {
     HEGEL_PHASE_REUSE = 1 << 1,
     /// Randomly generate fresh test cases up to the `test_cases` budget.
     HEGEL_PHASE_GENERATE = 1 << 2,
-    /// Apply hill-climbing toward observed `hegel_target` scores between
-    /// generation rounds.
+    /// Optimise toward observed `hegel_target` scores between generation
+    /// rounds: hill-climbing on deterministic runs, a measured race under
+    /// nondeterministic handling.
     HEGEL_PHASE_TARGET = 1 << 3,
     /// Shrink discovered failing examples.
     HEGEL_PHASE_SHRINK = 1 << 4,
@@ -685,16 +854,14 @@ impl HegelRun {
 /// A failed run produced counterexamples to the property. An errored run
 /// produced no verdict on the property at all, so it has no failures to
 /// inspect. A run errors on a failed health check, a nondeterminism
-/// mismatch, or a violated internal invariant of libhegel.
+/// mismatch under `error` strictness (the other strictness levels handle
+/// the nondeterminism instead), or a violated internal invariant of
+/// libhegel.
 #[derive(Clone)]
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
-    /// Whether the run was nondeterministic: a failing run then reports
-    /// `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC` and its failures carry no
-    /// reproduce blob.
-    nondeterministic: bool,
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -705,16 +872,21 @@ pub struct HegelRunResult {
 /// independent of the result and run it came from.
 ///
 /// A failure carries the origin `libhegel` grouped on and the reproduce blob.
-/// The caller replays the blob (via `hegel_test_case_from_blob`) to produce
-/// the diagnostic and re-raise the test's own failure.
+/// The diagnostic comes from the stamped final-replay capture; the blob is
+/// for reproducing the failure later via `hegel_run_start_blob`.
 #[derive(Clone)]
 pub struct HegelFailure {
     origin: CString,
     /// Base64 failure blob encoding the minimal counterexample's choice
-    /// sequence, or `None` when the engine produced no blob (a
-    /// nondeterministic run). Read via
-    /// `hegel_failure_reproduction_blob`.
+    /// sequence — or, for a nondeterministic failure, its replay state — or
+    /// `None` when the engine produced no blob (an unconfirmed
+    /// nondeterministic failure, or a failure returned from a blob replay).
+    /// Read via `hegel_failure_reproduction_blob`.
     reproduce_blob: Option<CString>,
+    /// The failure's confirmation standing when the run handled
+    /// nondeterminism, quoting the run's own replay evidence; `None` for
+    /// a deterministic failure. Read via `hegel_failure_caveat`.
+    caveat: Option<CString>,
 }
 
 impl From<Failure> for HegelFailure {
@@ -722,6 +894,7 @@ impl From<Failure> for HegelFailure {
         HegelFailure {
             origin: cstring_lossy(&f.origin),
             reproduce_blob: f.reproduce_blob.map(|b| cstring_lossy(&b)),
+            caveat: f.caveat.map(|c| cstring_lossy(&c)),
         }
     }
 }
@@ -731,7 +904,6 @@ impl From<TestRunResult> for HegelRunResult {
         HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
-            nondeterministic: r.nondeterministic,
         }
     }
 }
@@ -743,7 +915,6 @@ impl HegelRunResult {
         HegelRunResult {
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
-            nondeterministic: false,
         }
     }
 
@@ -752,8 +923,6 @@ impl HegelRunResult {
             hegel_run_status_t::HEGEL_RUN_STATUS_ERROR
         } else if self.failures.is_empty() {
             hegel_run_status_t::HEGEL_RUN_STATUS_PASSED
-        } else if self.nondeterministic {
-            hegel_run_status_t::HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC
         } else {
             hegel_run_status_t::HEGEL_RUN_STATUS_FAILED
         }
@@ -1039,6 +1208,42 @@ pub unsafe extern "C" fn hegel_settings_set_verbosity(
         }
     };
     handle.inner = handle.inner.clone().verbosity(verbosity);
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `strictness`: How the run reacts when it detects nondeterministic test
+///   behavior. See `hegel_nondeterminism_strictness_t`.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_set_nondeterminism_strictness(
+    ctx: *mut HegelContext,
+    s: *mut HegelSettings,
+    strictness: u32,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle =
+        match unsafe { settings_mut(ctx, s, "hegel_settings_set_nondeterminism_strictness") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
+    use hegel_nondeterminism_strictness_t as c;
+    let strictness = match strictness {
+        x if x == c::HEGEL_NONDETERMINISM_QUIET as u32 => NondeterminismStrictness::Quiet,
+        x if x == c::HEGEL_NONDETERMINISM_WARN as u32 => NondeterminismStrictness::Warn,
+        x if x == c::HEGEL_NONDETERMINISM_ERROR as u32 => NondeterminismStrictness::Error,
+        _ => {
+            set_last_error(
+                ctx,
+                &format!(
+                    "hegel_settings_set_nondeterminism_strictness: unknown strictness {strictness}"
+                ),
+            );
+            return HEGEL_E_INVALID_ARG;
+        }
+    };
+    handle.inner = handle.inner.clone().nondeterminism_strictness(strictness);
     HEGEL_OK
 }
 
@@ -1828,6 +2033,39 @@ pub unsafe extern "C" fn hegel_settings_get_backend(
 }
 
 /// Parameters:
+/// `out`: Receives the configured nondeterminism strictness.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_settings_get_nondeterminism_strictness(
+    ctx: *mut HegelContext,
+    s: *const HegelSettings,
+    out: *mut hegel_nondeterminism_strictness_t,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let handle =
+        match unsafe { settings_ref(ctx, s, "hegel_settings_get_nondeterminism_strictness") } {
+            Ok(h) => h,
+            Err(rc) => return rc,
+        };
+    if out.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_settings_get_nondeterminism_strictness: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    use hegel_nondeterminism_strictness_t as c;
+    let strictness = match handle.inner.nondeterminism_strictness {
+        NondeterminismStrictness::Quiet => c::HEGEL_NONDETERMINISM_QUIET,
+        NondeterminismStrictness::Warn => c::HEGEL_NONDETERMINISM_WARN,
+        NondeterminismStrictness::Error => c::HEGEL_NONDETERMINISM_ERROR,
+    };
+    unsafe { *out = strictness };
+    HEGEL_OK
+}
+
+/// Parameters:
 /// `settings`: The settings for this run. The caller can free the
 ///   settings after passing them in since libhegel copies the memory.
 /// `callback`: Where libhegel's output for this run goes. NULL leaves
@@ -1871,6 +2109,70 @@ pub unsafe extern "C" fn hegel_run_start(
     let engine_exchange = Arc::clone(&exchange);
     let engine: EngineFuture = Box::pin(async move {
         run_native_async(&settings, database_key.as_deref(), &engine_exchange).await
+    });
+
+    let run = Box::into_raw(Box::new(HegelRun {
+        engine: Some(engine),
+        exchange,
+        current_family: None,
+        result: None,
+        reporter,
+    }));
+    unsafe { *out_run = run };
+    HEGEL_OK
+}
+
+/// Like `hegel_run_start`, but the run replays a reproduce blob instead of
+/// exploring. Both blob kinds replay until a replay fails, under a bounded
+/// budget: a deterministic blob replays its choices up to 4 times, each
+/// attempt allowed a bounded number of fresh draws past a divergence; a
+/// nondeterministic blob replays its stored timelines with the same
+/// replay-until-failure sequence database reuse uses. The caller
+/// drives the run exactly like `hegel_run_start`: a reproducing replay is
+/// the run's failure (with its caveat for a nondeterministic blob, and no
+/// reproduce blob — the caller already holds it), a run with no failures
+/// means the blob is stale, and an undecodable blob surfaces as the run's
+/// error from `hegel_run_result`.
+///
+/// Parameters: as `hegel_run_start`, plus
+/// `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_start_blob(
+    ctx: *mut HegelContext,
+    settings: *const HegelSettings,
+    blob: *const c_char,
+    callback: hegel_output_callback_t,
+    user_data: *mut c_void,
+    out_run: *mut *mut HegelRun,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_run.is_null() {
+        set_last_error(ctx, "hegel_run_start_blob: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Some(handle) = (unsafe { settings.as_ref() }) else {
+        set_last_error(ctx, "hegel_run_start_blob: settings pointer is null");
+        return HEGEL_E_INVALID_HANDLE;
+    };
+    if blob.is_null() {
+        set_last_error(ctx, "hegel_run_start_blob: blob pointer is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Ok(blob) = (unsafe { CStr::from_ptr(blob) }).to_str() else {
+        set_last_error(ctx, "hegel_run_start_blob: blob is not valid UTF-8");
+        return HEGEL_E_INVALID_ARG;
+    };
+    let blob = blob.to_string();
+    let settings = handle
+        .inner
+        .clone()
+        .output(output_from_callback(callback, user_data));
+    let reporter = handle.reporter(&settings.output);
+
+    let exchange = Arc::new(CaseExchange::new());
+    let engine_exchange = Arc::clone(&exchange);
+    let engine: EngineFuture = Box::pin(async move {
+        crate::native::test_runner::reproduce_blob(&settings, &blob, &engine_exchange).await
     });
 
     let run = Box::into_raw(Box::new(HegelRun {
@@ -2066,7 +2368,9 @@ pub unsafe extern "C" fn hegel_run_free(
 /// returned test case with the usual per-test-case primitives, concludes it
 /// with `hegel_mark_complete`, and decides for itself whether the blob
 /// reproduced the failure (the property failed again) or is stale/flaky (it
-/// passed).
+/// passed). A nondeterministic blob replays here as a single attempt —
+/// its stored timelines may need several tries to fail, so prefer
+/// `hegel_run_start_blob`, which replays until a replay fails.
 ///
 /// Parameters:
 /// `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
@@ -2152,27 +2456,33 @@ pub unsafe extern "C" fn hegel_test_case_free(
     HEGEL_OK
 }
 
-/// Returns whether this test case belongs to a run already known to be
-/// nondeterministic.
+/// Returns whether the engine stamped this test case for capture: the
+/// caller should buffer the case's output and, if it fails, its rendered
+/// diagnostic, keyed by the failure's origin — a stamped failing
+/// execution is the material for that origin's failure report. The
+/// engine stamps the executions whose failures can become the report:
+/// the report-time final replay and each generation-discovered failure's
+/// first-check replays (both on deterministic runs too), every
+/// `hegel_run_start_blob` replay, and, under nondeterministic handling,
+/// confirmation batches, database-reuse replays, and generation-phase
+/// cases (whose failing origins may be reported unconfirmed). Read the
+/// stamp once at case start.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_test_case_is_nondeterministic(
+pub unsafe extern "C" fn hegel_test_case_should_capture(
     ctx: *mut HegelContext,
     tc: *const HegelTestCase,
-    out_is_nondeterministic: *mut bool,
+    out_should_capture: *mut bool,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_is_nondeterministic", tc) } {
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_test_case_should_capture", tc) } {
         Ok(pair) => pair,
         Err(rc) => return rc,
     };
-    if out_is_nondeterministic.is_null() {
-        set_last_error(
-            ctx,
-            "hegel_test_case_is_nondeterministic: out parameter is null",
-        );
+    if out_should_capture.is_null() {
+        set_last_error(ctx, "hegel_test_case_should_capture: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_is_nondeterministic = tc.stream.is_nondeterministic() };
+    unsafe { *out_should_capture = tc.stream.should_capture() };
     HEGEL_OK
 }
 
@@ -3409,27 +3719,12 @@ unsafe fn state_machine_ref<'a>(
 /// up front, so the machine is fully constructed before any rule is
 /// requested.
 ///
-/// Creating a machine with `max_concurrency > 1` declares the run
-/// nondeterministic: thread scheduling is outside the engine's control, so
-/// nothing that assumes deterministic replay can be trusted. On a run not
-/// already known to be nondeterministic, the first such creation is
-/// rejected with `HEGEL_E_ASSUME` — the caller should abandon the body and
-/// report the case `HEGEL_STATUS_INVALID`, exactly as for a failed
-/// assumption — and the engine flips the run at that case's end. Every
-/// later test case is marked nondeterministic before it starts (so a
-/// frontend can capture its whole trace for the failure report, including
-/// draws made before the machine is created) and its creations succeed.
-/// From the flip on, the run reports failures faithfully from the
-/// discovering execution and skips data-tree recording (and with it
-/// novel-prefix generation and the nondeterminism mismatch check), span
-/// mutation, the verify and shrink pass (and with it the flakiness check —
-/// generation stops at the first bug, so at most one failure is reported),
-/// targeting, and database persistence and reuse. Failures from such a run
-/// carry no reproduce blob. A notice explaining this is printed once, on
-/// the run's output, unless verbosity is quiet. This applies even to test
-/// cases whose drawn concurrency level is 1: the declared bound is what
-/// counts. Standalone test cases — `hegel_test_case_from_blob` replays —
-/// are never rejected.
+/// Concurrency alone does not mark the run nondeterministic: a properly
+/// serialized concurrent machine can fail deterministically, so the engine
+/// watches the run's observed behavior — verdict flips, replay misses —
+/// exactly as it does for any other test, and switches into
+/// nondeterministic handling (or aborts, under `error` strictness) only
+/// when those observations fire (decision 70).
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /
@@ -3437,10 +3732,7 @@ unsafe fn state_machine_ref<'a>(
 /// calls (through any handle of the same test-case family) and release it
 /// with `hegel_state_machine_free` exactly once — writes the drawn
 /// concurrency level into `*out_concurrency`, and returns `HEGEL_OK`.
-/// Returns `HEGEL_E_ASSUME` for the run's first `max_concurrency > 1`
-/// creation (the caller should abort the body and call
-/// `hegel_mark_complete` with `HEGEL_STATUS_INVALID`; see above). Returns
-/// `HEGEL_E_STOP_TEST` when the engine's choice budget is
+/// Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
 /// exhausted (the caller should abort the body and call
 /// `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
 /// `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
@@ -5909,6 +6201,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
             TestCaseResult::Interesting(Failure {
                 origin: origin_str,
                 reproduce_blob: None,
+                caveat: None,
             })
         }
         _ => {
@@ -5963,8 +6256,7 @@ unsafe fn failure_ref<'a>(
 
 /// Parameters:
 /// `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-///   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
-///   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
+///   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
@@ -6118,15 +6410,20 @@ pub unsafe extern "C" fn hegel_failure_origin(
 }
 
 /// Parameters:
-/// `out_blob`: Receives a base64 reproduce blob encoding the minimal
-///   counterexample's choice sequence, or NULL if libhegel produced none
-///   for this failure. Valid until `hegel_failure_free`.
+/// `out_blob`: Receives a base64 reproduce blob — the minimal
+///   counterexample's choice sequence, or for a nondeterministic failure a
+///   self-identifying entry carrying its replay state (timeline pool) — or
+///   NULL if libhegel produced none for this failure. Valid until
+///   `hegel_failure_free`.
 ///
 /// Returns `HEGEL_OK`.
 ///
-/// A blob can be replayed later via `hegel_test_case_from_blob` to
-/// reproduce the test case exactly. It is only guaranteed to reproduce the
-/// failure in the version of Hegel in which it was generated.
+/// A choice-sequence blob can be replayed later via
+/// `hegel_test_case_from_blob` to reproduce the test case exactly; a
+/// nondeterministic state blob is replayed until failure under a bounded
+/// budget via `hegel_run_start_blob`, which handles both kinds. A blob is
+/// only guaranteed to reproduce the failure in the version of Hegel in
+/// which it was generated.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     ctx: *mut HegelContext,
@@ -6148,6 +6445,38 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     unsafe {
         *out_blob = match &f.reproduce_blob {
             Some(blob) => blob.as_ptr(),
+            None => ptr::null(),
+        };
+    }
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_caveat`: Receives the failure's confirmation caveat — its
+///   standing under the run's nondeterministic handling, quoting the
+///   run's own replay evidence — or NULL for a deterministic failure.
+///   Valid until `hegel_failure_free`. Print it alongside the failure
+///   report so the reader sees how reliably the failure reproduced.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_failure_caveat(
+    ctx: *mut HegelContext,
+    f: *const HegelFailure,
+    out_caveat: *mut *const c_char,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let f = match unsafe { failure_ref(ctx, f, "hegel_failure_caveat") } {
+        Ok(f) => f,
+        Err(rc) => return rc,
+    };
+    if out_caveat.is_null() {
+        set_last_error(ctx, "hegel_failure_caveat: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe {
+        *out_caveat = match &f.caveat {
+            Some(caveat) => caveat.as_ptr(),
             None => ptr::null(),
         };
     }

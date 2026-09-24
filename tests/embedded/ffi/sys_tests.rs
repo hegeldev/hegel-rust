@@ -164,7 +164,6 @@ mod drift {
             HEGEL_RUN_STATUS_PASSED,
             HEGEL_RUN_STATUS_FAILED,
             HEGEL_RUN_STATUS_ERROR,
-            HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC,
         }
         hegel_verbosity_t {
             HEGEL_VERBOSITY_QUIET,

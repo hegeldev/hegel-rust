@@ -52,6 +52,18 @@ pub enum ShrinkRun<'a> {
 pub type ProbeFuture<'s> =
     Pin<Box<dyn Future<Output = ShrinkResult<(bool, Vec<ChoiceNode>, Spans)>> + Send + 's>>;
 
+/// How a probe judges candidates (decision 18). `Fast` is the default
+/// regime: a stochastic probe may reject a candidate on a single
+/// non-reproducing run. In `Confirm`, the probe skips that single-run
+/// fast reject and drives its cumulative evidence for the candidate to a
+/// bound decision, so a fixed point reached under `Fast` can be checked
+/// for improvements that unlucky single runs discarded.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SweepMode {
+    Fast,
+    Confirm,
+}
+
 /// Runs one test case for the shrinker, returning
 /// `(is_interesting, actual_nodes, actual_spans)`.
 /// `actual_nodes` is the sequence of ChoiceNodes produced during the run.
@@ -67,6 +79,29 @@ pub type ProbeFuture<'s> =
 /// get this for free through the blanket [`FnMut`] impl.
 pub trait ShrinkProbe {
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> ProbeFuture<'s>;
+
+    /// Select the [`SweepMode`] for subsequent [`ShrinkProbe::run`] calls,
+    /// returning the mode that was active — or `None`, the default (and
+    /// the blanket [`FnMut`] impl), for a probe that doesn't distinguish
+    /// the modes: its fast judgments are already exact, so the scheduler
+    /// skips the confirmation sweep entirely. The scheduler restores the
+    /// returned mode when its sweep ends, so a nested shrink's sweeps
+    /// leave the enclosing shrink's mode intact. A probe wrapping another
+    /// must forward this, or the default silently exempts the inner probe.
+    fn set_sweep_mode(&mut self, _mode: SweepMode) -> Option<SweepMode> {
+        None
+    }
+
+    /// The shrinker adopted the candidate from the immediately preceding
+    /// [`ShrinkProbe::run`] as its new target. Interesting runs the shrinker
+    /// discards (punned realizations, sort-key-larger candidates from
+    /// mutation probes) never trigger this, so side effects that must only
+    /// follow a validated accept — anchor raises, incumbent persistence —
+    /// belong here, not in `run`. A probe wrapping another must forward
+    /// this, or the default swallows the inner probe's accepts.
+    fn candidate_adopted(&mut self) -> Result<(), InternalError> {
+        Ok(())
+    }
 }
 
 impl<F> ShrinkProbe for F
@@ -183,9 +218,13 @@ pub struct Shrinker<'a> {
     /// runner doesn't get stuck chasing diminishing returns. Defaults to
     /// [`MAX_SHRINKS`]; tests can lower it for controlled-budget assertions.
     pub max_improvements: usize,
-    /// Total number of times the test closure has been invoked through
-    /// `consider` or `probe`.  Used together with `calls_at_last_shrink`
-    /// + `max_stall` to detect runaway shrink searches.
+    /// Logical candidate count (decision 7): one per `consider` / `probe`
+    /// invocation, regardless of how many physical executions the probe
+    /// spends judging the candidate (a gauntleted probe may rerun it many
+    /// times to bound its failure rate). `calls`, `calls_at_last_shrink`,
+    /// `max_stall`, and `max_improvements` all count in this logical unit,
+    /// so gauntlet depth can never trip the stall guard; physical cost is
+    /// bounded separately by the wall-clock [`Shrinker::deadline`].
     pub calls: usize,
     /// Value of `calls` at the moment of the most recent
     /// `accept_improvement`, or at the start of the current
@@ -225,12 +264,20 @@ pub struct Shrinker<'a> {
     /// the pass scheduler bails, leaving `current_nodes` at the best example
     /// found so far. `None` (the default) disables the bound; the runner sets
     /// it to `now + MAX_SHRINKING_SECONDS` before driving a shrink. Mirrors
-    /// Hypothesis's `finish_shrinking_deadline` (engine.py). Tests set a past
-    /// instant to exercise the timeout path without waiting.
+    /// Hypothesis's `finish_shrinking_deadline` (engine.py). This is the
+    /// physical backstop (decision 7): the logical counters above never see
+    /// a gauntleted probe's rerun cost, the clock always does. Tests set a
+    /// past instant to exercise the timeout path without waiting.
     pub deadline: Option<Instant>,
     /// Latched once `deadline` is first observed to have passed. The runner
     /// reads it after `shrink()` to emit the slow-shrink warning.
     pub timed_out: bool,
+    /// The scheduler's current sweep regime. During the confirmation sweep
+    /// (decision 18) the stall guard is off: its certificate — every
+    /// candidate driven to a bound verdict — holds only if every candidate
+    /// actually executes, and the wall-clock deadline stays the physical
+    /// backstop.
+    pub(super) sweep: SweepMode,
 }
 
 impl<'a> Shrinker<'a> {
@@ -258,6 +305,7 @@ impl<'a> Shrinker<'a> {
             debug: None,
             deadline: None,
             timed_out: false,
+            sweep: SweepMode::Fast,
         }
     }
 
@@ -331,7 +379,8 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkHalt::Stop);
         }
-        if self.improvements > 0
+        if self.sweep == SweepMode::Fast
+            && self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(false);
@@ -341,7 +390,7 @@ impl<'a> Shrinker<'a> {
             self.run_test_fn(ShrinkRun::Full(nodes)).await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
             return Ok(true);
         }
         Ok(false)
@@ -372,7 +421,7 @@ impl<'a> Shrinker<'a> {
         let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(run).await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes.clone(), actual_spans);
+            self.accept_improvement(actual_nodes.clone(), actual_spans)?;
         }
         Ok(Some(actual_nodes))
     }
@@ -407,7 +456,8 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(ShrinkHalt::Stop);
         }
-        if self.improvements > 0
+        if self.sweep == SweepMode::Fast
+            && self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(());
@@ -417,7 +467,7 @@ impl<'a> Shrinker<'a> {
             .await?;
         self.calls += 1;
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
         }
         Ok(())
     }
@@ -425,7 +475,12 @@ impl<'a> Shrinker<'a> {
     /// Common bookkeeping when a candidate becomes the new shrink target:
     /// record the displaced sequence, bump `improvements`, fold the diff
     /// into `all_changed_nodes`, and refresh `current_nodes` / `current_spans`.
-    fn accept_improvement(&mut self, new_nodes: Vec<ChoiceNode>, new_spans: Spans) {
+    fn accept_improvement(
+        &mut self,
+        new_nodes: Vec<ChoiceNode>,
+        new_spans: Spans,
+    ) -> ShrinkResult<()> {
+        self.test_fn.candidate_adopted()?;
         let old: Vec<ChoiceValue> = self.current_nodes.iter().map(|n| n.value()).collect();
         self.downgraded.push(old);
         self.improvements += 1;
@@ -442,6 +497,7 @@ impl<'a> Shrinker<'a> {
         );
         self.current_nodes = new_nodes;
         self.current_spans = new_spans;
+        Ok(())
     }
 
     /// Update `changed` to reflect a diff between `prev` and `new`.

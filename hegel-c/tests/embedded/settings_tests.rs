@@ -297,6 +297,15 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
 }
 
 #[test]
+fn nondeterminism_strictness_defaults_to_quiet_and_builds() {
+    let s = Settings::new();
+    assert_eq!(s.nondeterminism_strictness, NondeterminismStrictness::Quiet);
+    assert!(!s.nd_force);
+    let s = Settings::new().nondeterminism_strictness(NondeterminismStrictness::Error);
+    assert_eq!(s.nondeterminism_strictness, NondeterminismStrictness::Error);
+}
+
+#[test]
 fn choice_bound_defaults_to_buffer_size_and_can_be_removed() {
     let s = Settings::new();
     assert!(!s.unbounded_choices);

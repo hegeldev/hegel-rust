@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseResult};
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    ChoiceNode, EngineError, InterestingOrigin, ManyState, NativeStateMachine, NativeTestCase,
-    NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
+    ChoiceNode, Divergence, EngineError, InterestingOrigin, ManyState, NativeStateMachine,
+    NativeTestCase, NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
 };
 use crate::native::draws;
 
@@ -74,6 +74,21 @@ impl NativeDataSource {
         handle.lock().family().events.lock().clone()
     }
 
+    /// Where the replay first left its stored counterexample, if it did.
+    pub fn take_divergence(handle: &NativeTestCaseHandle) -> Option<Divergence> {
+        handle.lock().divergence()
+    }
+
+    /// Under a graph walk, the edges the run settled on (decision 78).
+    pub fn take_settled(handle: &NativeTestCaseHandle) -> Vec<(usize, usize)> {
+        handle.lock().settled_edges()
+    }
+
+    /// Under a graph walk, whether the run ended where the graph ends.
+    pub fn take_ended(handle: &NativeTestCaseHandle) -> bool {
+        handle.lock().ended_on_end()
+    }
+
     /// The test case's outcome, reconstructed from its family's write-once
     /// conclusion. Whoever concluded the family first — a draw that overran
     /// or hit a terminal assume, or the body via `mark_complete` — set the
@@ -102,6 +117,7 @@ impl NativeDataSource {
             Status::Interesting => TestCaseResult::Interesting(Failure {
                 origin: origin.map(|o| o.0).unwrap_or_default(),
                 reproduce_blob: None,
+                caveat: None,
             }),
         })
     }
@@ -353,13 +369,6 @@ impl DataSource for NativeDataSource {
             )));
         }
         self.with_ntc(|ntc| {
-            if max_concurrency > 1 {
-                let family = ntc.family();
-                family.set_concurrent_machine();
-                if family.reject_concurrent_machine() {
-                    return Err(EngineError::AssumeViolation);
-                }
-            }
             NativeStateMachine::new(
                 ntc,
                 rule_groups,
@@ -472,8 +481,8 @@ impl DataSource for NativeDataSource {
         Ok(())
     }
 
-    fn is_nondeterministic(&self) -> bool {
-        self.inner.lock().is_nondeterministic()
+    fn should_capture(&self) -> bool {
+        self.inner.lock().should_capture()
     }
 
     fn mark_complete(&self, result: &TestCaseResult) {
