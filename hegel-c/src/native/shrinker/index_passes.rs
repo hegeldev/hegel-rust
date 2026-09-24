@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use crate::native::bignum::{BigInt, BigUint, Zero};
 use crate::native::core::{ChoiceData, ChoiceValue};
 
-use super::{ShrinkResult, Shrinker};
+use super::{ShrinkResult, ShrinkRun, Shrinker};
 
 /// Nodes the index passes skip even though they carry a dense index:
 /// sequence kinds get their own dedicated passes. Clone nodes are skipped
@@ -128,11 +128,20 @@ impl<'a> Shrinker<'a> {
     /// A value shrinker can only make values simpler; sometimes making a
     /// value *less* simple (e.g. `false → true`) causes an earlier exit,
     /// producing a shorter and thus overall simpler choice sequence.
+    ///
+    /// Each bumped sequence is first tried with the remainder replaced by its
+    /// simplest values, since the shorter path usually wants nothing more.
+    /// When that fails but the run did take a shorter path, the remainder is
+    /// kept less the first few draws the new path no longer makes, so a path
+    /// that needs a *later* value can take it: a `one_of` whose pair branch
+    /// `(false, true)` is interesting moves to its shorter lone-`true` branch
+    /// by bumping the branch index and dropping the `false`. Re-running the
+    /// zeroed candidate to learn its length is served by the execution cache.
     pub(super) async fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
             let node = self.current_nodes[i].clone();
-            if is_sequence(&node.data) {
+            if node.was_forced || is_sequence(&node.data) {
                 i += 1;
                 continue;
             }
@@ -159,6 +168,7 @@ impl<'a> Shrinker<'a> {
                 }
             }
 
+            let index_candidates = candidates.len();
             if let ChoiceData::Integer(ic, _) = &node.data {
                 for e in 0u32..11 {
                     let magnitude = BigInt::from(1u64 << e);
@@ -179,7 +189,7 @@ impl<'a> Shrinker<'a> {
                 continue;
             }
 
-            for incremented in &candidates {
+            for (c, incremented) in candidates.iter().enumerate() {
                 if i >= self.current_nodes.len() {
                     break;
                 }
@@ -192,7 +202,20 @@ impl<'a> Shrinker<'a> {
                 for node in &mut zeroed[i + 1..] {
                     *node = node.with_simplest()?;
                 }
-                self.consider(&zeroed).await?;
+                if self.consider(&zeroed).await? || c >= index_candidates {
+                    continue;
+                }
+                let (_, shortened, _) = self.run_test_fn(ShrinkRun::Full(&zeroed)).await?;
+                if shortened.len() >= self.current_nodes.len() {
+                    continue;
+                }
+                for dropped in 0..=2.min(attempt.len() - i - 1) {
+                    let mut kept = attempt[..=i].to_vec();
+                    kept.extend_from_slice(&attempt[i + 1 + dropped..]);
+                    if self.consider(&kept).await? {
+                        break;
+                    }
+                }
             }
             i += 1;
         }
