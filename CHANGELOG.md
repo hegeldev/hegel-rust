@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.46.4 - 2026-09-24
+
+This patch contains internal refactoring around how generators mark the boundary of their draws for Hegel's use. It should have no user-visible effect.
+
 ## 0.46.3 - 2026-09-24
 
 This release updates the `hegeltest-c` dependency to 0.43.2.
