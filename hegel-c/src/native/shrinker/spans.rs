@@ -141,10 +141,11 @@ impl<'a> Shrinker<'a> {
     }
 
     /// Try `attempt` with the node at `idx` moved one step each way: an
-    /// integer one up or down, a boolean flipped, a string one character
-    /// shorter. A deleted list element often has to be paid for by the draw
-    /// after the list — an index into it, its declared length, a parity
-    /// flag — and no deletion pass looks behind the deletion otherwise.
+    /// integer or float one up or down, a boolean flipped, a string one
+    /// character shorter. A deleted list element often has to be paid for by
+    /// the draw after the list — an index into it, its declared length, a
+    /// parity flag — and no deletion pass looks behind the deletion
+    /// otherwise.
     async fn consider_with_node_nudged(
         &mut self,
         attempt: &[ChoiceNode],
@@ -156,6 +157,11 @@ impl<'a> Shrinker<'a> {
                 .into_iter()
                 .filter_map(|nv| ic.value_from_bigint(&nv))
                 .map(|nv| ChoiceData::Integer(Arc::clone(ic), nv))
+                .collect(),
+            ChoiceData::Float(fc, v) => [v - 1.0, v + 1.0]
+                .into_iter()
+                .filter(|nv| nv.to_bits() != v.to_bits() && fc.validate(*nv))
+                .map(|nv| ChoiceData::Float(fc.clone(), nv))
                 .collect(),
             ChoiceData::Boolean(bc, b) => alloc::vec![ChoiceData::Boolean(bc.clone(), !b)],
             ChoiceData::String(sc, cps) if cps.len() > sc.min_size => {
