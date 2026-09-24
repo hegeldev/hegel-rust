@@ -675,3 +675,31 @@ fn only_integer_draws_are_lowered_for_a_span_deletion() {
     assert!(probe.adopted.is_empty());
     assert!(shrinker.replays() > 0);
 }
+
+fn forced_between(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
+    int(tc, 1, 10)?;
+    tc.weighted(0.5, Some(true)).ok()?;
+    int(tc, 2, 10)?;
+    Some(true)
+}
+
+#[test]
+fn a_forced_draw_is_not_an_edge_and_cannot_cycle_the_shrink() {
+    let (mut shrinker, mut probe) =
+        start(forced_between, &[run(&[(A, value(5)), (B, value(6))])], 0.5);
+    shrinker.deadline = Some(crate::sys::Instant::now().unwrap() + Duration::from_secs(5));
+    shrink(&mut shrinker, &mut probe);
+    assert!(!shrinker.timed_out, "the shrink ran to its deadline");
+    assert_eq!(shrinker.graph().edge_count(), 2);
+    let witness: Vec<i64> = shrinker
+        .witness()
+        .0
+        .iter()
+        .filter_map(|n| match n.value() {
+            ChoiceValue::Integer(v) => v.to_i64(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(witness, vec![0, 0]);
+    assert!(shrinker.replays() < 2000, "{} replays", shrinker.replays());
+}

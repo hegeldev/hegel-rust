@@ -581,3 +581,23 @@ fn value_kinds_and_ranks() {
         (1, u64::MAX, vec![])
     );
 }
+
+#[test]
+fn run_from_nodes_leaves_out_forced_draws() {
+    let nodes = vec![
+        ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, true),
+        ChoiceNode::integer(
+            IntegerChoice {
+                min_value: BigInt::from(0),
+                max_value: BigInt::from(9),
+                shrink_towards: BigInt::from(0),
+            },
+            BigInt::from(4),
+            false,
+        ),
+    ];
+    let r = Run::from_nodes(&nodes, &[span(1, 2, 17, None)]);
+    assert_eq!(r.values(), vec![int(4)]);
+    assert_eq!(r.steps[0].addr, vec![(17, 0)]);
+    assert_eq!(r.idents(), vec![Ident::End]);
+}

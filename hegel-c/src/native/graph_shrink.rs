@@ -294,7 +294,12 @@ impl GraphShrinker {
     fn learn_constraints(&mut self, nodes: &[ChoiceNode], spans: &[Span]) {
         let run = Run::from_nodes(nodes, spans);
         let idents = run.idents();
-        for (p, (node, step)) in nodes.iter().zip(&run.steps).enumerate() {
+        for (p, (node, step)) in nodes
+            .iter()
+            .filter(|n| !n.was_forced)
+            .zip(&run.steps)
+            .enumerate()
+        {
             if matches!(node.data, ChoiceData::Clone(_)) {
                 continue;
             }

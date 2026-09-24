@@ -99,13 +99,17 @@ pub(crate) fn draw_addresses(spans: &[Span], count: usize) -> Vec<Addr> {
 
 impl Run {
     /// The run `nodes` realized under `spans` (a stream's own spans; a clone
-    /// stream's draws are inside its clone value).
+    /// stream's draws are inside its clone value). A forced draw is not a
+    /// step: the test decides it without consulting the walk, which never
+    /// serves or settles it, so an edge for it would be one no replay can
+    /// exercise.
     pub(crate) fn from_nodes(nodes: &[ChoiceNode], spans: &[Span]) -> Run {
         let addrs = draw_addresses(spans, nodes.len());
         Run {
             steps: nodes
                 .iter()
                 .zip(addrs)
+                .filter(|(node, _)| !node.was_forced)
                 .map(|(node, addr)| Step {
                     addr,
                     value: node.value(),
