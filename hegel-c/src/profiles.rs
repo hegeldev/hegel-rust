@@ -37,6 +37,13 @@
 //! Users modify shipped profiles and define new ones in a `hegel.toml`
 //! ([`crate::config`]), or register complete snapshots through the C ABI's
 //! `hegel_settings_register_profile`.
+//!
+//! Whatever profile is resolved, `base` included, the settings environment
+//! variables (`HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`,
+//! `HEGEL_SEED`, `HEGEL_DERANDOMIZE`, `HEGEL_PRINT_BLOB`; see
+//! [`Settings::with_env_overrides_from`]) are applied over the result, so
+//! a settings handle starts from the profile as the environment adjusts
+//! it, and the setters called on it afterwards have the last word.
 
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
@@ -187,6 +194,9 @@ pub(crate) enum ProfileError {
     },
     ReservedName(String),
     InvalidName(String),
+    /// A settings environment variable (`HEGEL_TEST_CASES`, `HEGEL_SEED`,
+    /// …) holds a malformed value; the message names it.
+    Environment(String),
 }
 
 impl core::fmt::Display for ProfileError {
@@ -243,6 +253,7 @@ impl core::fmt::Display for ProfileError {
                      ASCII letters, digits, '-' and '_'"
                 )
             }
+            ProfileError::Environment(message) => f.write_str(message),
         }
     }
 }
@@ -568,7 +579,9 @@ fn validate(
 }
 
 /// Resolve settings for the profile `name`, or for the `default` alias
-/// when `name` is `None`. The entry point behind `hegel_settings_new` and
+/// when `name` is `None`, with the settings environment variables
+/// ([`Settings::with_env_overrides_from`]) applied over the result. The
+/// entry point behind `hegel_settings_new` and
 /// `hegel_settings_new_for_profile`.
 pub(crate) fn settings_for(name: Option<&str>) -> Result<Settings, ProfileError> {
     let config = config::load()?;
@@ -595,7 +608,9 @@ fn settings_for_from(
         registry,
         &base,
         &candidates,
-    )?;
+    )?
+    .with_env_overrides_from(&env)
+    .map_err(ProfileError::Environment)?;
     settings.config_path = config.path.clone();
     Ok(settings)
 }

@@ -65,6 +65,187 @@ fn print_blob_defaults_on_and_is_settable() {
     assert!(!Settings::base(false).print_blob(false).print_blob);
 }
 
+fn only(key: &'static str, value: &'static str) -> impl Fn(&str) -> Option<String> {
+    move |k| (k == key).then(|| value.to_string())
+}
+
+fn with_env(settings: Settings, key: &'static str, value: &'static str) -> Settings {
+    settings.with_env_overrides_from(only(key, value)).unwrap()
+}
+
+fn env_error(key: &'static str, value: &'static str) -> String {
+    Settings::base(false)
+        .with_env_overrides_from(only(key, value))
+        .unwrap_err()
+}
+
+#[test]
+fn env_overrides_leave_settings_alone_when_nothing_is_set() {
+    let s = Settings::base(false)
+        .test_cases(5)
+        .with_env_overrides_from(|_| None)
+        .unwrap();
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+fn env_override_replaces_test_cases() {
+    let s = with_env(
+        Settings::base(false).test_cases(5),
+        "HEGEL_TEST_CASES",
+        "17",
+    );
+    assert_eq!(s.test_cases, 17);
+}
+
+#[test]
+fn env_override_test_cases_empty_is_ignored() {
+    let s = with_env(Settings::base(false).test_cases(5), "HEGEL_TEST_CASES", "");
+    assert_eq!(s.test_cases, 5);
+}
+
+#[test]
+fn env_override_test_cases_rejects_non_numeric_and_zero() {
+    assert_eq!(
+        env_error("HEGEL_TEST_CASES", "lots"),
+        "HEGEL_TEST_CASES must be a positive integer, got \"lots\""
+    );
+    assert_eq!(
+        env_error("HEGEL_TEST_CASES", "0"),
+        "HEGEL_TEST_CASES must be a positive integer, got \"0\""
+    );
+}
+
+#[test]
+fn env_override_database_disabled_keyword_and_path() {
+    let custom = || Settings::base(false).database(Some("custom".to_string()));
+    assert_eq!(
+        with_env(custom(), "HEGEL_DATABASE", "disabled").database,
+        Database::Disabled
+    );
+    assert_eq!(
+        with_env(
+            Settings::base(false).database(None),
+            "HEGEL_DATABASE",
+            "my-db"
+        )
+        .database,
+        Database::Path("my-db".to_string())
+    );
+    assert_eq!(
+        with_env(custom(), "HEGEL_DATABASE", "").database,
+        Database::Path("custom".to_string())
+    );
+}
+
+#[test]
+fn env_override_statistics_turns_reporting_on_unless_zero_or_empty() {
+    assert!(with_env(Settings::base(false), "HEGEL_STATISTICS", "1").show_statistics);
+    assert!(!with_env(Settings::base(false), "HEGEL_STATISTICS", "0").show_statistics);
+    assert!(!with_env(Settings::base(false), "HEGEL_STATISTICS", "").show_statistics);
+    assert!(
+        with_env(
+            Settings::base(false).show_statistics(true),
+            "HEGEL_STATISTICS",
+            "0"
+        )
+        .show_statistics,
+        "0 does not turn the statistics off"
+    );
+}
+
+#[test]
+fn env_override_seed_replaces_clears_or_keeps_a_fixed_seed() {
+    let seeded = || Settings::base(false).seed(Some(4242));
+    assert_eq!(with_env(seeded(), "HEGEL_SEED", "7").seed, Some(7));
+    assert_eq!(with_env(seeded(), "HEGEL_SEED", "none").seed, None);
+    assert_eq!(with_env(seeded(), "HEGEL_SEED", "").seed, Some(4242));
+    assert_eq!(
+        env_error("HEGEL_SEED", "-1"),
+        "HEGEL_SEED must be an integer or 'none', got \"-1\""
+    );
+}
+
+#[test]
+fn env_override_derandomize_accepts_the_boolean_vocabulary() {
+    for value in ["true", "1", "yes"] {
+        assert!(
+            with_env(Settings::base(false), "HEGEL_DERANDOMIZE", value).derandomize,
+            "{value:?}"
+        );
+    }
+    for value in ["false", "0", "no"] {
+        assert!(
+            !with_env(
+                Settings::base(false).derandomize(true),
+                "HEGEL_DERANDOMIZE",
+                value
+            )
+            .derandomize,
+            "{value:?}"
+        );
+    }
+    assert!(
+        with_env(
+            Settings::base(false).derandomize(true),
+            "HEGEL_DERANDOMIZE",
+            ""
+        )
+        .derandomize
+    );
+    assert_eq!(
+        env_error("HEGEL_DERANDOMIZE", "maybe"),
+        "HEGEL_DERANDOMIZE must be true or false, got \"maybe\""
+    );
+}
+
+#[test]
+fn env_override_print_blob_replaces_the_setting() {
+    assert!(
+        with_env(
+            Settings::base(false).print_blob(false),
+            "HEGEL_PRINT_BLOB",
+            "true"
+        )
+        .print_blob
+    );
+    assert!(!with_env(Settings::base(false), "HEGEL_PRINT_BLOB", "false").print_blob);
+    assert!(with_env(Settings::base(false), "HEGEL_PRINT_BLOB", "").print_blob);
+    assert_eq!(
+        env_error("HEGEL_PRINT_BLOB", "on"),
+        "HEGEL_PRINT_BLOB must be true or false, got \"on\""
+    );
+}
+
+#[test]
+fn env_overrides_report_the_first_malformed_variable() {
+    let env = |key: &str| match key {
+        "HEGEL_TEST_CASES" => Some("17".to_string()),
+        "HEGEL_SEED" => Some("x".to_string()),
+        "HEGEL_PRINT_BLOB" => Some("on".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        Settings::base(false)
+            .with_env_overrides_from(env)
+            .unwrap_err(),
+        "HEGEL_SEED must be an integer or 'none', got \"x\""
+    );
+}
+
+#[test]
+fn parse_bool_covers_the_shared_vocabulary() {
+    for value in ["true", "1", "yes"] {
+        assert_eq!(parse_bool(value), Some(true), "{value:?}");
+    }
+    for value in ["false", "0", "no"] {
+        assert_eq!(parse_bool(value), Some(false), "{value:?}");
+    }
+    for value in ["", "TRUE", "on", "2"] {
+        assert_eq!(parse_bool(value), None, "{value:?}");
+    }
+}
+
 #[test]
 fn is_in_ci_from_is_false_when_no_variable_is_set() {
     assert!(!is_in_ci_from(|_| None));

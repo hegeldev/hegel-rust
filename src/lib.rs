@@ -173,15 +173,16 @@
 //! }
 //! ```
 //!
-//! To override the number of test cases at runtime — for the whole suite,
+//! To change the number of test cases at runtime — for the whole suite,
 //! without editing source — set the `HEGEL_TEST_CASES` environment variable:
 //!
 //! ```bash
 //! HEGEL_TEST_CASES=10000 cargo test
 //! ```
 //!
-//! When set and non-empty, it takes precedence over any value configured in
-//! source, including explicit `test_cases` attributes.
+//! When set and non-empty, it replaces the value the profile would give
+//! every test that does not set `test_cases` itself; an explicit
+//! `test_cases` attribute is compiled in and keeps its value.
 //!
 //! To see what a test actually generates, record events with
 //! [`TestCase::event`] and [`TestCase::event_value`] and enable the
@@ -193,8 +194,8 @@
 //! ```
 //!
 //! Three more variables cover the settings a single `cargo test` invocation
-//! most often needs to change: `HEGEL_SEED` fixes the seed (or clears a
-//! compiled-in one with `none`), `HEGEL_DERANDOMIZE` turns the derived
+//! most often needs to change: `HEGEL_SEED` fixes the seed (or clears one
+//! a profile set with `none`), `HEGEL_DERANDOMIZE` turns the derived
 //! per-test seed on or off, and `HEGEL_PRINT_BLOB` turns the
 //! `#[hegel::reproduce_failure("…")]` line on or off, so a failure can be
 //! captured for replay without editing the test:
@@ -202,6 +203,10 @@
 //! ```bash
 //! HEGEL_SEED=7 HEGEL_PRINT_BLOB=true cargo test my_test
 //! ```
+//!
+//! The variables are read by the engine when a [`Settings`] value is
+//! created, so they win over profiles and `hegel.toml` but not over
+//! settings written into the test itself.
 //!
 //! ## Settings profiles
 //!

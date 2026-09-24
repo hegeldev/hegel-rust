@@ -857,6 +857,40 @@ fn settings_for_from_stamps_antithesis_detection_regardless_of_profile() {
     );
 }
 
+#[test]
+fn settings_variables_apply_over_the_resolved_profile() {
+    let env = env_of(&[("CI", "true"), ("HEGEL_TEST_CASES", "7")]);
+    let config = config_of("[profiles.ci]\ntest_cases = 1000\nderandomize = false\n");
+    let s = settings_for_env(None, &config, env).unwrap();
+    assert_eq!(s.test_cases, 7, "the variable wins over hegel.toml");
+    assert!(!s.derandomize, "the rest of the profile is untouched");
+    assert_eq!(s.database, Database::Disabled);
+}
+
+#[test]
+fn settings_variables_apply_to_base_too() {
+    let env = env_of(&[("HEGEL_SEED", "9"), ("HEGEL_DERANDOMIZE", "yes")]);
+    let s = settings_for_env(Some("base"), &no_config(), env).unwrap();
+    assert_eq!(s.seed, Some(9));
+    assert!(s.derandomize);
+}
+
+#[test]
+fn a_malformed_settings_variable_fails_resolution() {
+    let env = env_of(&[("HEGEL_TEST_CASES", "lots")]);
+    let e = settings_for_env(None, &no_config(), env).unwrap_err();
+    assert_eq!(
+        e,
+        ProfileError::Environment(
+            "HEGEL_TEST_CASES must be a positive integer, got \"lots\"".to_owned()
+        )
+    );
+    assert_eq!(
+        e.to_string(),
+        "HEGEL_TEST_CASES must be a positive integer, got \"lots\""
+    );
+}
+
 /// The real, sys-backed `settings_for`. Must resolve whatever the ambient
 /// environment selects.
 #[test]
