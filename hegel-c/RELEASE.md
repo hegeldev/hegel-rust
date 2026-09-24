@@ -7,3 +7,5 @@ This patch also improves float generation, so tests on floats reach overflow, un
 The default draw now gives every power-of-two scale the range touches an equal share, so a bounded range such as `0.0..=10.0` reaches the tiny magnitudes where cancellation bugs live instead of spending nearly every draw within a factor of a thousand of the top bound. Draws for `f32` are steered toward `f32`'s own landmarks (`f32::MAX`, `2^24`, its subnormals) rather than `f64`'s. Only fresh generation changes: the recorded choice sequence, replay and stored failures are untouched.
 
 Shrinking also improves for a size drawn twice — the rows and columns of a square matrix. It is now lowered while the values it governs still vary, so the shrinker reaches the smallest failing square instead of zeroing the values first and stopping at a larger one.
+
+A float drawn after a list — its length recorded as a float — now moves one down or up together with a deleted element, as an integer drawn there already did, so the shrinker no longer depends on a fresh draw happening to land on the matching value.

@@ -16,7 +16,9 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::{BooleanChoice, FloatChoice, IntegerChoice, StringChoice};
+use crate::native::core::choices::{
+    BooleanChoice, BytesChoice, FloatChoice, IntegerChoice, StringChoice,
+};
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
@@ -192,6 +194,17 @@ fn float_node(value: f64) -> ChoiceNode {
     )
 }
 
+fn bytes_node(value: &[u8]) -> ChoiceNode {
+    ChoiceNode::bytes(
+        BytesChoice {
+            min_size: 0,
+            max_size: 8,
+        },
+        value.to_vec(),
+        false,
+    )
+}
+
 fn string_node(value: &str) -> ChoiceNode {
     ChoiceNode::string(
         StringChoice {
@@ -337,10 +350,21 @@ fn deleting_an_element_shortens_a_string_drawn_after_the_list() {
 }
 
 #[test]
-fn a_float_drawn_after_the_list_is_not_nudged() {
-    let initial = list_then(&[0, 1], float_node(2.0));
-    let mut shrinker = list_shrinker(initial.clone(), |elements, f| {
+fn deleting_an_element_lowers_a_float_length_drawn_after_the_list() {
+    let mut shrinker = list_shrinker(list_then(&[0, 1], float_node(2.0)), |elements, f| {
         f.value() == ChoiceValue::Float(elements.len() as f64) && elements.iter().any(|&v| v != 0)
+    });
+    drive_no_yield(shrinker.delete_spans()).unwrap();
+    let (elements, f) = decode_list(&shrinker.current_nodes).unwrap();
+    assert_eq!((elements, f.value()), (vec![1], ChoiceValue::Float(1.0)));
+}
+
+#[test]
+fn a_bytes_draw_after_the_list_is_not_nudged() {
+    let initial = list_then(&[0, 1], bytes_node(&[2]));
+    let mut shrinker = list_shrinker(initial.clone(), |elements, b| {
+        b.value() == ChoiceValue::Bytes(vec![elements.len() as u8])
+            && elements.iter().any(|&v| v != 0)
     });
     drive_no_yield(shrinker.delete_spans()).unwrap();
     assert_eq!(shrinker.current_nodes, initial);
