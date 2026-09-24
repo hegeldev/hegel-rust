@@ -1,3 +1,0 @@
-RELEASE_TYPE: patch
-
-This patch moves the settings environment variables into libhegel, so every language binding reads them the same way rather than each reimplementing them. `hegel_settings_new` and `hegel_settings_new_for_profile` now apply `HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB` over the resolved profile (`base` included) before returning the handle: the variables win over every profile and `hegel.toml`, and the setters called on the handle afterwards win over them. An empty variable is ignored; a malformed one fails the constructor with `HEGEL_E_INVALID_ARG` and a message naming the variable, such as `HEGEL_TEST_CASES must be a positive integer, got "lots"`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.43.4 - 2026-09-24
+
+This patch moves the settings environment variables into libhegel, so every language binding reads them the same way rather than each reimplementing them. `hegel_settings_new` and `hegel_settings_new_for_profile` now apply `HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB` over the resolved profile (`base` included) before returning the handle: the variables win over every profile and `hegel.toml`, and the setters called on the handle afterwards win over them. An empty variable is ignored; a malformed one fails the constructor with `HEGEL_E_INVALID_ARG` and a message naming the variable, such as `HEGEL_TEST_CASES must be a positive integer, got "lots"`.
+
 ## 0.43.3 - 2026-09-24
 
 This patch makes opening and closing a span cheaper. A span's label is now recorded as the 64-bit value `hegel_start_span` was given rather than as text, and the engine no longer builds a set of structural-coverage labels for every span, which nothing read. A frontend that opens a span around every draw does noticeably less work per draw as a result.
