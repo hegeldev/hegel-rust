@@ -15,7 +15,7 @@ use crate::runner::Settings;
 /// of each test; `hegel_run_free` tolerates the un-marked in-flight case.
 fn emitting_test_case() -> (RunHandle, TestCase) {
     let settings = Settings::new().database(None);
-    let c_settings = SettingsHandle::build(&settings, None);
+    let c_settings = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()
@@ -133,12 +133,48 @@ fn drive_to_overrun(tc: &TestCase) {
     );
 }
 
+/// A generator that reports how many spans were open on the instance while
+/// it was drawing.
+struct SpanDepthProbe;
+
+impl gs::Generator<usize> for SpanDepthProbe {
+    fn do_draw(&self, tc: &TestCase) -> usize {
+        tc.open_span_depth()
+    }
+}
+
+impl gs::PrintableGenerator<usize> for SpanDepthProbe {
+    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> usize {
+        gs::draw_and_print_value(self, tc, printer)
+    }
+}
+
+/// Every draw entry point runs its generator inside exactly one span of its
+/// own (labelled with the generator's label), closed again once the draw
+/// returns.
+#[test]
+fn every_draw_runs_its_generator_inside_one_span() {
+    let (_run, tc) = emitting_test_case();
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw_silent(SpanDepthProbe), 1);
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw(SpanDepthProbe), 1);
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(
+        tc.draw_and_print(SpanDepthProbe, &mut PrettyPrinter::noop()),
+        1
+    );
+    assert_eq!(tc.open_span_depth(), 0);
+    assert_eq!(tc.draw_silent(gs::vecs(SpanDepthProbe).min_size(1))[0], 2);
+    assert_eq!(tc.open_span_depth(), 0);
+}
+
 #[test]
 fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
-    tc.start_span(gs::labels::LIST);
+    tc.start_span(gs::label_from_name("test.list"));
     drive_to_overrun(&tc);
 
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
@@ -147,8 +183,10 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
         "stop_span after overrun should unwind as StopTest"
     );
 
-    let payload =
-        std::panic::catch_unwind(AssertUnwindSafe(|| tc.start_span(gs::labels::LIST))).unwrap_err();
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tc.start_span(gs::label_from_name("test.list"))
+    }))
+    .unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"

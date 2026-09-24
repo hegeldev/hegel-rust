@@ -348,6 +348,77 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
+/// Interesting iff the first node is `2`, the second and fourth are equal
+/// and the third is non-zero: a tag, two labels that must match with a
+/// payload between them. Every value-`2` node is in one duplicate group,
+/// but lowering the tag with the labels breaks the case.
+fn tag_and_matching_labels(initial: Vec<ChoiceNode>) -> Shrinker<'static> {
+    Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let ints: Vec<i128> = nodes
+                    .iter()
+                    .map(|n| match &n.value() {
+                        ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                let interesting = ints[0] == 2 && ints[1] == ints[3] && ints[2] != 0;
+                (interesting, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    )
+}
+
+fn integer_values(shrinker: &Shrinker<'_>) -> Vec<i128> {
+    shrinker
+        .current_nodes
+        .iter()
+        .map(|n| match &n.value() {
+            ChoiceValue::Integer(v) => i128::try_from(v.clone()).unwrap(),
+            _ => unreachable!(),
+        })
+        .collect()
+}
+
+#[test]
+fn shrink_duplicates_lowers_labels_past_a_same_valued_node_with_other_bounds() {
+    let mut shrinker = tag_and_matching_labels(vec![
+        integer_node(2, 0, 2),
+        integer_node(2, 0, 3),
+        integer_node(1, 0, 100),
+        integer_node(2, 0, 3),
+    ]);
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
+    assert_eq!(integer_values(&shrinker), vec![2, 0, 1, 0]);
+}
+
+#[test]
+fn shrink_duplicates_lowers_labels_past_a_same_valued_node_with_the_same_bounds() {
+    let mut shrinker = tag_and_matching_labels(vec![
+        integer_node(2, 0, 3),
+        integer_node(1, 0, 3),
+        integer_node(1, 0, 3),
+        integer_node(1, 0, 3),
+    ]);
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
+    assert_eq!(integer_values(&shrinker), vec![2, 0, 1, 0]);
+}
+
+#[test]
+fn shrink_duplicates_leaves_a_stalled_group_too_large_to_split() {
+    let mut shrinker = tag_and_matching_labels(
+        core::iter::once(integer_node(2, 0, 3))
+            .chain((0..9).map(|_| integer_node(1, 0, 3)))
+            .collect(),
+    );
+    drive_no_yield(shrinker.shrink_duplicates()).unwrap();
+    assert_eq!(integer_values(&shrinker)[1..], [1; 9]);
+}
+
 /// A square matrix drawn as `rows`, `columns` and `rows × columns` entries,
 /// interesting when it is not symmetric. Its two dimensions are a duplicated
 /// size parameter: zeroing the entries first leaves an all-zero matrix with a

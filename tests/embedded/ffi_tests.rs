@@ -8,12 +8,13 @@
 
 use super::*;
 use crate::ffi::sys as hegel_c;
+use crate::generators as gs;
 use crate::runner::{Backend, Settings};
 
 #[test]
 fn ffi_settings_builds_with_each_explicit_backend() {
     for backend in [Backend::Default, Backend::Urandom] {
-        let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None);
+        let _sh = SettingsHandle::build(&test_settings(1).backend(backend), None, None);
     }
 }
 
@@ -47,7 +48,7 @@ fn drive_run(run: &RunHandle, mut f: impl FnMut(&CTestCase) -> Result<(), hegel_
 #[test]
 fn ffi_drives_a_passing_run_exercising_every_primitive() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     let text = StringGenerator::text(0, 5, None, 0, None, None, None, None, None).unwrap();
 
@@ -55,8 +56,7 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     drive_run(&run, |tc| {
         cases += 1;
 
-        tc.start_span(hegel_c::hegel_label_t::HEGEL_LABEL_LIST as u64)
-            .unwrap();
+        tc.start_span(gs::label_from_name("test.list")).unwrap();
         let collection = tc.new_collection(0, Some(3)).unwrap();
         loop {
             if !tc.collection_more(&collection)? {
@@ -128,7 +128,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
     const ALREADY_COMPLETE: hegel_c::hegel_result_t =
         hegel_c::hegel_result_t::HEGEL_E_ALREADY_COMPLETE;
     let settings = test_settings(2);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     while let Some(tc) = run.next_test_case() {
         tc.mark_complete(VALID, None).unwrap();
@@ -138,7 +138,7 @@ fn ffi_object_constructors_error_on_a_completed_case() {
         ));
         assert!(matches!(tc.new_pool(), Err(ALREADY_COMPLETE)));
         assert!(matches!(
-            tc.new_state_machine(&["only"], &[0], &[], &[], 1, 1),
+            tc.new_state_machine(&["only"], &[0], &[1.0], &[], &[], 1, 1, 50),
             Err(ALREADY_COMPLETE)
         ));
     }
@@ -195,7 +195,7 @@ fn ffi_string_generator_constructors_cover_every_kind() {
 #[test]
 fn ffi_reports_failure_with_blob_then_replays_it() {
     let settings = test_settings(7);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
 
     let origin = "n != 0";
@@ -218,12 +218,16 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
     let result = run.result();
     assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
     assert_eq!(result.failure_count(), 1);
-    let blob = result
-        .failure(0)
+    let failure = result.failure(0);
+    assert_eq!(
+        failure.origin, origin,
+        "the engine reports the origin the failure was marked complete with"
+    );
+    let blob = failure
         .reproduce_blob
         .expect("a shrunk failure carries a blob");
 
-    let sh2 = SettingsHandle::build(&settings, None);
+    let sh2 = SettingsHandle::build(&settings, None, None);
     let replay = CTestCase::from_blob(&sh2, &blob, None).unwrap();
     assert_eq!(
         replay.generate_integer(0, 100).unwrap(),
@@ -241,7 +245,7 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
 #[test]
 fn ffi_clone_handle_shares_the_test_case() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
 
     let tc = run.next_test_case().unwrap();
@@ -261,7 +265,7 @@ fn ffi_clone_handle_shares_the_test_case() {
 #[test]
 fn ffi_from_blob_rejects_undecodable_input() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!", None) {
         Err(e) => e,
         Ok(_) => panic!("expected an undecodable blob to be rejected"),
@@ -299,8 +303,98 @@ fn ffi_handle_dropped_after_context_teardown_does_not_abort() {
 #[should_panic(expected = "was not marked complete")]
 fn ffi_next_test_case_surfaces_engine_errors_instead_of_ending_the_run() {
     let settings = test_settings(1);
-    let sh = SettingsHandle::build(&settings, None);
+    let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     let _first = run.next_test_case().unwrap();
     run.next_test_case();
+}
+
+#[test]
+fn ffi_settings_round_trip_every_field_through_registration() {
+    use crate::runner::{Database, HealthCheck, Phase, Verbosity};
+    let original = Settings::from_profile("base")
+        .test_cases(7)
+        .verbosity(Verbosity::Debug)
+        .seed(Some(11))
+        .derandomize(true)
+        .database(Some("some/db".to_string()))
+        .suppress_health_check([HealthCheck::TooSlow, HealthCheck::FilterTooMuch])
+        .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
+        .show_statistics(true)
+        .print_blob(true)
+        .backend(Backend::Urandom);
+    register_profile("ffi_tests_round_trip", &original).unwrap();
+    let restored = settings_from_profile(Some("ffi_tests_round_trip")).unwrap();
+    assert_eq!(restored.test_cases, 7);
+    assert_eq!(restored.verbosity, crate::runner::Verbosity::Debug);
+    assert_eq!(restored.seed, Some(11));
+    assert!(restored.derandomize);
+    assert_eq!(restored.database, Database::Path("some/db".to_string()));
+    assert_eq!(
+        restored.suppress_health_check,
+        vec![HealthCheck::FilterTooMuch, HealthCheck::TooSlow],
+        "the bitmask reads back in canonical order"
+    );
+    assert_eq!(restored.phases, vec![Phase::Reuse, Phase::Shrink]);
+    assert!(restored.report_multiple_failures);
+    assert!(restored.show_statistics);
+    assert!(restored.print_blob);
+    assert_eq!(restored.backend, Backend::Urandom);
+}
+
+#[test]
+fn ffi_settings_round_trip_the_remaining_enum_values() {
+    use crate::runner::Verbosity;
+    for verbosity in [Verbosity::Quiet, Verbosity::Verbose] {
+        let original = Settings::from_profile("base")
+            .verbosity(verbosity)
+            .backend(Backend::Default);
+        register_profile("ffi_tests_enum_values", &original).unwrap();
+        let restored = settings_from_profile(Some("ffi_tests_enum_values")).unwrap();
+        assert_eq!(restored.verbosity, verbosity);
+        assert_eq!(restored.backend, Backend::Default);
+    }
+}
+
+#[test]
+fn ffi_settings_build_preserves_an_unset_database() {
+    use crate::runner::Database;
+    let unset = Settings::from_profile("base");
+    assert_eq!(unset.database, Database::Unset);
+    register_profile("ffi_tests_unset_database", &unset).unwrap();
+    let restored = settings_from_profile(Some("ffi_tests_unset_database")).unwrap();
+    assert_eq!(
+        restored.database,
+        Database::Unset,
+        "build() must forward Unset rather than inheriting the ambient profile's database"
+    );
+}
+
+#[test]
+fn ffi_settings_from_profile_reports_engine_errors() {
+    let e = settings_from_profile(Some("ffi_tests_no_such_profile")).unwrap_err();
+    assert!(
+        e.contains("unknown settings profile \"ffi_tests_no_such_profile\""),
+        "got: {e}"
+    );
+}
+
+#[test]
+fn ffi_register_profile_reports_engine_errors() {
+    let e = register_profile("bad name", &Settings::from_profile("base")).unwrap_err();
+    assert!(e.contains("invalid profile name"), "got: {e}");
+}
+
+#[test]
+fn ffi_set_default_profile_reports_engine_errors() {
+    let e = set_default_profile(Some("bad name")).unwrap_err();
+    assert!(e.contains("invalid profile name"), "got: {e}");
+}
+
+/// Clearing when no override is set is a no-op, so this cannot disturb
+/// tests running in parallel; setting a real override in-process could.
+#[test]
+fn ffi_set_default_profile_accepts_a_clear() {
+    set_default_profile(None).unwrap();
 }

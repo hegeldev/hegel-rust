@@ -1,4 +1,4 @@
-use super::{Collection, Generator, PrintableGenerator, TestCase, labels};
+use super::{Collection, Generator, PrintableGenerator, TestCase, combine_labels, label_from_name};
 use crate::control::hegel_internal_assert;
 use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
@@ -6,12 +6,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+const VEC_LABEL: u64 = label_from_name("hegel.vec");
+const HASH_SET_LABEL: u64 = label_from_name("hegel.hash_set");
+const HASH_MAP_LABEL: u64 = label_from_name("hegel.hash_map");
+const BTREE_SET_LABEL: u64 = label_from_name("hegel.btree_set");
+const BTREE_MAP_LABEL: u64 = label_from_name("hegel.btree_map");
+const ARRAY_LABEL: u64 = label_from_name("hegel.array");
+
 /// Generator for `Vec<T>`. Created by [`vecs()`].
 pub struct VecGenerator<G, T> {
     pub(crate) elements: G,
     pub(crate) min_size: usize,
     pub(crate) max_size: Option<usize>,
     pub(crate) unique_by: Option<fn(&T, &T) -> bool>,
+    pub(crate) label: u64,
     pub(crate) _phantom: PhantomData<fn(T)>,
 }
 
@@ -57,7 +65,6 @@ impl<G, T> VecGenerator<G, T> {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::LIST);
         printer.begin_group(5, "vec![");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut result = Vec::new();
@@ -79,7 +86,6 @@ impl<G, T> VecGenerator<G, T> {
             result.push(element);
         }
         printer.end_group("]");
-        tc.stop_span(false);
         result
     }
 }
@@ -88,9 +94,13 @@ impl<T, G> Generator<Vec<T>> for VecGenerator<G, T>
 where
     G: Generator<T>,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         self.draw_vec(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
+            tc.draw_silent(elements)
         })
     }
 }
@@ -125,6 +135,7 @@ where
 /// ```
 pub fn vecs<T, G: Generator<T>>(elements: G) -> VecGenerator<G, T> {
     VecGenerator {
+        label: combine_labels(&[VEC_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -138,6 +149,7 @@ pub struct HashSetGenerator<G, T> {
     elements: G,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -174,7 +186,6 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::SET);
         printer.begin_group(15, "HashSet::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
@@ -195,7 +206,6 @@ where
         }
         hegel_internal_assert!(set.len() >= self.min_size);
         printer.end_group("])");
-        tc.stop_span(false);
         set
     }
 }
@@ -205,9 +215,13 @@ where
     G: Generator<T>,
     T: Eq + Hash,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
         self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
+            tc.draw_silent(elements)
         })
     }
 }
@@ -229,6 +243,7 @@ where
 /// See [`HashSetGenerator`] for builder methods.
 pub fn hashsets<T, G: Generator<T>>(elements: G) -> HashSetGenerator<G, T> {
     HashSetGenerator {
+        label: combine_labels(&[HASH_SET_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -242,6 +257,7 @@ pub struct HashMapGenerator<K, V, KT, VT> {
     values: V,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(KT, VT)>,
 }
 
@@ -265,12 +281,16 @@ where
     V: Generator<VT>,
     KT: Eq + std::hash::Hash,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HashMap<KT, VT> {
         self.draw_map(
             tc,
             &mut PrettyPrinter::noop(),
-            |keys, tc, _| keys.do_draw(tc),
-            |values, tc, _| values.do_draw(tc),
+            |keys, tc, _| tc.draw_silent(keys),
+            |values, tc, _| tc.draw_silent(values),
         )
     }
 }
@@ -296,7 +316,6 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::MAP);
         printer.begin_group(15, "HashMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
@@ -324,7 +343,6 @@ where
         }
         hegel_internal_assert!(map.len() >= self.min_size);
         printer.end_group("])");
-        tc.stop_span(false);
         map
     }
 }
@@ -365,6 +383,7 @@ pub fn hashmaps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     values: V,
 ) -> HashMapGenerator<K, V, KT, VT> {
     HashMapGenerator {
+        label: combine_labels(&[HASH_MAP_LABEL, keys.label(), values.label()]),
         keys,
         values,
         min_size: 0,
@@ -378,6 +397,7 @@ pub struct BTreeSetGenerator<G, T> {
     elements: G,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -410,7 +430,6 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::SET);
         printer.begin_group(16, "BTreeSet::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = BTreeSet::new();
@@ -431,7 +450,6 @@ where
         }
         hegel_internal_assert!(set.len() >= self.min_size);
         printer.end_group("])");
-        tc.stop_span(false);
         set
     }
 }
@@ -441,9 +459,13 @@ where
     G: Generator<T>,
     T: Ord,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
         self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            elements.do_draw(tc)
+            tc.draw_silent(elements)
         })
     }
 }
@@ -478,6 +500,7 @@ where
 /// ```
 pub fn btree_sets<T, G: Generator<T>>(elements: G) -> BTreeSetGenerator<G, T> {
     BTreeSetGenerator {
+        label: combine_labels(&[BTREE_SET_LABEL, elements.label()]),
         elements,
         min_size: 0,
         max_size: None,
@@ -491,6 +514,7 @@ pub struct BTreeMapGenerator<K, V, KT, VT> {
     values: V,
     min_size: usize,
     max_size: Option<usize>,
+    label: u64,
     _phantom: PhantomData<fn(KT, VT)>,
 }
 
@@ -514,12 +538,16 @@ where
     V: Generator<VT>,
     KT: Ord,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> BTreeMap<KT, VT> {
         self.draw_map(
             tc,
             &mut PrettyPrinter::noop(),
-            |keys, tc, _| keys.do_draw(tc),
-            |values, tc, _| values.do_draw(tc),
+            |keys, tc, _| tc.draw_silent(keys),
+            |values, tc, _| tc.draw_silent(values),
         )
     }
 }
@@ -540,7 +568,6 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        tc.start_span(labels::MAP);
         printer.begin_group(16, "BTreeMap::from([");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = BTreeMap::new();
@@ -568,7 +595,6 @@ where
         }
         hegel_internal_assert!(map.len() >= self.min_size);
         printer.end_group("])");
-        tc.stop_span(false);
         map
     }
 }
@@ -609,6 +635,7 @@ pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
     values: V,
 ) -> BTreeMapGenerator<K, V, KT, VT> {
     BTreeMapGenerator {
+        label: combine_labels(&[BTREE_MAP_LABEL, keys.label(), values.label()]),
         keys,
         values,
         min_size: 0,
@@ -620,13 +647,15 @@ pub fn btree_maps<KT, VT, K: Generator<KT>, V: Generator<VT>>(
 /// Generator for fixed-size arrays `[T; N]`. Created by [`arrays()`].
 pub struct ArrayGenerator<G, T, const N: usize> {
     element: G,
+    label: u64,
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
+impl<G: Generator<T>, T, const N: usize> ArrayGenerator<G, T, N> {
     #[doc(hidden)]
     pub fn new(element: G) -> Self {
         ArrayGenerator {
+            label: combine_labels(&[ARRAY_LABEL, element.label()]),
             element,
             _phantom: PhantomData,
         }
@@ -649,7 +678,6 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> [T; N] {
-        tc.start_span(labels::TUPLE);
         printer.begin_group(1, "[");
         let result = std::array::from_fn(|i| {
             if i > 0 {
@@ -659,7 +687,6 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
             draw(&self.element, tc, printer)
         });
         printer.end_group("]");
-        tc.stop_span(false);
         result
     }
 }
@@ -667,9 +694,13 @@ impl<G, T, const N: usize> ArrayGenerator<G, T, N> {
 impl<G: Generator<T> + Send + Sync, T, const N: usize> Generator<[T; N]>
     for ArrayGenerator<G, T, N>
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> [T; N] {
         self.draw_array(tc, &mut PrettyPrinter::noop(), |element, tc, _| {
-            element.do_draw(tc)
+            tc.draw_silent(element)
         })
     }
 }

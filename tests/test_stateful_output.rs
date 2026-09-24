@@ -69,7 +69,7 @@ impl Accumulator {
 #[test]
 fn snapshot_step_labels_precede_their_rules_draws() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(Accumulator { total: 0 }, tc);
+        hegel::stateful::machine(Accumulator { total: 0 }).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Checking invariants on the initial state.
@@ -95,7 +95,7 @@ impl TwoDraws {
 #[test]
 fn snapshot_multiple_draws_stay_under_one_step_label() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(TwoDraws, tc);
+        hegel::stateful::machine(TwoDraws).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Step 1: pair {
@@ -126,7 +126,7 @@ impl DrawlessSteps {
 #[test]
 fn snapshot_drawless_steps_and_invariant_notes() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(DrawlessSteps { count: 0 }, tc);
+        hegel::stateful::machine(DrawlessSteps { count: 0 }).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Checking invariants on the initial state.
@@ -161,7 +161,7 @@ impl SlowAccumulator {
 #[test]
 fn snapshot_draw_names_reset_in_each_steps_scope() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(SlowAccumulator { total: 0 }, tc);
+        hegel::stateful::machine(SlowAccumulator { total: 0 }).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Checking invariants on the initial state.
@@ -193,7 +193,7 @@ impl NotesInsideRules {
 #[test]
 fn snapshot_notes_inside_rules_follow_their_draws() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(NotesInsideRules, tc);
+        hegel::stateful::machine(NotesInsideRules).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Step 1: noted {
@@ -220,7 +220,7 @@ impl BrokenFromTheStart {
 #[test]
 fn snapshot_initial_state_invariant_failures_are_named() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(BrokenFromTheStart, tc);
+        hegel::stateful::machine(BrokenFromTheStart).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Checking invariants on the initial state.
@@ -255,7 +255,7 @@ impl HelperMethodMachine {
 #[test]
 fn snapshot_test_helper_draws_are_named_inside_steps() {
     let output = capture_stateful_output(|tc: TestCase| {
-        hegel::stateful::run(HelperMethodMachine { total: 0 }, tc);
+        hegel::stateful::machine(HelperMethodMachine { total: 0 }).run(tc);
     });
     insta::assert_snapshot!(output, @"
     Checking invariants on the initial state.

@@ -8,9 +8,9 @@ use super::ordering::{PermutationJudge, shrink_ordering};
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 use crate::native::HashSet;
-use crate::native::core::{ChoiceNode, sort_key};
+use crate::native::core::{ChoiceData, ChoiceNode, sort_key};
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 /// The [`PermutationJudge`] behind [`Shrinker::reorder_spans`]: splices the
@@ -57,6 +57,15 @@ impl<'a> Shrinker<'a> {
     /// per-invariant sampling draws after it can cost well over eight
     /// choices, and only the widened extent removes the sampling draws in
     /// the same attempt.
+    ///
+    /// A single-choice span is a list element whose deletion is
+    /// [`delete_chunks`](Self::delete_chunks)' job, so it gets one extent —
+    /// the element together with the spanless choice before it (a
+    /// collection's continue bit), or else widened to the next span — and
+    /// that extent is what the nudge below is for: when the plain deletion
+    /// is rejected, it is retried with the first choice after the enclosing
+    /// span moved one step, since an index into the list, its declared
+    /// length or a parity flag drawn after it has to move with the deletion.
     pub(crate) async fn delete_spans(&mut self) -> ShrinkResult<()> {
         let mut attempted: HashSet<(usize, usize)> = HashSet::default();
         let mut epoch = self.improvements;
@@ -68,7 +77,7 @@ impl<'a> Shrinker<'a> {
                 epoch = self.improvements;
                 attempted.clear();
             }
-            if span.end > self.current_nodes.len() || span.end.saturating_sub(span.start) < 2 {
+            if span.end > self.current_nodes.len() {
                 continue;
             }
             let widened_end = self
@@ -78,19 +87,93 @@ impl<'a> Shrinker<'a> {
                 .filter(|&s| s >= span.end)
                 .min()
                 .unwrap_or(self.current_nodes.len());
-            for end in [span.end, widened_end] {
-                let deletes_everything = span.start == 0 && end == self.current_nodes.len();
-                if deletes_everything || !attempted.insert((span.start, end)) {
+            let extents: &[(usize, usize)] = if span.end.saturating_sub(span.start) < 2 {
+                let preceded_by_spanless = span.start > 0
+                    && !self
+                        .current_spans
+                        .iter()
+                        .any(|s| s.end == span.start && s.start < span.start);
+                if preceded_by_spanless {
+                    &[(span.start - 1, span.end)]
+                } else if widened_end > span.end {
+                    &[(span.start, widened_end)]
+                } else {
                     continue;
                 }
-                let mut attempt = self.current_nodes[..span.start].to_vec();
+            } else {
+                &[(span.start, span.end), (span.start, widened_end)]
+            };
+            for &(start, end) in extents {
+                let deletes_everything = start == 0 && end == self.current_nodes.len();
+                if deletes_everything || !attempted.insert((start, end)) {
+                    continue;
+                }
+                let mut attempt = self.current_nodes[..start].to_vec();
                 attempt.extend_from_slice(&self.current_nodes[end..]);
                 if self.consider(&attempt).await? {
+                    break;
+                }
+                let Some(follower) = self.node_after_enclosing_span(i - 1, end) else {
+                    continue;
+                };
+                if self
+                    .consider_with_node_nudged(&attempt, follower - (end - start))
+                    .await?
+                {
                     break;
                 }
             }
         }
         Ok(())
+    }
+
+    /// The index of the first node after the innermost span enclosing both
+    /// span `span_idx` and the deletion extent ending at `end`, if there is
+    /// one before the end of the sequence.
+    fn node_after_enclosing_span(&self, span_idx: usize, end: usize) -> Option<usize> {
+        let mut span = self.current_spans.get(span_idx)?;
+        loop {
+            span = self.current_spans.get(span.parent?)?;
+            if span.end > end {
+                return (span.end < self.current_nodes.len()).then_some(span.end);
+            }
+        }
+    }
+
+    /// Try `attempt` with the node at `idx` moved one step each way: an
+    /// integer one up or down, a boolean flipped, a string one character
+    /// shorter. A deleted list element often has to be paid for by the draw
+    /// after the list — an index into it, its declared length, a parity
+    /// flag — and no deletion pass looks behind the deletion otherwise.
+    async fn consider_with_node_nudged(
+        &mut self,
+        attempt: &[ChoiceNode],
+        idx: usize,
+    ) -> ShrinkResult<bool> {
+        let node = &attempt[idx];
+        let nudged: Vec<ChoiceData> = match &node.data {
+            ChoiceData::Integer(ic, v) => [v.clone() - 1, v.clone() + 1]
+                .into_iter()
+                .filter_map(|nv| ic.value_from_bigint(&nv))
+                .map(|nv| ChoiceData::Integer(Arc::clone(ic), nv))
+                .collect(),
+            ChoiceData::Boolean(bc, b) => alloc::vec![ChoiceData::Boolean(bc.clone(), !b)],
+            ChoiceData::String(sc, cps) if cps.len() > sc.min_size => {
+                alloc::vec![ChoiceData::String(
+                    sc.clone(),
+                    cps[..cps.len() - 1].to_vec()
+                )]
+            }
+            _ => Vec::new(),
+        };
+        for data in nudged {
+            let mut modified = attempt.to_vec();
+            modified[idx] = ChoiceNode::new(data, node.was_forced);
+            if self.consider(&modified).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Delete every contiguous non-overlapping discarded span in one pass.
@@ -201,16 +284,16 @@ impl<'a> Shrinker<'a> {
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
     pub(crate) async fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
-        let spans: Vec<(usize, usize, String)> = self
+        let spans: Vec<(usize, usize, u64)> = self
             .current_spans
             .iter()
-            .map(|s| (s.start, s.end, s.label.clone()))
+            .map(|s| (s.start, s.end, s.label))
             .collect();
 
-        let mut by_label: alloc::collections::BTreeMap<&str, Vec<usize>> =
+        let mut by_label: alloc::collections::BTreeMap<u64, Vec<usize>> =
             alloc::collections::BTreeMap::new();
         for (idx, (_, _, label)) in spans.iter().enumerate() {
-            by_label.entry(label.as_str()).or_default().push(idx);
+            by_label.entry(*label).or_default().push(idx);
         }
 
         for (_label, indices) in by_label {
@@ -219,13 +302,13 @@ impl<'a> Shrinker<'a> {
             }
             for ai in 0..indices.len() {
                 let ancestor_idx = indices[ai];
-                let (a_start, a_end, _) = spans[ancestor_idx].clone();
+                let (a_start, a_end, _) = spans[ancestor_idx];
                 let ancestor_len = a_end.saturating_sub(a_start);
                 if ancestor_len == 0 {
                     continue;
                 }
                 for &descendant_idx in &indices[ai + 1..] {
-                    let (d_start, d_end, _) = spans[descendant_idx].clone();
+                    let (d_start, d_end, _) = spans[descendant_idx];
                     if d_start >= a_end {
                         break;
                     }
@@ -270,11 +353,11 @@ impl<'a> Shrinker<'a> {
         };
 
         for parent in parents {
-            let mut by_label: alloc::collections::BTreeMap<String, Vec<usize>> =
+            let mut by_label: alloc::collections::BTreeMap<u64, Vec<usize>> =
                 alloc::collections::BTreeMap::new();
             for (idx, span) in self.current_spans.iter().enumerate() {
                 if span.parent == parent {
-                    by_label.entry(span.label.clone()).or_default().push(idx);
+                    by_label.entry(span.label).or_default().push(idx);
                 }
             }
 

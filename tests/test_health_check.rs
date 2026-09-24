@@ -198,37 +198,86 @@ mod size_checks {
     use hegel::generators as gs;
     use hegel::{HealthCheck, Hegel, Settings};
 
+    /// A draw that needs more than the 2^20 choices a test case may make:
+    /// each element costs one choice to continue the collection and one
+    /// for the boolean, so 600,000 elements is about 1.2 million choices.
     fn oversized(tc: hegel::TestCase) {
-        tc.draw(gs::vecs(gs::booleans()).min_size(20_000));
+        tc.draw(gs::vecs(gs::booleans()).min_size(600_000));
     }
 
-    /// The smallest natural example already overruns the buffer, so
+    fn settings() -> Settings {
+        Settings::new().test_cases(100).database(None)
+    }
+
+    /// The smallest natural example already overruns the choice limit, so
     /// LargeInitialTestCase fires.
     #[test]
     fn large_initial_test_case_fires() {
         expect_panic(
             || {
-                Hegel::new(oversized)
-                    .settings(Settings::new().test_cases(100).database(None))
-                    .run();
+                Hegel::new(oversized).settings(settings()).run();
             },
             "LargeInitialTestCase",
         );
     }
 
+    /// Suppressing TestCasesTooLarge removes the choice limit outright: a
+    /// case drawing one choice past the 2^20 limit completes.
+    #[test]
+    fn suppressing_test_cases_too_large_removes_the_limit() {
+        Hegel::new(|tc: hegel::TestCase| {
+            for _ in 0..=(1u32 << 20) {
+                tc.draw_silent(gs::booleans());
+            }
+        })
+        .settings(
+            Settings::new()
+                .test_cases(1)
+                .database(None)
+                .suppress_health_check([HealthCheck::TestCasesTooLarge]),
+        )
+        .run();
+    }
+
+    /// Without that suppression the same case is stopped at the limit; a
+    /// run of one case then reports the overruns through TestCasesTooLarge.
+    #[test]
+    fn one_choice_past_the_limit_overruns() {
+        expect_panic(
+            || {
+                Hegel::new(|tc: hegel::TestCase| {
+                    for _ in 0..=(1u32 << 20) {
+                        tc.draw_silent(gs::booleans());
+                    }
+                })
+                .settings(
+                    Settings::new()
+                        .test_cases(1)
+                        .database(None)
+                        .suppress_health_check([
+                            HealthCheck::LargeInitialTestCase,
+                            HealthCheck::TooSlow,
+                        ]),
+                )
+                .run();
+            },
+            "TestCasesTooLarge",
+        );
+    }
+
     /// With LargeInitialTestCase suppressed, the generation loop keeps
-    /// overrunning, so TestCasesTooLarge fires instead.
+    /// overrunning, so TestCasesTooLarge fires instead. TooSlow is
+    /// suppressed as well: twenty full-buffer overruns can take longer than
+    /// its wall-clock threshold under coverage instrumentation.
     #[test]
     fn test_cases_too_large_fires() {
         expect_panic(
             || {
                 Hegel::new(oversized)
-                    .settings(
-                        Settings::new()
-                            .test_cases(100)
-                            .database(None)
-                            .suppress_health_check([HealthCheck::LargeInitialTestCase]),
-                    )
+                    .settings(settings().suppress_health_check([
+                        HealthCheck::LargeInitialTestCase,
+                        HealthCheck::TooSlow,
+                    ]))
                     .run();
             },
             "TestCasesTooLarge",
@@ -236,19 +285,16 @@ mod size_checks {
     }
 
     /// Both suppressed: the run completes (no health-check panic) — it just
-    /// keeps overrunning until the generation budget is spent.
+    /// keeps overrunning until the generation budget is spent. TooSlow is
+    /// suppressed as well, for the same reason as above.
     #[test]
     fn both_suppressed_does_not_fire() {
         Hegel::new(oversized)
-            .settings(
-                Settings::new()
-                    .test_cases(5)
-                    .database(None)
-                    .suppress_health_check([
-                        HealthCheck::LargeInitialTestCase,
-                        HealthCheck::TestCasesTooLarge,
-                    ]),
-            )
+            .settings(settings().test_cases(5).suppress_health_check([
+                HealthCheck::LargeInitialTestCase,
+                HealthCheck::TestCasesTooLarge,
+                HealthCheck::TooSlow,
+            ]))
             .run();
     }
 }

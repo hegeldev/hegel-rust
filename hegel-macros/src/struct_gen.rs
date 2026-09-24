@@ -29,7 +29,12 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 .map(|f| f.ident.as_ref().unwrap().clone())
                 .collect();
             for field_name in &names {
-                if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
+                if *field_name == "new"
+                    || *field_name == "boxed"
+                    || *field_name == "__phantom"
+                    || *field_name == "__label"
+                    || *field_name == "__from_parts"
+                {
                     return syn::Error::new_spanned(
                         field_name,
                         format!(
@@ -114,14 +119,11 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             quote! { #name: #param }
         });
 
-    let new_fields = field_names
-        .iter()
-        .zip(field_types.iter())
-        .map(|(name, ty)| {
-            quote! {
-                #name: <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
-            }
-        });
+    let new_fields = field_types.iter().map(|ty| {
+        quote! {
+            <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
+        }
+    });
 
     let default_bounds = default_gen_bounds(&field_types);
 
@@ -129,17 +131,13 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
         let field_type = field_types[index];
         let params_before = &generator_params[..index];
         let params_after = &generator_params[index + 1..];
-        let moves = field_names
-            .iter()
-            .zip(generator_params.iter())
-            .enumerate()
-            .map(|(other, (other_name, _))| {
-                if other == index {
-                    quote! { #field_name: generator }
-                } else {
-                    quote! { #other_name: self.#other_name }
-                }
-            });
+        let moves = field_names.iter().enumerate().map(|(other, other_name)| {
+            if other == index {
+                quote! { generator }
+            } else {
+                quote! { self.#other_name }
+            }
+        });
         quote! {
             /// Set a custom generator for this field.
             ///
@@ -155,30 +153,23 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
             where
                 G: ::hegel::generators::Generator<#field_type>,
             {
-                #generator_name {
+                #generator_name::<#(#param_uses,)* #(#params_before,)* G, #(#params_after,)*>::__from_parts(
                     #(#moves,)*
-                    #phantom_init
-                }
+                )
             }
         }
     });
 
-    let (span_label, construct) = if is_tuple {
+    let construct = if is_tuple {
         let draws = field_names.iter().map(|name| {
-            quote! { self.#name.do_draw(__tc) }
+            quote! { __tc.draw_silent(&self.#name) }
         });
-        (
-            quote! { ::hegel::generators::labels::TUPLE },
-            quote! { #name(#(#draws,)*) },
-        )
+        quote! { #name(#(#draws,)*) }
     } else {
         let generate_fields = field_names.iter().map(|name| {
-            quote! { #name: self.#name.do_draw(__tc) }
+            quote! { #name: __tc.draw_silent(&self.#name) }
         });
-        (
-            quote! { ::hegel::generators::labels::FIXED_DICT },
-            quote! { #name { #(#generate_fields,)* } },
-        )
+        quote! { #name { #(#generate_fields,)* } }
     };
 
     let print_idents: Vec<_> = (0..field_names.len())
@@ -211,6 +202,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 #(#user_predicates,)*
             {
                 #(#generator_fields,)*
+                __label: u64,
                 #phantom_field
             }
 
@@ -220,10 +212,7 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 #(#default_bounds,)*
             {
                 pub fn new() -> Self {
-                    Self {
-                        #(#new_fields,)*
-                        #phantom_init
-                    }
+                    Self::__from_parts(#(#new_fields,)*)
                 }
             }
 
@@ -231,7 +220,20 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 #generator_name<#(#param_uses,)* #(#generator_params,)*>
             where
                 #(#user_predicates,)*
+                #(#generator_params: ::hegel::generators::Generator<#field_types>,)*
             {
+                fn __from_parts(#(#field_names: #generator_params,)*) -> Self {
+                    let __label = ::hegel::generators::combine_labels(&[
+                        ::hegel::generators::label_from_name(::core::any::type_name::<#self_ty>()),
+                        #(#field_names.label(),)*
+                    ]);
+                    Self {
+                        #(#field_names,)*
+                        __label,
+                        #phantom_init
+                    }
+                }
+
                 #(#with_method_impls)*
             }
 
@@ -251,11 +253,12 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                 #(#user_predicates,)*
                 #(#generator_params: ::hegel::generators::Generator<#field_types>,)*
             {
+                fn label(&self) -> u64 {
+                    self.__label
+                }
+
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(#span_label);
-                    let __result = #construct;
-                    __tc.stop_span(false);
-                    __result
+                    #construct
                 }
             }
 
@@ -271,11 +274,8 @@ pub(crate) fn derive_struct_generator(input: &DeriveInput, data: &syn::DataStruc
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    __tc.start_span(#span_label);
                     #print_body
-                    let __result = #print_construct;
-                    __tc.stop_span(false);
-                    __result
+                    #print_construct
                 }
             }
 

@@ -1,8 +1,10 @@
 use super::generators::draw_and_print_value;
-use super::{Generator, PrintableGenerator, TestCase, integers};
+use super::{Generator, PrintableGenerator, TestCase, integers, label_from_name};
 use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::time::Duration;
+
+const DURATION_LABEL: u64 = label_from_name("hegel.durations");
 
 /// Generator for [`Duration`] values. Created by [`durations()`].
 ///
@@ -40,6 +42,10 @@ impl DurationGenerator {
 }
 
 impl Generator<Duration> for DurationGenerator {
+    fn label(&self) -> u64 {
+        DURATION_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Duration {
         if self.min_unrepresentable {
             invalid_argument!(

@@ -72,11 +72,7 @@ fn target_duplicate_label_is_a_clean_usage_error() {
 #[test]
 fn float_range_with_no_values_is_a_clean_usage_error() {
     let msg = capture_run_panic(|tc| {
-        let _: f64 = tc.draw(
-            gs::floats::<f64>()
-                .min_value(f64::INFINITY)
-                .exclude_min(true),
-        );
+        let _: f64 = tc.draw(gs::floats::<f64>().min_value_exclusive(f64::INFINITY));
     });
     assert_clean_usage_error(&msg, "InvalidArgument");
 }

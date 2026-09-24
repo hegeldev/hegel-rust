@@ -1,12 +1,12 @@
 use super::generators::draw_and_print_value;
-use super::{Collection, Generator, PrintableGenerator, TestCase, fnv1a_hash};
+use super::{Collection, Generator, PrintableGenerator, TestCase, label_from_name};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
 
-const SUBSEQUENCE_LABEL: u64 = fnv1a_hash(b"hegel:subsequence");
-const PERMUTATION_LABEL: u64 = fnv1a_hash(b"hegel:permutation");
-const SAMPLE_LABEL: u64 = fnv1a_hash(b"hegel:sample");
+const SUBSEQUENCE_LABEL: u64 = label_from_name("hegel.subsequence");
+const PERMUTATION_LABEL: u64 = label_from_name("hegel.permutation");
+const SAMPLE_LABEL: u64 = label_from_name("hegel.sample");
 
 /// Draw between `min_size` and `max_size` distinct indices in `0..n`, without
 /// replacement, in draw order. Shrinks towards fewer indices and towards the
@@ -47,6 +47,10 @@ impl<'a, T: Clone> SubsequenceGenerator<'a, T> {
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SubsequenceGenerator<'a, T> {
+    fn label(&self) -> u64 {
+        SUBSEQUENCE_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let n = self.elements.len();
         if let Some(max) = self.max_size {
@@ -62,9 +66,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SubsequenceGenerator
             );
         }
         let max_size = self.max_size.map_or(n, |m| m.min(n));
-        tc.start_span(SUBSEQUENCE_LABEL);
         let mut indices = draw_index_sample(tc, n, self.min_size, max_size);
-        tc.stop_span(false);
         indices.sort_unstable();
         indices
             .into_iter()
@@ -126,11 +128,13 @@ pub struct PermutationGenerator<'a, T: Clone> {
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for PermutationGenerator<'a, T> {
+    fn label(&self) -> u64 {
+        PERMUTATION_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let n = self.elements.len();
-        tc.start_span(PERMUTATION_LABEL);
         let indices = draw_index_sample(tc, n, n, n);
-        tc.stop_span(false);
         indices
             .into_iter()
             .map(|i| self.elements[i].clone())
@@ -222,6 +226,10 @@ impl<'a, T: Clone> SampleGenerator<'a, T> {
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, T> {
+    fn label(&self) -> u64 {
+        SAMPLE_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
         let n = self.elements.len();
         if let Some(max) = self.max_size {
@@ -234,14 +242,12 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, 
                 invalid_argument!("Cannot generate a non-empty sample from an empty sequence");
             }
             let max_size = if n == 0 { Some(0) } else { self.max_size };
-            tc.start_span(SAMPLE_LABEL);
             let mut collection = Collection::new(tc, self.min_size, max_size);
             let mut result = Vec::new();
             while collection.more() {
                 let i = tc.generate_integer_i64(0, n as i64 - 1) as usize;
                 result.push(self.elements[i].clone());
             }
-            tc.stop_span(false);
             result
         } else {
             if self.min_size > n {
@@ -252,9 +258,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, 
                 );
             }
             let max_size = self.max_size.map_or(n, |m| m.min(n));
-            tc.start_span(SAMPLE_LABEL);
             let indices = draw_index_sample(tc, n, self.min_size, max_size);
-            tc.stop_span(false);
             indices
                 .into_iter()
                 .map(|i| self.elements[i].clone())

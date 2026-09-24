@@ -152,12 +152,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         })
         .collect();
 
-    let new_field_inits: Vec<_> = field_names
+    let new_field_inits: Vec<_> = variant_generator_names
         .iter()
-        .zip(variant_generator_names.iter())
-        .map(|(field_name, variant_generator_name)| {
+        .map(|variant_generator_name| {
             quote! {
-                #field_name: #variant_generator_name::new()
+                #variant_generator_name::new()
             }
         })
         .collect();
@@ -177,18 +176,26 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             let params_before = &variant_params[..index];
             let params_after = &variant_params[index + 1..];
             let moves = |replacement: proc_macro2::TokenStream| {
-                let assignments: Vec<_> = field_names
+                let arguments: Vec<_> = field_names
                     .iter()
                     .enumerate()
                     .map(|(other, other_name)| {
                         if other == index {
-                            quote! { #field_name: #replacement }
+                            replacement.clone()
                         } else {
-                            quote! { #other_name: self.#other_name }
+                            quote! { self.#other_name }
                         }
                     })
                     .collect();
-                assignments
+                arguments
+            };
+            let from_parts = |replacement_ty: proc_macro2::TokenStream,
+                              arguments: Vec<proc_macro2::TokenStream>| {
+                quote! {
+                    #generator_name::<#(#param_uses,)* #(#params_before,)* #replacement_ty, #(#params_after,)*>::__from_parts(
+                        #(#arguments,)*
+                    )
+                }
             };
 
             match &variant.fields {
@@ -196,7 +203,10 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 Fields::Named(_) => {
                     let field_types = variant_field_types(variant);
                     let bounds = default_gen_bounds(&field_types);
-                    let assignments = moves(quote! { configure(#variant_generator_name::new()) });
+                    let construct = from_parts(
+                        quote! { G },
+                        moves(quote! { configure(#variant_generator_name::new()) }),
+                    );
 
                     let doc = format!("Set a custom generator for the `{variant_name}` variant.");
                     quote! {
@@ -210,10 +220,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                             G: ::hegel::generators::Generator<#self_ty>,
                             #(#bounds,)*
                         {
-                            #generator_name {
-                                #(#assignments,)*
-                                _phantom: ::core::marker::PhantomData,
-                            }
+                            #construct
                         }
                     }
                 }
@@ -224,9 +231,6 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         .collect();
                     let gen_param_names: Vec<_> = (0..field_types.len())
                         .map(|i| format_ident!("gen_{}", i))
-                        .collect();
-                    let field_indices: Vec<_> = (0..field_types.len())
-                        .map(|i| format_ident!("_{}", i))
                         .collect();
                     let bounds: Vec<_> = gen_type_params
                         .iter()
@@ -240,17 +244,21 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     let replacement_ty = quote! {
                         #variant_generator_name<#(#param_uses,)* #(#gen_type_params,)*>
                     };
-                    let assignments = moves(quote! {
-                        #variant_generator_name {
-                            #(#field_indices: #gen_param_names,)*
-                            #variant_phantom_init
-                        }
-                    });
+                    let construct = from_parts(
+                        replacement_ty.clone(),
+                        moves(quote! {
+                            #variant_generator_name::<#(#param_uses,)* #(#gen_type_params,)*>::__from_parts(
+                                #(#gen_param_names,)*
+                            )
+                        }),
+                    );
 
                     let with_method_name = format_ident!("{}_with", field_name);
                     let with_bounds = default_gen_bounds(&field_types);
-                    let with_assignments =
-                        moves(quote! { configure(#variant_generator_name::new()) });
+                    let with_construct = from_parts(
+                        quote! { G },
+                        moves(quote! { configure(#variant_generator_name::new()) }),
+                    );
                     let with_doc = format!(
                         "Configure the `{variant_name}` variant via a closure.\n\nThe closure \
                          receives the default variant generator and must return any generator \
@@ -267,10 +275,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                             G: ::hegel::generators::Generator<#self_ty>,
                             #(#with_bounds,)*
                         {
-                            #generator_name {
-                                #(#with_assignments,)*
-                                _phantom: ::core::marker::PhantomData,
-                            }
+                            #with_construct
                         }
                     };
 
@@ -284,10 +289,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                         where
                             #(#bounds,)*
                         {
-                            #generator_name {
-                                #(#assignments,)*
-                                _phantom: ::core::marker::PhantomData,
-                            }
+                            #construct
                         }
 
                         #with_method
@@ -320,7 +322,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 Fields::Unit => quote! { #i => #enum_name::#variant_name },
                 _ => {
                     let field_name = variant_to_field[&variant.ident.to_string()];
-                    quote! { #i => self.#field_name.do_draw(__tc) }
+                    quote! { #i => __tc.draw_silent(&self.#field_name) }
                 }
             }
         })
@@ -334,6 +336,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             #(#user_predicates,)*
         {
             #(#generator_fields,)*
+            __label: u64,
             _phantom: ::core::marker::PhantomData<fn() -> #self_ty>,
         }
 
@@ -344,17 +347,27 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
         {
             /// Create a new generator with default generators for all variants.
             pub fn new() -> Self {
-                Self {
-                    #(#new_field_inits,)*
-                    _phantom: ::core::marker::PhantomData,
-                }
+                Self::__from_parts(#(#new_field_inits,)*)
             }
         }
 
         impl<#gen_params #(#variant_params,)*> #generator_name<#(#param_uses,)* #(#variant_params,)*>
         where
             #(#user_predicates,)*
+            #(#variant_params: ::hegel::generators::Generator<#self_ty>,)*
         {
+            fn __from_parts(#(#field_names: #variant_params,)*) -> Self {
+                let __label = ::hegel::generators::combine_labels(&[
+                    ::hegel::generators::label_from_name(::core::any::type_name::<#self_ty>()),
+                    #(#field_names.label(),)*
+                ]);
+                Self {
+                    #(#field_names,)*
+                    __label,
+                    _phantom: ::core::marker::PhantomData,
+                }
+            }
+
             #(#with_methods)*
         }
 
@@ -403,6 +416,10 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             where
                 #(#user_predicates,)*
             {
+                fn label(&self) -> u64 {
+                    self.__label
+                }
+
                 fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
                     let index: usize = #variant_index_draw;
                     match index {
@@ -438,16 +455,16 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                 #(#user_predicates,)*
                 #(#variant_params: ::hegel::generators::Generator<#self_ty>,)*
             {
-                fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::ENUM_VARIANT);
-                    let index: usize = #variant_index_draw;
+                fn label(&self) -> u64 {
+                    self.__label
+                }
 
-                    let __result = match index {
+                fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
+                    let index: usize = #variant_index_draw;
+                    match index {
                         #(#generate_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
-                    };
-                    __tc.stop_span(false);
-                    __result
+                    }
                 }
             }
 
@@ -462,15 +479,11 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
                     __tc: &::hegel::TestCase,
                     __printer: &mut ::hegel::PrettyPrinter,
                 ) -> #self_ty {
-                    __tc.start_span(::hegel::generators::labels::ENUM_VARIANT);
                     let index: usize = #variant_index_draw;
-
-                    let __result = match index {
+                    match index {
                         #(#print_match_arms,)*
                         _ => unreachable!("Unknown variant index: {}", index),
-                    };
-                    __tc.stop_span(false);
-                    __result
+                    }
                 }
             }
         }
@@ -534,7 +547,12 @@ fn generate_variant_generator(
                 .map(|f| f.ident.as_ref().unwrap().clone())
                 .collect();
             for field_name in &field_names {
-                if *field_name == "new" || *field_name == "boxed" || *field_name == "__phantom" {
+                if *field_name == "new"
+                    || *field_name == "boxed"
+                    || *field_name == "__phantom"
+                    || *field_name == "__label"
+                    || *field_name == "__from_parts"
+                {
                     return syn::Error::new_spanned(
                         field_name,
                         format!(
@@ -591,12 +609,11 @@ fn generate_variant_generator(
         })
         .collect();
 
-    let new_inits: Vec<_> = field_idents
+    let new_inits: Vec<_> = field_types
         .iter()
-        .zip(field_types.iter())
-        .map(|(ident, ty)| {
+        .map(|ty| {
             quote! {
-                #ident: <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
+                <#ty as ::hegel::generators::DefaultGenerator>::default_generator()
             }
         })
         .collect();
@@ -612,9 +629,9 @@ fn generate_variant_generator(
             let params_after = &generator_params[index + 1..];
             let moves = field_idents.iter().enumerate().map(|(other, other_ident)| {
                 if other == index {
-                    quote! { #field_ident: generator }
+                    quote! { generator }
                 } else {
-                    quote! { #other_ident: self.#other_ident }
+                    quote! { self.#other_ident }
                 }
             });
             quote! {
@@ -632,10 +649,9 @@ fn generate_variant_generator(
                 where
                     G: ::hegel::generators::Generator<#field_type>,
                 {
-                    #variant_generator_name {
+                    #variant_generator_name::<#(#param_uses,)* #(#params_before,)* G, #(#params_after,)*>::__from_parts(
                         #(#moves,)*
-                        #phantom_init
-                    }
+                    )
                 }
             }
         })
@@ -645,7 +661,7 @@ fn generate_variant_generator(
         let field_constructions: Vec<_> = field_idents
             .iter()
             .map(|ident| {
-                quote! { #ident: self.#ident.do_draw(__tc) }
+                quote! { #ident: __tc.draw_silent(&self.#ident) }
             })
             .collect();
         let print_idents: Vec<_> = (0..field_idents.len())
@@ -669,7 +685,7 @@ fn generate_variant_generator(
         let field_generates: Vec<_> = field_idents
             .iter()
             .map(|ident| {
-                quote! { self.#ident.do_draw(__tc) }
+                quote! { __tc.draw_silent(&self.#ident) }
             })
             .collect();
         let print_idents: Vec<_> = (0..field_idents.len())
@@ -701,6 +717,7 @@ fn generate_variant_generator(
             #(#user_predicates,)*
         {
             #(#generator_fields,)*
+            __label: u64,
             #phantom_field
         }
 
@@ -711,10 +728,7 @@ fn generate_variant_generator(
         {
             /// Create a new generator with default generators for all fields.
             pub fn new() -> Self {
-                Self {
-                    #(#new_inits,)*
-                    #phantom_init
-                }
+                Self::__from_parts(#(#new_inits,)*)
             }
         }
 
@@ -722,7 +736,21 @@ fn generate_variant_generator(
             #variant_generator_name<#(#param_uses,)* #(#generator_params,)*>
         where
             #(#user_predicates,)*
+            #(#generator_params: ::hegel::generators::Generator<#field_types>,)*
         {
+            fn __from_parts(#(#field_idents: #generator_params,)*) -> Self {
+                let __label = ::hegel::generators::combine_labels(&[
+                    ::hegel::generators::label_from_name(::core::any::type_name::<#self_ty>()),
+                    ::hegel::generators::label_from_name(#label),
+                    #(#field_idents.label(),)*
+                ]);
+                Self {
+                    #(#field_idents,)*
+                    __label,
+                    #phantom_init
+                }
+            }
+
             #(#builder_methods)*
         }
 
@@ -742,6 +770,10 @@ fn generate_variant_generator(
             #(#user_predicates,)*
             #(#generator_params: ::hegel::generators::Generator<#field_types>,)*
         {
+            fn label(&self) -> u64 {
+                self.__label
+            }
+
             fn do_draw(&self, __tc: &::hegel::TestCase) -> #self_ty {
                 #construction
             }

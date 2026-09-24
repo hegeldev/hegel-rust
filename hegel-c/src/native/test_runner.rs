@@ -30,20 +30,23 @@ use hashbrown::hash_map::Entry;
 use rand::RngExt;
 
 use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
+use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    BUFFER_SIZE, ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans,
-    Status, sort_key,
+    ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans, Status, sort_key,
 };
 use crate::native::data_source::NativeDataSource;
+#[cfg(not(target_family = "wasm"))]
+use crate::native::database::DirectoryTestCaseDatabase;
 use crate::native::database::{
-    DirectoryTestCaseDatabase, TestCaseDatabase, deserialize_choices, serialize_choices,
-    serialize_nodes,
+    TestCaseDatabase, deserialize_choices, serialize_choices, serialize_nodes,
 };
 use crate::native::exec_cache::{ExecCache, KindLedger};
 use crate::native::rng::EngineRng;
 use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
-use crate::settings::{Backend, Database, HealthCheck, Output, Phase, Settings, Verbosity};
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::Database;
+use crate::settings::{Backend, HealthCheck, Output, Phase, Settings, Verbosity};
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
@@ -180,6 +183,13 @@ impl<'a> Engine<'a> {
             }
         };
 
+        if matches!(verbosity, Verbosity::Debug) {
+            match &settings.config_path {
+                Some(path) => output.line(&format!("loaded config: {path}")),
+                None => output.line("no config file loaded"),
+            }
+        }
+
         let mut target_schedule = crate::native::targeting::TargetingSchedule::new(max_test_cases);
         let target_phase = settings.phases.contains(&Phase::Target);
         let invalid_budget = invalid_thresholds(INVALID_TARGET_RATE, INVALID_TARGET_CONFIDENCE);
@@ -231,8 +241,8 @@ impl<'a> Engine<'a> {
                         }
                         continue;
                     };
-                    let ntc =
-                        NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), BUFFER_SIZE)?;
+                    let bound = self.choice_bound();
+                    let ntc = NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), bound)?;
                     let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(err) = mismatch {
                         return Err(err);
@@ -294,7 +304,7 @@ impl<'a> Engine<'a> {
             && max_test_cases > 1
         {
             let (run, mismatch) = self
-                .test_function(NativeTestCase::for_simplest(BUFFER_SIZE)?)
+                .test_function(NativeTestCase::for_simplest(self.choice_bound())?)
                 .await?;
             if let Some(err) = mismatch {
                 return Err(err);
@@ -303,6 +313,7 @@ impl<'a> Engine<'a> {
                 run.status == Status::EarlyStop,
                 run.status,
                 crate::native::core::flattened_len(&run.nodes),
+                self.choice_bound(),
                 settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
                 return Err(RunError::HealthCheck(msg));
@@ -345,7 +356,8 @@ impl<'a> Engine<'a> {
 
                 let mut case_rng = self.rng.spawn();
                 let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let ntc = NativeTestCase::new_random_with_params(case_rng, params);
+                let ntc =
+                    NativeTestCase::new_random_with_params(case_rng, params, self.choice_bound());
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");
                 }
@@ -478,10 +490,9 @@ impl<'a> Engine<'a> {
                 let primary_max: Option<Vec<u8>> = self
                     .interesting
                     .values()
-                    .map(|nodes| {
-                        let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                        serialize_choices(&choices)
-                    })
+                    .map(|nodes| serialize_executed_nodes(nodes))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
                     .max_by(|a, b| shortlex(a, b));
                 for raw in entries {
                     if primary_max
@@ -571,7 +582,7 @@ impl<'a> Engine<'a> {
             output.line("Skipping shrink: reused aligned database replay");
         }
 
-        self.reconcile_database();
+        self.reconcile_database()?;
 
         if verbosity == Verbosity::Debug {
             output.line(&format!(
@@ -598,21 +609,22 @@ impl<'a> Engine<'a> {
         }
 
         let nondeterministic = self.nondeterministic;
-        let failures = origins_sorted
-            .into_iter()
-            .map(|(origin, nodes)| {
-                let reproduce_blob = if nondeterministic {
-                    None
-                } else {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                    Some(crate::native::blob::encode_failure(&choices))
-                };
-                Failure {
-                    origin,
-                    reproduce_blob,
-                }
-            })
-            .collect();
+        let mut failures = Vec::with_capacity(origins_sorted.len());
+        for (origin, nodes) in origins_sorted {
+            let reproduce_blob = if nondeterministic {
+                None
+            } else {
+                let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
+                Some(hegel_internal_unwrap!(
+                    crate::native::blob::encode_failure(&choices),
+                    "a failing test case's clone values nest deeper than MAX_CLONE_DEPTH"
+                ))
+            };
+            failures.push(Failure {
+                origin,
+                reproduce_blob,
+            });
+        }
         Ok(TestRunResult {
             failures,
             nondeterministic,
@@ -680,12 +692,13 @@ pub(crate) fn too_large_check(
         Some(format!(
             "FailedHealthCheck: TestCasesTooLarge — generated inputs routinely \
              exceeded the maximum size: {valid_test_cases} inputs were generated \
-             successfully, while {overrun_test_cases} inputs overran the buffer during \
-             generation. Testing with inputs this large is slow and shrinks \
+             successfully, while {overrun_test_cases} inputs overran the choice limit \
+             during generation. Testing with inputs this large is slow and shrinks \
              poorly. Try reducing the amount of data generated, e.g. a smaller \
              min_size on collections like gs::vecs(). If this is expected, \
              suppress the check with \
-             suppress_health_check = [HealthCheck::TestCasesTooLarge]."
+             suppress_health_check = [HealthCheck::TestCasesTooLarge], which \
+             also removes the limit on the size of a test case."
         ))
     } else {
         None
@@ -693,20 +706,21 @@ pub(crate) fn too_large_check(
 }
 
 /// Returns the `FailedHealthCheck: LargeInitialTestCase` message when the
-/// smallest natural example either overran the buffer or, while valid, used
-/// more than half of it, unless the check is suppressed; otherwise `None`.
-/// Mirrors Hypothesis's `large_base_example` health check.
+/// smallest natural example either overran the choice bound or, while valid,
+/// used more than half of it, unless the check is suppressed; otherwise
+/// `None`. Mirrors Hypothesis's `large_base_example` health check.
 pub(crate) fn large_initial_check(
     overran: bool,
     status: Status,
     node_count: usize,
+    choice_bound: usize,
     suppressed: bool,
 ) -> Option<String> {
     if suppressed {
         return None;
     }
     let too_large =
-        overran || (status == Status::Valid && node_count.saturating_mul(2) > BUFFER_SIZE);
+        overran || (status == Status::Valid && node_count.saturating_mul(2) > choice_bound);
     if too_large {
         Some(
             "FailedHealthCheck: LargeInitialTestCase — the smallest natural input \
@@ -791,6 +805,16 @@ fn within_invalid_budget(
 ) -> bool {
     let (base, per_valid) = budget;
     (invalid_test_cases + overrun_test_cases) <= base + per_valid * valid_test_cases
+}
+
+/// The database bytes for an executed test case's nodes. The engine bounds
+/// clone nesting at `MAX_CLONE_DEPTH` as the case runs, so the serializer
+/// refusing its values is a violated internal invariant.
+fn serialize_executed_nodes(nodes: &[ChoiceNode]) -> Result<Vec<u8>, InternalError> {
+    Ok(hegel_internal_unwrap!(
+        serialize_nodes(nodes),
+        "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+    ))
 }
 
 /// Shortlex ordering over serialized choice sequences: by length first, then
@@ -897,19 +921,19 @@ impl<'a> Persister<'a> {
     /// sighting, or shortlex-precedes the previous save, the new bytes are
     /// written to the primary key and any previously-saved bytes for this
     /// origin are then deleted (or demoted, for a run-start entry).
-    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) {
-        let Some(db) = self.db.as_deref() else { return };
-        let Some(key) = self.database_key else { return };
+    fn record(&mut self, origin: &str, nodes: &[ChoiceNode]) -> Result<(), InternalError> {
+        let (Some(db), Some(key)) = (self.db.as_deref(), self.database_key) else {
+            return Ok(());
+        };
         let key_bytes = key.as_bytes();
-        let new_choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-        let new_bytes = serialize_choices(&new_choices);
+        let new_bytes = serialize_executed_nodes(nodes)?;
 
         let needs_save = match self.last_saved.get(origin) {
             None => true,
             Some((prev, _)) => sort_key(nodes) < sort_key(prev),
         };
         if !needs_save {
-            return;
+            return Ok(());
         }
 
         db.save(key_bytes, &new_bytes);
@@ -933,6 +957,7 @@ impl<'a> Persister<'a> {
         self.saved_this_run.insert(new_bytes.clone());
         self.last_saved
             .insert(origin.to_string(), (nodes.to_vec(), new_bytes));
+        Ok(())
     }
 }
 
@@ -1011,16 +1036,20 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
+        crate::antithesis::check_environment()?;
+        #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),
             Database::Unset => Some(Box::new(DirectoryTestCaseDatabase::new(".hegel/examples"))),
             Database::Disabled => None,
         };
+        #[cfg(target_family = "wasm")]
+        let db: Option<Box<dyn TestCaseDatabase>> = None;
         Ok(Engine {
             settings,
             database_key,
             exchange,
-            rng: create_rng(settings, database_key)?,
+            rng: create_rng(settings, database_key),
             persister: Persister::new(db, database_key),
             exec_cache: ExecCache::default(),
             kind_ledger: KindLedger::default(),
@@ -1046,12 +1075,17 @@ impl<'a> Engine<'a> {
         self.persister.db.as_deref()
     }
 
+    /// The run's per-test-case choice bound (see [`Settings::unbounded_choices`]).
+    pub(crate) fn choice_bound(&self) -> usize {
+        self.settings.choice_bound()
+    }
+
     /// End-of-run database reconciliation: save every surviving failure's
     /// bytes, then dispatch each displaced primary entry by provenance —
     /// same-run leftovers are deleted, run-start entries demote to the
     /// secondary key — and evict the shortlex-largest secondary entries
     /// above [`SECONDARY_CORPUS_CAP`].
-    fn reconcile_database(&self) {
+    fn reconcile_database(&self) -> Result<(), InternalError> {
         if let (false, Some(db), Some(key)) = (self.nondeterministic, self.db(), self.database_key)
         {
             let key_bytes = key.as_bytes();
@@ -1059,11 +1093,8 @@ impl<'a> Engine<'a> {
             let new_entries: crate::native::HashSet<Vec<u8>> = self
                 .interesting
                 .values()
-                .map(|nodes| {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
-                    serialize_choices(&choices)
-                })
-                .collect();
+                .map(|nodes| serialize_executed_nodes(nodes))
+                .collect::<Result<_, _>>()?;
             let primary_now = db.fetch(key_bytes);
             for new_bytes in &new_entries {
                 db.save(key_bytes, new_bytes);
@@ -1088,6 +1119,7 @@ impl<'a> Engine<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     /// Spawn an independent RNG from the engine's, for components (probes,
@@ -1111,7 +1143,6 @@ impl<'a> Engine<'a> {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
-        family.set_stateful_step_count(self.settings.stateful_step_count);
         family.set_reject_concurrent_machine(!self.nondeterministic);
         let tc_start = crate::sys::Instant::now();
         let run = self.execute(ntc).await?;
@@ -1125,7 +1156,7 @@ impl<'a> Engine<'a> {
                 self.settings.output.line(concurrent_machine_notice());
             }
         }
-        let mismatch = self.record_run(&run, elapsed);
+        let mismatch = self.record_run(&run, elapsed)?;
         Ok((run, mismatch))
     }
 
@@ -1133,11 +1164,15 @@ impl<'a> Engine<'a> {
     /// (via [`Self::record_execution`]), counters, test time, triviality,
     /// the targeting observations, the per-origin interesting map (with its
     /// incremental database save), and the bug-window markers.
-    fn record_run(&mut self, run: &RunResult, elapsed: core::time::Duration) -> Option<RunError> {
+    fn record_run(
+        &mut self,
+        run: &RunResult,
+        elapsed: core::time::Duration,
+    ) -> Result<Option<RunError>, InternalError> {
         let mismatch = if self.nondeterministic {
             None
         } else {
-            self.record_execution(run)
+            self.record_execution(run)?
         };
         self.calls += 1;
         self.total_test_time += elapsed;
@@ -1163,12 +1198,12 @@ impl<'a> Engine<'a> {
                 self.last_bug_at = Some(self.calls);
                 let origin = run.origin.clone().unwrap_or_default();
                 if !self.nondeterministic {
-                    self.persister.record(&origin, &run.nodes);
+                    self.persister.record(&origin, &run.nodes)?;
                 }
                 update_interesting(&mut self.interesting, origin, run.nodes.clone());
             }
         }
-        mismatch
+        Ok(mismatch)
     }
 
     /// Feed one executed run to the detectors the tree used to be: the kind
@@ -1177,15 +1212,15 @@ impl<'a> Engine<'a> {
     /// counter (generation-window cases only) and, on a verdict change,
     /// reports the flake the tree could never see. The returned error is
     /// `NonDeterministic` for kind drift and `Flaky` for a verdict change.
-    fn record_execution(&mut self, run: &RunResult) -> Option<RunError> {
-        if let Some(msg) = self.kind_ledger.observe(&run.nodes) {
-            return Some(RunError::NonDeterministic(msg));
+    fn record_execution(&mut self, run: &RunResult) -> Result<Option<RunError>, InternalError> {
+        if let Some(msg) = self.kind_ledger.observe(&run.nodes)? {
+            return Ok(Some(RunError::NonDeterministic(msg)));
         }
         if run.status == Status::EarlyStop {
-            return None;
+            return Ok(None);
         }
         let recorded = self.exec_cache.record(
-            serialize_nodes(&run.nodes),
+            serialize_executed_nodes(&run.nodes)?,
             run.status,
             run.origin.as_deref(),
             &run.nodes,
@@ -1199,9 +1234,9 @@ impl<'a> Engine<'a> {
                 self.consecutive_duplicates = 0;
             }
         }
-        recorded
+        Ok(recorded
             .verdict_mismatch
-            .then(|| RunError::Flaky(flaky_diagnostic()))
+            .then(|| RunError::Flaky(flaky_diagnostic())))
     }
 
     /// Whether the generation-phase invalid/overrun budget still has room.
@@ -1275,7 +1310,11 @@ impl<'a> Engine<'a> {
         extend: usize,
     ) -> Result<RunResult, RunError> {
         if !self.nondeterministic {
-            if let Some(hit) = self.exec_cache.serve(&serialize_choices(choices)) {
+            let key = hegel_internal_unwrap!(
+                serialize_choices(choices),
+                "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
+            if let Some(hit) = self.exec_cache.serve(&key) {
                 return Ok(RunResult {
                     status: hit.status,
                     nodes: hit.nodes,
@@ -1289,7 +1328,7 @@ impl<'a> Engine<'a> {
         let ntc = if extend == 0 {
             NativeTestCase::for_choices(choices, nodes, None)
         } else {
-            let budget = crate::native::core::flattened_values_len(choices) + extend;
+            let budget = crate::native::core::flattened_values_len(choices).saturating_add(extend);
             NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
         };
         let (run, mismatch) = self.test_function(ntc).await?;
@@ -1364,11 +1403,11 @@ impl<'a> Engine<'a> {
         nodes: &[ChoiceNode],
         spans: &[Span],
     ) -> Result<(), RunError> {
-        let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
+        let mut by_label: crate::native::HashMap<u64, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
             by_label
-                .entry(span.label.as_str())
+                .entry(span.label)
                 .or_default()
                 .insert((span.start, span.end));
         }
@@ -1432,8 +1471,9 @@ impl<'a> Engine<'a> {
                 out
             };
 
-            let extend =
-                BUFFER_SIZE.saturating_sub(crate::native::core::flattened_values_len(&attempt));
+            let extend = self
+                .choice_bound()
+                .saturating_sub(crate::native::core::flattened_values_len(&attempt));
             let run = self.cached_test_function(&attempt, None, extend).await?;
             if run.status == Status::Interesting {
                 return Ok(());
@@ -1443,24 +1483,20 @@ impl<'a> Engine<'a> {
     }
 }
 
-fn create_rng(settings: &Settings, database_key: Option<&str>) -> Result<EngineRng, RunError> {
-    if settings.resolved_backend(crate::antithesis_detect::is_running_in_antithesis()?)
-        == Backend::Urandom
-    {
-        return Ok(EngineRng::urandom());
+fn create_rng(settings: &Settings, database_key: Option<&str>) -> EngineRng {
+    if settings.backend == Backend::Urandom {
+        return EngineRng::urandom();
     }
     if let Some(seed) = settings.seed {
-        Ok(EngineRng::seeded(seed))
+        EngineRng::seeded(seed)
     } else if settings.derandomize {
         let key = database_key.unwrap_or("unnamed-test");
-        Ok(EngineRng::seeded(crate::native::database::fnv1a(
-            key.as_bytes(),
-        )))
+        EngineRng::seeded(crate::native::database::fnv1a(key.as_bytes()))
     } else {
-        Ok(EngineRng::from_os())
+        EngineRng::from_os()
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/native/test_runner_tests.rs"]
 mod tests;

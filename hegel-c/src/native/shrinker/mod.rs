@@ -347,6 +347,36 @@ impl<'a> Shrinker<'a> {
         Ok(false)
     }
 
+    /// Run a candidate that is not lexicographically below the current
+    /// target but may realise a shorter sequence — raising a `one_of`
+    /// selector or a boolean can take the test down a path that draws
+    /// less. [`Shrinker::consider`] rejects such candidates before running
+    /// them, so this skips its ordering prefilter (keeping the improvement
+    /// cap and stall guard), runs the candidate, and adopts the realised
+    /// sequence when it is interesting and strictly smaller.
+    ///
+    /// Returns the realised nodes so shape-aware callers can compare them
+    /// with the candidate, or `None` when the stall guard short-circuited.
+    pub(super) async fn consider_reshaped(
+        &mut self,
+        run: ShrinkRun<'_>,
+    ) -> ShrinkResult<Option<Vec<ChoiceNode>>> {
+        if self.improvements >= self.max_improvements {
+            return Err(ShrinkHalt::Stop);
+        }
+        if self.improvements > 0
+            && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
+        {
+            return Ok(None);
+        }
+        let (is_interesting, actual_nodes, actual_spans) = self.run_test_fn(run).await?;
+        self.calls += 1;
+        if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
+            self.accept_improvement(actual_nodes.clone(), actual_spans);
+        }
+        Ok(Some(actual_nodes))
+    }
+
     /// Run the test function for `run`, or return [`ShrinkHalt::Stop`] immediately —
     /// without touching the test function — once the wall-clock deadline has
     /// passed (latching `timed_out`).
@@ -655,6 +685,10 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "redistribute_numeric_pairs",
                 Box::new(|sh| boxed_pass(sh.redistribute_numeric_pairs())),
+            ),
+            ShrinkPass::new(
+                "scale_numeric_pairs",
+                Box::new(|sh| boxed_pass(sh.scale_numeric_pairs())),
             ),
             ShrinkPass::new("shrink_bytes", Box::new(|sh| boxed_pass(sh.shrink_bytes()))),
             ShrinkPass::new(
