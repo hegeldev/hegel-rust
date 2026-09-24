@@ -1199,3 +1199,24 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     carries both pending release files: `hegel-c/RELEASE.md` (minor) now also holds main's
     pending shrinking notes; the root `RELEASE.md` describes the graph rather than the
     pool. (DRM: "Please merge in main, fix anything that you regard as high priority.")
+
+81. **The release target is "fails safe", and it is pinned as three tests.** David's target
+    for a first release of this work: deterministic tests unaffected, replay works,
+    nondeterministic shrinking may be weaker. The audit against the merged branch: a
+    deterministic failing property pays exactly `FIRST_CHECK_REPLAYS` = 4 extra executions
+    per generation-discovered origin and nothing else observable — measured with the same
+    `measure_failing_run` body on both engines, a one-boolean always-failing property costs
+    12 post-discovery executions on main and 16 here, a drawless one 2 and 6 — and its
+    report and version-1 blob are unchanged; version-1 and version-3 blobs replay; every
+    nondeterministic loop is capped (bar, gauntlet and graph shrink under the shared
+    `MAX_SHRINKING_SECONDS` valve, final replay budgets, finite backtrack history) and an
+    origin the bar rejects still fails the run. New pins: `tests/test_fails_safe.rs` (the
+    drawless overhead is exactly 4 + verify + final; the boolean overhead is at most main's
+    12 plus the four checks; a deterministic report has no caveat and a reproducer line) and
+    `run_main_reports_a_confirmed_nd_failure_when_the_shrink_budget_is_exhausted` (an
+    already-expired shrink deadline still yields a confirmed failure with blob and caveat,
+    plus the slow-shrink warning). The remaining release prerequisites are outside the
+    engine: CI has never run on the branch, the coverage ratchet must sit at its real count,
+    and the other bindings need the capture-per-origin change before the
+    `hegel_test_case_should_capture` rename ships. (DRM: "What I would like is to be able to
+    release something that 'fails safe'.")

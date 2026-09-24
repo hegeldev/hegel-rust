@@ -1281,6 +1281,65 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
     );
 }
 
+/// The nondeterministic counterpart of the budget guard above: when the
+/// shrink budget is already spent, a confirmed nondeterministic failure is
+/// still reported with its blob and caveat, and the run warns that
+/// shrinking stopped early — the failure is never lost to the deadline.
+#[test]
+fn run_main_reports_a_confirmed_nd_failure_when_the_shrink_budget_is_exhausted() {
+    use std::sync::{Arc, Mutex};
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let execs = Cell::new(0u64);
+    let body = |ds: &dyn DataSource| -> TestCaseResult {
+        let n = execs.get();
+        execs.set(n + 1);
+        let a = match rbool(ds) {
+            Ok(v) => v,
+            Err(()) => return TestCaseResult::Overrun,
+        };
+        if rint(ds, 0, 100).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        if a && n % 2 == 0 {
+            boom("racy")
+        } else {
+            TestCaseResult::Valid
+        }
+    };
+    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+        let result = body(&*ds);
+        ds.mark_complete(&result);
+    };
+    let mut settings = Settings::new()
+        .test_cases(200)
+        .database(None)
+        .derandomize(true)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    settings.nd_force = true;
+    let result = run_main_sync(
+        &settings,
+        None,
+        &mut run_case,
+        Duration::from_secs(30),
+        Duration::ZERO,
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1, "{:?}", result.failures);
+    let failure = &result.failures[0];
+    assert!(failure.origin.contains("racy"), "{failure:?}");
+    assert!(failure.reproduce_blob.is_some(), "{failure:?}");
+    let caveat = failure.caveat.as_deref().unwrap();
+    assert!(caveat.starts_with("nondeterministic failure"), "{caveat}");
+    let lines = lines.lock().unwrap();
+    assert!(
+        lines.iter().any(|l| l == &slow_shrink_warning()),
+        "expected the slow-shrink warning in {lines:?}"
+    );
+}
+
 /// Phase-15 cost guard: on a passing body the run's execution count is a
 /// pure function of the seed, so replacing the tree's recording with the
 /// flat cache must not change it at all.

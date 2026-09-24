@@ -13,17 +13,16 @@
 //! `RESULT: FAILED|PASSED`.
 
 use hegel::generators as gs;
-use hegel::stateful::run_concurrent;
+use hegel::stateful::machine;
 use hegel::{Hegel, NondeterminismStrictness, Phase, Settings, TestCase, Verbosity};
 use hegel_c::__bench::{blob_graph, BlobGraph, ChoiceValue, ToPrimitive};
-use hegel_c::hegel_label_t;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const LABEL_INT: u64 = hegel_label_t::HEGEL_LABEL_INTEGER as u64;
-const LABEL_BOOL: u64 = hegel_label_t::HEGEL_LABEL_BOOLEAN as u64;
+const LABEL_INT: u64 = gs::label_from_name("hegel.integer");
+const LABEL_BOOL: u64 = gs::label_from_name("hegel.boolean");
 const LABEL_PIECE: u64 = 1001;
 const LABEL_ARM: u64 = 1002;
 const LOOP_CONTINUE: f64 = 0.75;
@@ -109,7 +108,10 @@ fn racy_body(tc: TestCase) {
         value: AtomicI64::new(0),
         increments: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 2, 4);
+    machine(m)
+        .min_concurrency(2)
+        .max_concurrency(4)
+        .run_concurrent(tc);
 }
 
 static CLONE_CALLS: AtomicI64 = AtomicI64::new(0);
