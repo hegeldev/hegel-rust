@@ -3,6 +3,7 @@ use crate::native::blob::{decode_failure, encode_failure};
 use crate::native::core::{BUFFER_SIZE, MAX_CLONE_DEPTH};
 use crate::native::database::{deserialize_choices, serialize_choices};
 use crate::native::rng::EngineRng;
+use alloc::string::ToString;
 
 fn draw(ntc: &mut NativeTestCase) -> i128 {
     ntc.draw_integer::<i128>(0, 1_000_000).unwrap()
@@ -97,7 +98,7 @@ fn reassemble_embeds_child_records_recursively() {
     };
     assert_eq!(inner.nodes().len(), 1);
     assert_eq!(stream.spans().len(), 1);
-    assert_eq!(stream.spans()[0].label, "42");
+    assert_eq!(stream.spans()[0].label, 42);
     assert_eq!(stream.spans()[0].start, 0);
     assert_eq!(stream.spans()[0].end, 2);
 }

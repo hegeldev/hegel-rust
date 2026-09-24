@@ -51,6 +51,24 @@ fn label_from_name_matches_the_published_fnv1a_vectors() {
 }
 
 #[test]
+fn default_labels_come_from_the_type_name() {
+    struct Alpha;
+    struct Beta;
+    impl crate::generators::Generator<()> for Alpha {
+        fn do_draw(&self, _tc: &crate::TestCase) {}
+    }
+    impl crate::generators::Generator<()> for Beta {
+        fn do_draw(&self, _tc: &crate::TestCase) {}
+    }
+    use crate::generators::Generator;
+    assert_eq!(
+        Alpha.label(),
+        label_from_name(std::any::type_name::<Alpha>())
+    );
+    assert_ne!(Alpha.label(), Beta.label());
+}
+
+#[test]
 fn combine_labels_matches_the_engine() {
     let a = label_from_name("a");
     let b = label_from_name("b");

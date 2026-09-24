@@ -1,8 +1,18 @@
 use crate::ffi::sys as hegel_c;
 use crate::generators::{
-    DefaultGenerator, Generator, PrintableGenerator, TestCase, hashsets, integers,
+    DefaultGenerator, Generator, PrintableGenerator, TestCase, combine_labels, hashsets, integers,
+    label_from_name,
 };
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
+
+const WEEKDAY_SET_LABEL: u64 = label_from_name("hegel.chrono.weekday_sets");
+const FIXED_OFFSET_LABEL: u64 = label_from_name("hegel.chrono.fixed_offsets");
+const TIME_DELTA_LABEL: u64 = label_from_name("hegel.chrono.time_deltas");
+const NAIVE_DATE_LABEL: u64 = label_from_name("hegel.chrono.naive_dates");
+const NAIVE_TIME_LABEL: u64 = label_from_name("hegel.chrono.naive_times");
+const NAIVE_DATETIME_LABEL: u64 = label_from_name("hegel.chrono.naive_datetimes");
+const NAIVE_WEEK_LABEL: u64 = label_from_name("hegel.chrono.naive_weeks");
+const DATETIME_LABEL: u64 = label_from_name("hegel.chrono.datetimes");
 
 impl PrettyPrintable for Weekday {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
@@ -199,6 +209,10 @@ fn naive_time_default_max() -> NaiveTime {
 pub struct WeekdaySetGenerator;
 
 impl Generator<WeekdaySet> for WeekdaySetGenerator {
+    fn label(&self) -> u64 {
+        WEEKDAY_SET_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> WeekdaySet {
         let days = hashsets(integers::<u8>().min_value(0).max_value(6))
             .max_size(7)
@@ -255,6 +269,10 @@ impl FixedOffsetGenerator {
 }
 
 impl Generator<FixedOffset> for FixedOffsetGenerator {
+    fn label(&self) -> u64 {
+        FIXED_OFFSET_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> FixedOffset {
         let min_secs = self.min_value.local_minus_utc();
         let max_secs = self.max_value.local_minus_utc();
@@ -334,6 +352,10 @@ impl TimeDeltaGenerator {
 }
 
 impl Generator<TimeDelta> for TimeDeltaGenerator {
+    fn label(&self) -> u64 {
+        TIME_DELTA_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> TimeDelta {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -401,6 +423,10 @@ impl NaiveDateGenerator {
 }
 
 impl Generator<NaiveDate> for NaiveDateGenerator {
+    fn label(&self) -> u64 {
+        NAIVE_DATE_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> NaiveDate {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -470,6 +496,10 @@ impl NaiveTimeGenerator {
 }
 
 impl Generator<NaiveTime> for NaiveTimeGenerator {
+    fn label(&self) -> u64 {
+        NAIVE_TIME_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> NaiveTime {
         if is_mid_day_leap(self.min_value) || is_mid_day_leap(self.max_value) {
             invalid_argument!(
@@ -538,6 +568,10 @@ impl NaiveDateTimeGenerator {
 }
 
 impl Generator<NaiveDateTime> for NaiveDateTimeGenerator {
+    fn label(&self) -> u64 {
+        NAIVE_DATETIME_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> NaiveDateTime {
         if self.min_value.time().nanosecond() >= 1_000_000_000
             || self.max_value.time().nanosecond() >= 1_000_000_000
@@ -600,6 +634,7 @@ pub fn naive_datetimes() -> NaiveDateTimeGenerator {
 pub struct NaiveWeekGenerator<S = <Weekday as DefaultGenerator>::Generator> {
     date_gen: NaiveDateGenerator,
     start_gen: S,
+    label: u64,
 }
 
 impl<S> NaiveWeekGenerator<S> {
@@ -622,14 +657,20 @@ impl<S> NaiveWeekGenerator<S> {
     {
         NaiveWeekGenerator {
             date_gen: self.date_gen,
+            label: combine_labels(&[NAIVE_WEEK_LABEL, start_gen.label()]),
             start_gen,
         }
     }
 }
 
 impl<S: Generator<Weekday>> Generator<NaiveWeek> for NaiveWeekGenerator<S> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> NaiveWeek {
-        let (date, start) = crate::generators::tuples2(&self.date_gen, &self.start_gen).do_draw(tc);
+        let (date, start) =
+            tc.draw_silent(crate::generators::tuples2(&self.date_gen, &self.start_gen));
         date.week(start)
     }
 }
@@ -669,6 +710,7 @@ pub fn naive_weeks() -> NaiveWeekGenerator {
     // first_day/last_day/days accessors, so default-generated weeks would
     // otherwise be landmines. An explicit min_date/max_date can still opt
     // back into the extremes.
+    let start_gen = Weekday::default_generator();
     NaiveWeekGenerator {
         date_gen: naive_dates()
             .min_value(
@@ -681,7 +723,8 @@ pub fn naive_weeks() -> NaiveWeekGenerator {
                     .checked_sub_days(chrono::Days::new(7))
                     .unwrap(),
             ),
-        start_gen: Weekday::default_generator(),
+        label: combine_labels(&[NAIVE_WEEK_LABEL, start_gen.label()]),
+        start_gen,
     }
 }
 
@@ -702,6 +745,7 @@ pub struct DateTimeGenerator<G = FixedOffsetGenerator, Tz: TimeZone = FixedOffse
     tz_gen: G,
     min_value: NaiveDateTime,
     max_value: NaiveDateTime,
+    label: u64,
     _phantom: PhantomData<fn() -> Tz>,
 }
 
@@ -729,6 +773,7 @@ impl<G, Tz: TimeZone> DateTimeGenerator<G, Tz> {
         Tz2: TimeZone,
     {
         DateTimeGenerator {
+            label: combine_labels(&[DATETIME_LABEL, tz_gen.label()]),
             tz_gen,
             min_value: self.min_value,
             max_value: self.max_value,
@@ -742,12 +787,16 @@ where
     G: Generator<Tz>,
     Tz: TimeZone + Send + Sync + 'static,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> DateTime<Tz> {
         let naive = naive_datetimes()
             .min_value(self.min_value)
             .max_value(self.max_value)
             .do_draw(tc);
-        let tz = self.tz_gen.do_draw(tc);
+        let tz = tc.draw_silent(&self.tz_gen);
         match tz.from_local_datetime(&naive).earliest() {
             Some(dt) => dt,
             None => {
@@ -791,6 +840,7 @@ where
 /// ```
 pub fn datetimes() -> DateTimeGenerator<FixedOffsetGenerator, FixedOffset> {
     DateTimeGenerator {
+        label: combine_labels(&[DATETIME_LABEL, FIXED_OFFSET_LABEL]),
         tz_gen: fixed_offsets(),
         min_value: DateTime::<Utc>::MIN_UTC.naive_utc(),
         max_value: DateTime::<Utc>::MAX_UTC.naive_utc(),

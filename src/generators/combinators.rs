@@ -14,9 +14,14 @@ const OPTIONAL_LABEL: u64 = label_from_name("hegel.optional");
 /// Generator that picks from a fixed list of values. Created by [`sampled_from()`].
 pub struct SampledFromGenerator<'a, T: Clone> {
     elements: Cow<'a, [T]>,
+    label: u64,
 }
 
 impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         let indices = integers::<usize>()
             .min_value(0)
@@ -51,7 +56,10 @@ where
     if elements.is_empty() {
         invalid_argument!("Collection passed to sampled_from cannot be empty");
     }
-    SampledFromGenerator { elements }
+    SampledFromGenerator {
+        elements,
+        label: label_from_name(std::any::type_name::<SampledFromGenerator<'a, T>>()),
+    }
 }
 
 /// Generator that chooses between alternatives of the same type. Created by
@@ -65,6 +73,7 @@ where
 /// usual boxing rules (see [`Generator::boxed`](super::Generator::boxed)).
 pub struct OneOfGenerator<'a, T, A = Vec<BoxedPrintableGenerator<'a, T>>> {
     alternatives: A,
+    label: u64,
     _phantom: PhantomData<&'a fn() -> T>,
 }
 
@@ -80,6 +89,7 @@ pub trait Alternatives<T> {
     /// The alternatives' labels (see [`Generator::label`]) combined into
     /// one, so that the containing [`OneOfGenerator`]'s label reflects what
     /// it chooses between. Defaults to a label derived from the type name.
+    /// Called once, when the containing generator is built.
     fn label(&self) -> u64 {
         label_from_name(std::any::type_name::<Self>())
     }
@@ -92,34 +102,25 @@ pub trait PrintableAlternatives<T>: Alternatives<T> {
     fn draw_at_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter, index: usize) -> T;
 }
 
-/// The choice structure every `one_of` draw shares — a span around a
-/// uniform index draw followed by the chosen alternative — with the
-/// alternative dispatch (and whether it draws silently or printing)
-/// injected. Using this from both draw paths is what keeps their choice
-/// streams identical.
-fn draw_one_of<T>(
-    tc: &TestCase,
-    label: u64,
-    max_index: usize,
-    draw_at: impl FnOnce(usize) -> T,
-) -> T {
-    tc.start_span(label);
+/// The choice structure every `one_of` draw shares — a uniform index draw
+/// followed by the chosen alternative — with the alternative dispatch (and
+/// whether it draws silently or printing) injected. Using this from both
+/// draw paths is what keeps their choice streams identical.
+fn draw_one_of<T>(tc: &TestCase, max_index: usize, draw_at: impl FnOnce(usize) -> T) -> T {
     let index = integers::<usize>()
         .min_value(0)
         .max_value(max_index)
         .do_draw(tc);
-    let result = draw_at(index);
-    tc.stop_span(false);
-    result
+    draw_at(index)
 }
 
 impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
     fn label(&self) -> u64 {
-        combine_labels(&[ONE_OF_LABEL, self.alternatives.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
-        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+        draw_one_of(tc, self.alternatives.max_index(), |index| {
             self.alternatives.draw_at(tc, index)
         })
     }
@@ -127,7 +128,7 @@ impl<'a, T, A: Alternatives<T>> Generator<T> for OneOfGenerator<'a, T, A> {
 
 impl<'a, T, A: PrintableAlternatives<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, A> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        draw_one_of(tc, self.label(), self.alternatives.max_index(), |index| {
+        draw_one_of(tc, self.alternatives.max_index(), |index| {
             self.alternatives.draw_at_and_print(tc, printer, index)
         })
     }
@@ -138,7 +139,7 @@ impl<T, B: Generator<T>> Alternatives<T> for Vec<B> {
         self.len() - 1
     }
     fn draw_at(&self, tc: &TestCase, index: usize) -> T {
-        self[index].do_draw(tc)
+        tc.draw_silent(&self[index])
     }
     fn label(&self) -> u64 {
         combine_labels(&self.iter().map(Generator::label).collect::<Vec<_>>())
@@ -163,7 +164,7 @@ impl<T, G: Generator<T>> Alternatives<T> for OneOfLast<G> {
         0
     }
     fn draw_at(&self, tc: &TestCase, _index: usize) -> T {
-        self.0.do_draw(tc)
+        tc.draw_silent(&self.0)
     }
     fn label(&self) -> u64 {
         combine_labels(&[self.0.label()])
@@ -182,7 +183,7 @@ impl<T, G: Generator<T>, R: Alternatives<T>> Alternatives<T> for OneOfCons<G, R>
     }
     fn draw_at(&self, tc: &TestCase, index: usize) -> T {
         if index == 0 {
-            self.0.do_draw(tc)
+            tc.draw_silent(&self.0)
         } else {
             self.1.draw_at(tc, index - 1)
         }
@@ -219,10 +220,7 @@ where
     if generators.is_empty() {
         invalid_argument!("one_of requires at least one generator");
     }
-    OneOfGenerator {
-        alternatives: generators,
-        _phantom: PhantomData,
-    }
+    one_of_from_alternatives(generators)
 }
 
 #[doc(hidden)]
@@ -230,6 +228,7 @@ pub fn one_of_from_alternatives<'a, T, A: Alternatives<T>>(
     alternatives: A,
 ) -> OneOfGenerator<'a, T, A> {
     OneOfGenerator {
+        label: combine_labels(&[ONE_OF_LABEL, alternatives.label()]),
         alternatives,
         _phantom: PhantomData,
     }
@@ -278,6 +277,7 @@ macro_rules! __one_of_alternatives {
 /// Generator that produces `Some(value)` or `None`. Created by [`optional()`].
 pub struct OptionalGenerator<G, T> {
     inner: G,
+    label: u64,
     _phantom: PhantomData<fn(T)>,
 }
 
@@ -287,12 +287,10 @@ impl<T, G> OptionalGenerator<G, T> {
     fn draw_optional(
         &self,
         tc: &TestCase,
-        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl FnOnce(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> Option<T> {
-        tc.start_span(label);
-        let result = if tc.generate_boolean(0.5) {
+        if tc.generate_boolean(0.5) {
             printer.begin_group(5, "Some(");
             let value = draw(&self.inner, tc, printer);
             printer.end_group(")");
@@ -300,9 +298,7 @@ impl<T, G> OptionalGenerator<G, T> {
         } else {
             printer.text("None");
             None
-        };
-        tc.stop_span(false);
-        result
+        }
     }
 }
 
@@ -311,16 +307,13 @@ where
     G: Generator<T>,
 {
     fn label(&self) -> u64 {
-        combine_labels(&[OPTIONAL_LABEL, self.inner.label()])
+        self.label
     }
 
     fn do_draw(&self, tc: &TestCase) -> Option<T> {
-        self.draw_optional(
-            tc,
-            self.label(),
-            &mut PrettyPrinter::noop(),
-            |inner, tc, _| inner.do_draw(tc),
-        )
+        self.draw_optional(tc, &mut PrettyPrinter::noop(), |inner, tc, _| {
+            tc.draw_silent(inner)
+        })
     }
 }
 
@@ -329,7 +322,7 @@ where
     G: PrintableGenerator<T>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Option<T> {
-        self.draw_optional(tc, self.label(), printer, |inner, tc, printer| {
+        self.draw_optional(tc, printer, |inner, tc, printer| {
             tc.draw_and_print(inner, printer)
         })
     }
@@ -338,6 +331,7 @@ where
 /// Generate `Option<T>` values: either `Some(value)` from the inner generator, or `None`.
 pub fn optional<T, G: Generator<T>>(inner: G) -> OptionalGenerator<G, T> {
     OptionalGenerator {
+        label: combine_labels(&[OPTIONAL_LABEL, inner.label()]),
         inner,
         _phantom: PhantomData,
     }

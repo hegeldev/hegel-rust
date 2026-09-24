@@ -88,6 +88,7 @@ macro_rules! impl_tuple {
         )]
         pub struct $name<$($G,)+ $($T,)+> {
             $($field: $G,)+
+            label: u64,
             _phantom: PhantomData<fn($($T,)+)>,
         }
 
@@ -96,14 +97,11 @@ macro_rules! impl_tuple {
             $($G: Generator<$T>,)+
         {
             fn label(&self) -> u64 {
-                combine_labels(&[TUPLE_LABEL, $(self.$field.label(),)+])
+                self.label
             }
 
             fn do_draw(&self, tc: &TestCase) -> ($($T,)+) {
-                tc.start_span(self.label());
-                let result = ($(self.$field.do_draw(tc),)+);
-                tc.stop_span(false);
-                result
+                ($(tc.draw_silent(&self.$field),)+)
             }
         }
 
@@ -116,7 +114,6 @@ macro_rules! impl_tuple {
                 tc: &TestCase,
                 printer: &mut PrettyPrinter,
             ) -> ($($T,)+) {
-                tc.start_span(self.label());
                 printer.begin_group(1, "(");
                 let mut index = 0usize;
                 let result = ($(
@@ -133,7 +130,6 @@ macro_rules! impl_tuple {
                     printer.text(",");
                 }
                 printer.end_group(")");
-                tc.stop_span(false);
                 result
             }
         }
@@ -143,6 +139,7 @@ macro_rules! impl_tuple {
             $($field: $G,)+
         ) -> $name<$($G,)+ $($T,)+> {
             $name {
+                label: combine_labels(&[TUPLE_LABEL, $($field.label(),)+]),
                 $($field,)+
                 _phantom: PhantomData,
             }
@@ -164,6 +161,10 @@ macro_rules! impl_tuple {
 pub struct Tuple0Generator;
 
 impl Generator<()> for Tuple0Generator {
+    fn label(&self) -> u64 {
+        TUPLE_LABEL
+    }
+
     fn do_draw(&self, _tc: &TestCase) {}
 }
 

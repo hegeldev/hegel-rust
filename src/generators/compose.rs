@@ -16,8 +16,9 @@ where
     F: Fn(&TestCase) -> T,
 {
     /// Create a composed generator from a closure that receives a [`TestCase`]
-    /// by reference. Draws made by the closure are grouped under a span with
-    /// the given label.
+    /// by reference. The given label is the generator's
+    /// [`label`](Generator::label), so draws made by the closure are grouped
+    /// under a span carrying it.
     pub fn new(label: u64, f: F) -> Self {
         ComposedGenerator {
             label,
@@ -36,10 +37,7 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.start_span(self.label());
-        let result = (self.f)(tc);
-        tc.stop_span(false);
-        result
+        (self.f)(tc)
     }
 }
 

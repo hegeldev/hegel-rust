@@ -1,5 +1,5 @@
 use super::generators::draw_and_print_value;
-use super::{Generator, PrintableGenerator, TestCase};
+use super::{Generator, PrintableGenerator, TestCase, label_from_name};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
 use crate::test_case::invalid_argument;
 use std::marker::PhantomData;
@@ -139,6 +139,7 @@ pub(crate) fn sign_aware_lte<T: Float>(a: T, b: T) -> bool {
 pub struct IntegerGenerator<T> {
     min: Option<T>,
     max: Option<T>,
+    label: u64,
     _phantom: PhantomData<T>,
 }
 
@@ -157,6 +158,10 @@ impl<T> IntegerGenerator<T> {
 }
 
 impl<T: Integer> Generator<T> for IntegerGenerator<T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         let min = self.min.unwrap_or(T::MIN);
         let max = self.max.unwrap_or(T::MAX);
@@ -185,6 +190,7 @@ pub fn integers<T: Integer>() -> IntegerGenerator<T> {
     IntegerGenerator {
         min: None,
         max: None,
+        label: label_from_name(std::any::type_name::<IntegerGenerator<T>>()),
         _phantom: PhantomData,
     }
 }
@@ -201,6 +207,7 @@ pub struct FloatGenerator<T> {
     allow_nan: Option<bool>,
     allow_infinity: Option<bool>,
     allow_subnormal: Option<bool>,
+    label: u64,
     params: OnceLock<FloatDrawParams>,
 }
 
@@ -416,6 +423,10 @@ impl<T: Float> FloatGenerator<T> {
 }
 
 impl<T: Float> Generator<T> for FloatGenerator<T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         let params = self.params.get_or_init(|| self.draw_params());
         let v = tc.generate_float(
@@ -465,6 +476,7 @@ pub fn floats<T: Float>() -> FloatGenerator<T> {
         allow_nan: None,
         allow_infinity: None,
         allow_subnormal: None,
+        label: label_from_name(std::any::type_name::<FloatGenerator<T>>()),
         params: OnceLock::new(),
     }
 }

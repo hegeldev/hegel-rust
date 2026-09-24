@@ -38,22 +38,32 @@ pub const fn label_from_name(name: &str) -> u64 {
 /// libhegel exports as `hegel_label_combine`. Pass the generator's own label
 /// (from [`label_from_name`]) first and its components' labels after it, so
 /// that a pair of integers and a pair of strings get different labels while
-/// every pair of integers gets the same one:
+/// every pair of integers gets the same one. Combine once, when the
+/// generator is built, and keep the result: `label` is asked for on every
+/// draw.
 ///
 /// ```
 /// use hegel::generators::{self as gs, Generator};
 ///
+/// const PAIRS_LABEL: u64 = gs::label_from_name("mycrate.pairs");
+///
 /// struct Pairs<G> {
 ///     inner: G,
+///     label: u64,
+/// }
+///
+/// fn pairs<T, G: Generator<T>>(inner: G) -> Pairs<G> {
+///     let label = gs::combine_labels(&[PAIRS_LABEL, inner.label()]);
+///     Pairs { inner, label }
 /// }
 ///
 /// impl<T, G: Generator<T>> Generator<(T, T)> for Pairs<G> {
 ///     fn label(&self) -> u64 {
-///         gs::combine_labels(&[gs::label_from_name("mycrate.pairs"), self.inner.label()])
+///         self.label
 ///     }
 ///
 ///     fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
-///         (self.inner.do_draw(tc), self.inner.do_draw(tc))
+///         (tc.draw_silent(&self.inner), tc.draw_silent(&self.inner))
 ///     }
 /// }
 /// ```

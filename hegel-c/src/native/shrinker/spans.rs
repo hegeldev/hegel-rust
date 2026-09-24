@@ -10,7 +10,6 @@ use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq
 use crate::native::HashSet;
 use crate::native::core::{ChoiceData, ChoiceNode, sort_key};
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -285,16 +284,16 @@ impl<'a> Shrinker<'a> {
     /// strictly shorter, we splice the descendant's nodes in place of the
     /// ancestor's and ask the predicate whether that's still interesting.
     pub(crate) async fn pass_to_descendant(&mut self) -> ShrinkResult<()> {
-        let spans: Vec<(usize, usize, String)> = self
+        let spans: Vec<(usize, usize, u64)> = self
             .current_spans
             .iter()
-            .map(|s| (s.start, s.end, s.label.clone()))
+            .map(|s| (s.start, s.end, s.label))
             .collect();
 
-        let mut by_label: alloc::collections::BTreeMap<&str, Vec<usize>> =
+        let mut by_label: alloc::collections::BTreeMap<u64, Vec<usize>> =
             alloc::collections::BTreeMap::new();
         for (idx, (_, _, label)) in spans.iter().enumerate() {
-            by_label.entry(label.as_str()).or_default().push(idx);
+            by_label.entry(*label).or_default().push(idx);
         }
 
         for (_label, indices) in by_label {
@@ -303,13 +302,13 @@ impl<'a> Shrinker<'a> {
             }
             for ai in 0..indices.len() {
                 let ancestor_idx = indices[ai];
-                let (a_start, a_end, _) = spans[ancestor_idx].clone();
+                let (a_start, a_end, _) = spans[ancestor_idx];
                 let ancestor_len = a_end.saturating_sub(a_start);
                 if ancestor_len == 0 {
                     continue;
                 }
                 for &descendant_idx in &indices[ai + 1..] {
-                    let (d_start, d_end, _) = spans[descendant_idx].clone();
+                    let (d_start, d_end, _) = spans[descendant_idx];
                     if d_start >= a_end {
                         break;
                     }
@@ -354,11 +353,11 @@ impl<'a> Shrinker<'a> {
         };
 
         for parent in parents {
-            let mut by_label: alloc::collections::BTreeMap<String, Vec<usize>> =
+            let mut by_label: alloc::collections::BTreeMap<u64, Vec<usize>> =
                 alloc::collections::BTreeMap::new();
             for (idx, span) in self.current_spans.iter().enumerate() {
                 if span.parent == parent {
-                    by_label.entry(span.label.clone()).or_default().push(idx);
+                    by_label.entry(span.label).or_default().push(idx);
                 }
             }
 

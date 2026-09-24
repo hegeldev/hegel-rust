@@ -2,7 +2,6 @@ use super::*;
 use crate::native::core::choices::ChoiceTemplate;
 use crate::native::core::{ChoiceKind, ChoiceValue, Status};
 use crate::native::rng::EngineRng;
-use alloc::string::ToString;
 use alloc::vec;
 
 fn machine(ntc: &mut NativeTestCase, num_rules: usize) -> NativeStateMachine {
@@ -139,7 +138,7 @@ fn zero_p_disabled_enables_every_rule() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        crate::native::draws::LABEL_FEATURE_FLAG.to_string()
+        crate::native::draws::LABEL_FEATURE_FLAG
     );
     assert!(!ntc.spans[0usize].discarded);
 }
@@ -688,7 +687,7 @@ fn concurrency_draw_is_max_when_the_weighted_choice_hits() {
     assert_eq!(sm.concurrency(), 4);
     assert_eq!(
         ntc.spans[0usize].label,
-        crate::native::draws::LABEL_CONCURRENCY.to_string()
+        crate::native::draws::LABEL_CONCURRENCY
     );
 }
 
@@ -830,7 +829,7 @@ fn overrun_inside_is_enabled_leaves_the_span_open_until_freeze() {
     assert_eq!(ntc.spans.len(), 1);
     assert_eq!(
         ntc.spans[0usize].label,
-        crate::native::draws::LABEL_FEATURE_FLAG.to_string()
+        crate::native::draws::LABEL_FEATURE_FLAG
     );
     assert_eq!(ntc.spans[0usize].start, 3);
     assert_eq!(ntc.spans[0usize].end, 3);

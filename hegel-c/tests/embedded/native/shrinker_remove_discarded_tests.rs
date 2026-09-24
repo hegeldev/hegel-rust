@@ -2,7 +2,6 @@
 
 use crate::native::bignum::BigInt;
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use std::sync::{Arc, Mutex};
@@ -33,7 +32,7 @@ fn span(start: usize, end: usize, discarded: bool) -> Span {
     Span {
         start,
         end,
-        label: "test".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded,

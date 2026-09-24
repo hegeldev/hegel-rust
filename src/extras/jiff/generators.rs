@@ -3,8 +3,20 @@ use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Span, Timestamp, Zoned};
 
 use crate::ffi::sys as hegel_c;
-use crate::generators::{BoxedGenerator, Generator, PrintableGenerator, TestCase, integers};
+use crate::generators::{
+    BoxedGenerator, Generator, PrintableGenerator, TestCase, combine_labels, integers,
+    label_from_name,
+};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
+
+const DATE_LABEL: u64 = label_from_name("hegel.jiff.dates");
+const TIME_LABEL: u64 = label_from_name("hegel.jiff.times");
+const DATETIME_LABEL: u64 = label_from_name("hegel.jiff.datetimes");
+const TIMESTAMP_LABEL: u64 = label_from_name("hegel.jiff.timestamps");
+const SPAN_LABEL: u64 = label_from_name("hegel.jiff.spans");
+const SIGNED_DURATION_LABEL: u64 = label_from_name("hegel.jiff.signed_durations");
+const OFFSET_LABEL: u64 = label_from_name("hegel.jiff.offsets");
+const ZONED_LABEL: u64 = label_from_name("hegel.jiff.zoneds");
 
 impl PrettyPrintable for Date {
     fn pretty_print(&self, printer: &mut PrettyPrinter) {
@@ -191,6 +203,10 @@ impl DateGenerator {
 }
 
 impl Generator<Date> for DateGenerator {
+    fn label(&self) -> u64 {
+        DATE_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Date {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -264,6 +280,10 @@ impl TimeGenerator {
 }
 
 impl Generator<Time> for TimeGenerator {
+    fn label(&self) -> u64 {
+        TIME_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Time {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -352,6 +372,10 @@ impl DateTimeGenerator {
 }
 
 impl Generator<DateTime> for DateTimeGenerator {
+    fn label(&self) -> u64 {
+        DATETIME_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> DateTime {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -415,6 +439,10 @@ impl TimestampGenerator {
 }
 
 impl Generator<Timestamp> for TimestampGenerator {
+    fn label(&self) -> u64 {
+        TIMESTAMP_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Timestamp {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -481,6 +509,10 @@ impl SpanGenerator {
 }
 
 impl Generator<Span> for SpanGenerator {
+    fn label(&self) -> u64 {
+        SPAN_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Span {
         if self.min_nanos > self.max_nanos {
             invalid_argument!("Cannot have max_nanoseconds < min_nanoseconds");
@@ -552,6 +584,10 @@ impl SignedDurationGenerator {
 }
 
 impl Generator<SignedDuration> for SignedDurationGenerator {
+    fn label(&self) -> u64 {
+        SIGNED_DURATION_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> SignedDuration {
         if self.min_value > self.max_value {
             invalid_argument!("Cannot have max_value < min_value");
@@ -617,6 +653,10 @@ impl OffsetGenerator {
 }
 
 impl Generator<Offset> for OffsetGenerator {
+    fn label(&self) -> u64 {
+        OFFSET_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Offset {
         if self.min_value.seconds() > self.max_value.seconds() {
             invalid_argument!("Cannot have max_value < min_value");
@@ -663,29 +703,38 @@ pub fn offsets() -> OffsetGenerator {
 pub struct ZonedGenerator<TS = TimestampGenerator, TZ = BoxedGenerator<'static, TimeZone>> {
     timestamp_gen: TS,
     timezone_gen: TZ,
+    label: u64,
 }
 
 impl<TS, TZ> ZonedGenerator<TS, TZ> {
+    fn new(timestamp_gen: TS, timezone_gen: TZ) -> Self
+    where
+        TS: Generator<Timestamp>,
+        TZ: Generator<TimeZone>,
+    {
+        ZonedGenerator {
+            label: combine_labels(&[ZONED_LABEL, timestamp_gen.label(), timezone_gen.label()]),
+            timestamp_gen,
+            timezone_gen,
+        }
+    }
+
     /// Replace the timestamp generator.
     pub fn timestamps<TS2>(self, timestamp_gen: TS2) -> ZonedGenerator<TS2, TZ>
     where
         TS2: Generator<Timestamp>,
+        TZ: Generator<TimeZone>,
     {
-        ZonedGenerator {
-            timestamp_gen,
-            timezone_gen: self.timezone_gen,
-        }
+        ZonedGenerator::new(timestamp_gen, self.timezone_gen)
     }
 
     /// Replace the timezone generator.
     pub fn timezones<TZ2>(self, timezone_gen: TZ2) -> ZonedGenerator<TS, TZ2>
     where
+        TS: Generator<Timestamp>,
         TZ2: Generator<TimeZone>,
     {
-        ZonedGenerator {
-            timestamp_gen: self.timestamp_gen,
-            timezone_gen,
-        }
+        ZonedGenerator::new(self.timestamp_gen, timezone_gen)
     }
 }
 
@@ -694,9 +743,15 @@ where
     TS: Generator<Timestamp>,
     TZ: Generator<TimeZone>,
 {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Zoned {
-        let (ts, tz) =
-            crate::generators::tuples2(&self.timestamp_gen, &self.timezone_gen).do_draw(tc);
+        let (ts, tz) = tc.draw_silent(crate::generators::tuples2(
+            &self.timestamp_gen,
+            &self.timezone_gen,
+        ));
         Zoned::new(ts, tz)
     }
 }
@@ -728,8 +783,8 @@ where
 /// ```
 pub fn zoneds() -> ZonedGenerator {
     use crate::generators::DefaultGenerator;
-    ZonedGenerator {
-        timestamp_gen: timestamps(),
-        timezone_gen: <TimeZone as DefaultGenerator>::default_generator(),
-    }
+    ZonedGenerator::new(
+        timestamps(),
+        <TimeZone as DefaultGenerator>::default_generator(),
+    )
 }

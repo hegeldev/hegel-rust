@@ -6,7 +6,6 @@ use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceNode, ChoiceValue, RealizedStream, Span, Spans};
 use crate::native::shrinker::{ShrinkHalt, ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -53,7 +52,7 @@ fn span(start: usize, end: usize) -> Span {
     Span {
         start,
         end,
-        label: "span".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,

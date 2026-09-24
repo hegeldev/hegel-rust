@@ -285,13 +285,15 @@ mod size_checks {
     }
 
     /// Both suppressed: the run completes (no health-check panic) — it just
-    /// keeps overrunning until the generation budget is spent.
+    /// keeps overrunning until the generation budget is spent. TooSlow is
+    /// suppressed as well, for the same reason as above.
     #[test]
     fn both_suppressed_does_not_fire() {
         Hegel::new(oversized)
             .settings(settings().test_cases(5).suppress_health_check([
                 HealthCheck::LargeInitialTestCase,
                 HealthCheck::TestCasesTooLarge,
+                HealthCheck::TooSlow,
             ]))
             .run();
     }

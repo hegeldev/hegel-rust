@@ -6,7 +6,6 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,11 +21,11 @@ fn int_node(value: i128) -> ChoiceNode {
     )
 }
 
-fn sib(start: usize, end: usize, label: &str, parent: Option<usize>) -> Span {
+fn sib(start: usize, end: usize, label: u64, parent: Option<usize>) -> Span {
     Span {
         start,
         end,
-        label: label.to_string(),
+        label,
         depth: 0,
         parent,
         discarded: false,
@@ -37,8 +36,8 @@ fn sib(start: usize, end: usize, label: &str, parent: Option<usize>) -> Span {
 fn reorder_spans_sorts_same_label_siblings() {
     let initial = vec![int_node(3), int_node(1)];
     let mut spans = Spans::new();
-    spans.push(sib(0, 1, "item", None));
-    spans.push(sib(1, 2, "item", None));
+    spans.push(sib(0, 1, 1, None));
+    spans.push(sib(1, 2, 1, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -67,8 +66,8 @@ fn reorder_spans_stops_when_deadline_passed() {
     use crate::sys::Instant;
     let initial = vec![int_node(3), int_node(1)];
     let mut spans = Spans::new();
-    spans.push(sib(0, 1, "item", None));
-    spans.push(sib(1, 2, "item", None));
+    spans.push(sib(0, 1, 1, None));
+    spans.push(sib(1, 2, 1, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -87,8 +86,8 @@ fn reorder_spans_stops_when_deadline_passed() {
 fn reorder_spans_skips_singleton_groups() {
     let initial = vec![int_node(7), int_node(3)];
     let mut spans = Spans::new();
-    spans.push(sib(0, 1, "a", None));
-    spans.push(sib(1, 2, "b", None));
+    spans.push(sib(0, 1, 1, None));
+    spans.push(sib(1, 2, 2, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -121,9 +120,9 @@ fn reorder_spans_handles_multi_node_siblings() {
         int_node(9),
     ];
     let mut spans = Spans::new();
-    spans.push(sib(0, 2, "pair", None));
-    spans.push(sib(2, 4, "pair", None));
-    spans.push(sib(4, 6, "pair", None));
+    spans.push(sib(0, 2, 1, None));
+    spans.push(sib(2, 4, 1, None));
+    spans.push(sib(4, 6, 1, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -149,8 +148,8 @@ fn reorder_spans_handles_multi_node_siblings() {
 fn reorder_spans_safe_with_stale_endpoints() {
     let initial = vec![int_node(5), int_node(3)];
     let mut spans = Spans::new();
-    spans.push(sib(0, 5, "wide", None));
-    spans.push(sib(5, 10, "wide", None));
+    spans.push(sib(0, 5, 1, None));
+    spans.push(sib(5, 10, 1, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
@@ -168,18 +167,18 @@ fn reorder_spans_safe_with_stale_endpoints() {
 fn reorder_spans_survives_spans_shrinking_between_label_groups() {
     let initial = vec![int_node(3), int_node(1), int_node(9), int_node(7)];
     let mut spans = Spans::new();
-    spans.push(sib(0, 1, "a", None));
-    spans.push(sib(1, 2, "a", None));
-    spans.push(sib(2, 3, "b", None));
-    spans.push(sib(3, 4, "b", None));
+    spans.push(sib(0, 1, 1, None));
+    spans.push(sib(1, 2, 1, None));
+    spans.push(sib(2, 3, 2, None));
+    spans.push(sib(3, 4, 2, None));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut new_spans = Spans::new();
-                new_spans.push(sib(0, 1, "z", None));
-                new_spans.push(sib(1, 2, "z", None));
-                new_spans.push(sib(2, 3, "z", None));
+                new_spans.push(sib(0, 1, 3, None));
+                new_spans.push(sib(1, 2, 3, None));
+                new_spans.push(sib(2, 3, 3, None));
                 (true, nodes.to_vec(), new_spans)
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),

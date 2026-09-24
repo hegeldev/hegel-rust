@@ -1403,11 +1403,11 @@ impl<'a> Engine<'a> {
         nodes: &[ChoiceNode],
         spans: &[Span],
     ) -> Result<(), RunError> {
-        let mut by_label: crate::native::HashMap<&str, crate::native::HashSet<(usize, usize)>> =
+        let mut by_label: crate::native::HashMap<u64, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
             by_label
-                .entry(span.label.as_str())
+                .entry(span.label)
                 .or_default()
                 .insert((span.start, span.end));
         }

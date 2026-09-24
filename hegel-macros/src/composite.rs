@@ -211,11 +211,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
             }
 
             fn do_draw(&self, tc: &::hegel::TestCase) -> #return_type {
-                tc.start_span(self.label());
-                let __hegel_result =
-                    Self::__hegel_body(tc, #(::core::clone::Clone::clone(&self.#field_idents)),*);
-                tc.stop_span(false);
-                __hegel_result
+                Self::__hegel_body(tc, #(::core::clone::Clone::clone(&self.#field_idents)),*)
             }
         }
 

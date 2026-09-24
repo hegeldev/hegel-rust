@@ -322,13 +322,10 @@ fn cached_test_function_serves_interesting_from_cache_with_origin_and_spans() {
             );
             assert_eq!(second.origin, first.origin);
             assert_eq!(second.spans.len(), 2, "outer span plus the per-draw span");
-            assert_eq!(second.spans[0].label, "7");
+            assert_eq!(second.spans[0].label, 7);
             assert_eq!(second.spans[0].start, 0);
             assert_eq!(second.spans[0].end, 1);
-            assert_eq!(
-                second.spans[1].label,
-                crate::native::draws::LABEL_BOOLEAN.to_string()
-            );
+            assert_eq!(second.spans[1].label, crate::native::draws::LABEL_BOOLEAN);
             assert_eq!(second.spans[1].parent, Some(0));
         },
     );
@@ -696,7 +693,7 @@ fn span_mutation_re_executes_proposals_that_are_not_exact_repeats() {
             let span = |start, end| Span {
                 start,
                 end,
-                label: "L".to_string(),
+                label: 1,
                 depth: 0,
                 parent: None,
                 discarded: false,
@@ -731,7 +728,7 @@ fn span_mutation_returns_interesting_proposal() {
             let span = |start, end| Span {
                 start,
                 end,
-                label: "L".to_string(),
+                label: 1,
                 depth: 0,
                 parent: None,
                 discarded: false,
@@ -772,7 +769,7 @@ fn span_mutation_handles_same_label_spans_sharing_a_start() {
             let span = |start, end| Span {
                 start,
                 end,
-                label: "L".to_string(),
+                label: 1,
                 depth: 0,
                 parent: None,
                 discarded: false,
@@ -805,7 +802,7 @@ fn span_mutation_stops_when_example_budget_is_full() {
             let span = |start, end| Span {
                 start,
                 end,
-                label: "L".to_string(),
+                label: 1,
                 depth: 0,
                 parent: None,
                 discarded: false,
@@ -838,7 +835,7 @@ fn span_mutation_extends_diverged_proposals_with_random_draws() {
             let span = |start, end| Span {
                 start,
                 end,
-                label: "L".to_string(),
+                label: 1,
                 depth: 0,
                 parent: None,
                 discarded: false,

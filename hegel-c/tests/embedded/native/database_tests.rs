@@ -457,7 +457,7 @@ fn serialize_clone_drops_realized_info_but_preserves_equality() {
         vec![Span {
             start: 0,
             end: 1,
-            label: "9".to_string(),
+            label: 9,
             depth: 0,
             parent: None,
             discarded: false,

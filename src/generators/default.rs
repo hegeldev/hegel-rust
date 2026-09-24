@@ -366,6 +366,7 @@ macro_rules! derive_generator {
             $(
                 $field_name: $crate::generators::BoxedGenerator<'a, $field_type>,
             )*
+            __label: u64,
         }
 
         impl<'a> $gen_name<'a> {
@@ -378,7 +379,17 @@ macro_rules! derive_generator {
                     $($field_name: $crate::generators::Generator::boxed(
                         <$field_type as $crate::generators::DefaultGenerator>::default_generator(),
                     ),)*
+                    __label: 0,
                 }
+                .__with_label()
+            }
+
+            fn __with_label(mut self) -> Self {
+                self.__label = $crate::generators::combine_labels(&[
+                    $crate::generators::label_from_name(::core::any::type_name::<$struct_type>()),
+                    $($crate::generators::Generator::label(&self.$field_name),)*
+                ]);
+                self
             }
 
             $(
@@ -387,7 +398,7 @@ macro_rules! derive_generator {
                     G: $crate::generators::Generator<$field_type> + Send + Sync + 'a,
                 {
                     self.$field_name = $crate::generators::Generator::boxed(generator);
-                    self
+                    self.__with_label()
                 }
             )*
         }
@@ -403,9 +414,13 @@ macro_rules! derive_generator {
         }
 
         impl<'a> $crate::generators::Generator<$struct_type> for $gen_name<'a> {
+            fn label(&self) -> u64 {
+                self.__label
+            }
+
             fn do_draw(&self, __tc: &$crate::TestCase) -> $struct_type {
                 $struct_type {
-                    $($field_name: $crate::generators::Generator::do_draw(&self.$field_name, __tc),)*
+                    $($field_name: __tc.draw_silent(&self.$field_name),)*
                 }
             }
         }
