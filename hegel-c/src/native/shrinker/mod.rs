@@ -683,6 +683,10 @@ impl<'a> Shrinker<'a> {
                 "redistribute_numeric_pairs",
                 Box::new(|sh| boxed_pass(sh.redistribute_numeric_pairs())),
             ),
+            ShrinkPass::new(
+                "scale_numeric_pairs",
+                Box::new(|sh| boxed_pass(sh.scale_numeric_pairs())),
+            ),
             ShrinkPass::new("shrink_bytes", Box::new(|sh| boxed_pass(sh.shrink_bytes()))),
             ShrinkPass::new(
                 "redistribute_bytes_pairs",

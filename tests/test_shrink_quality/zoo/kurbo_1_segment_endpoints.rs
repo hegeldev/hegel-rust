@@ -7,9 +7,10 @@
 //! `one_of!(any finite f64, sampled_from([MAX, -MAX, 1e308, -1e308, 6.5e307]))`.
 //!
 //! Shortlex ideal: a line (kind 0) with the overflow on the *y* axis so the earlier x draws stay
-//! zero: `p0 = (0, 2^970)`, `p1 = (0, −MAX)` — the euclid/2 pair. The zoo also saw the x-axis
-//! mirror with an irrelevant `p1.y` left at `1.7e16` / `2.9e16` (the ordered-float/1 walk) and a
-//! quad with both `p1` coordinates at `MAX − δ` where one would do. A human would write
+//! zero: `p0 = (0, 2^970)`, `p1 = (0, −MAX)` — the euclid/2 pair, which `scale_numeric_pairs`
+//! now finishes. What remains is the x-axis mirror, `p0 = (2^970, 0)`, `p1 = (−MAX, 0)`: moving
+//! the overflow to the y axis changes all four coordinates at once, and a quad with both `p1`
+//! coordinates at `MAX / 2` where one would do. A human would write
 //! `Line((0, 1e308), (0, −1e308))`.
 
 use super::assert_shrinks_to;
@@ -139,7 +140,7 @@ fn the_ideal_does_fail() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass lowers one draw while raising another along a product bound"]
+#[ignore = "shrinker: no pass moves a coupled pair from the x coordinates to the y coordinates"]
 fn overflowing_segment_shrinks_to_one_axis() {
     assert_shrinks_to(&ideal(), 20, 300, draw, endpoints_disagree);
 }

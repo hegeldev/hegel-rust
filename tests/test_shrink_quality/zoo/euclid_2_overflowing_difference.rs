@@ -9,7 +9,10 @@
 //!
 //! Shortlex ideal: both from the first branch, `from = 2^970` (half an ulp of `MAX`, the
 //! smallest positive float whose addition to `f64::MAX` rounds up to infinity) and
-//! `to = -f64::MAX`. A human would write `from = 1e308, to = -1e308`.
+//! `to = -f64::MAX`. The float passes leave `to` a few ulps short of `-MAX` with `from` far
+//! above `2^970`, or the pair with the signs the wrong way round; `scale_numeric_pairs` puts
+//! `to` at the end of its range (and mirrors the signs) while scaling `from` down, and the
+//! bisection then finishes `from`. A human would write `from = 1e308, to = -1e308`.
 
 use super::assert_shrinks_to;
 use hegel::TestCase;
@@ -63,7 +66,6 @@ fn the_ideal_is_the_smallest() {
 }
 
 #[test]
-#[ignore = "shrinker: no pass lowers one draw while raising another along a product bound"]
 fn coupled_magnitudes_shrink_to_the_half_ulp_boundary() {
     assert_shrinks_to(&ideal(), 20, 300, draw, angle_to_is_not_finite);
 }
