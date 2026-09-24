@@ -186,6 +186,72 @@ typedef enum {
 } hegel_result_t;
 
 /*
+ Verbosity of engine-emitted output (logs, per-case traces). Set via
+ `hegel_settings_set_verbosity`.
+ */
+typedef enum {
+    /*
+     A short summary line per run. The default.
+     */
+    HEGEL_VERBOSITY_NORMAL = 0,
+    /*
+     Nothing besides the final result.
+     */
+    HEGEL_VERBOSITY_QUIET = 1,
+    /*
+     Per-test-case progress and drawn values, plus panic diagnostics as
+     they happen.
+     */
+    HEGEL_VERBOSITY_VERBOSE = 2,
+    /*
+     As verbose, plus shrinker trace output.
+     */
+    HEGEL_VERBOSITY_DEBUG = 3,
+} hegel_verbosity_t;
+
+/*
+ Which source of randomness the engine draws from. Set via
+ `hegel_settings_set_backend`.
+ */
+typedef enum {
+    /*
+     Expand a single seeded PRNG (the base setting). Runs are
+     reproducible from the seed and shrinking / replay work as usual.
+     */
+    HEGEL_BACKEND_DEFAULT = 1,
+    /*
+     Read fresh entropy from `/dev/urandom` on every draw, falling back to
+     an OS-seeded PRNG on platforms without it. Intended for running under
+     Antithesis, whose fuzzer controls `/dev/urandom`, and selected by the
+     shipped `workload` profile; you almost certainly don't want it
+     otherwise.
+     */
+    HEGEL_BACKEND_URANDOM = 2,
+} hegel_backend_t;
+
+/*
+ How a run reacts when it detects nondeterministic test behavior — a test
+ whose structure or outcome changes when the same choices are replayed.
+ Set via `hegel_settings_set_nondeterminism_strictness`.
+ */
+typedef enum {
+    /*
+     Switch to nondeterministic handling silently: failures are confirmed
+     by repeated replay before they are reported or shrunk. The default.
+     */
+    HEGEL_NONDETERMINISM_QUIET = 0,
+    /*
+     Switch as under quiet, printing a one-line notice once per run.
+     */
+    HEGEL_NONDETERMINISM_WARN = 1,
+    /*
+     Abort the run with a flaky-test / nondeterminism error, for suites
+     that use determinism as a lint.
+     */
+    HEGEL_NONDETERMINISM_ERROR = 2,
+} hegel_nondeterminism_strictness_t;
+
+/*
  Aggregate outcome of a finished run, read via `hegel_run_result_status`.
 
  Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
@@ -280,244 +346,6 @@ typedef enum {
      */
     HEGEL_HC_LARGE_INITIAL_TEST_CASE = (1 << 3),
 } hegel_health_check_t;
-
-/*
- Passed to `hegel_start_span`. libhegel opens spans around its own draws.
- If your Hegel library opens spans, give them labels libhegel has not
- reserved below, or shrinking may get slower.
- */
-typedef enum {
-    /*
-     Outer span around a list / sequence.
-     */
-    HEGEL_LABEL_LIST = 1,
-    /*
-     One element of a list.
-     */
-    HEGEL_LABEL_LIST_ELEMENT = 2,
-    /*
-     Outer span around a set (unordered, no duplicates).
-     */
-    HEGEL_LABEL_SET = 3,
-    /*
-     One element of a set.
-     */
-    HEGEL_LABEL_SET_ELEMENT = 4,
-    /*
-     Outer span around a map / dictionary.
-     */
-    HEGEL_LABEL_MAP = 5,
-    /*
-     One (key, value) entry of a map.
-     */
-    HEGEL_LABEL_MAP_ENTRY = 6,
-    /*
-     Outer span around a tuple / fixed-arity record.
-     */
-    HEGEL_LABEL_TUPLE = 7,
-    /*
-     Outer span around a `one_of` / disjunction; useful so the shrinker
-     can swap which branch is taken.
-     */
-    HEGEL_LABEL_ONE_OF = 8,
-    /*
-     Outer span around an `optional` (None vs Some(value)).
-     */
-    HEGEL_LABEL_OPTIONAL = 9,
-    /*
-     Outer span around a fixed-shape record (named fields known
-     statically).
-     */
-    HEGEL_LABEL_FIXED_DICT = 10,
-    /*
-     Outer span around a `flat_map` / monadic dependent draw.
-     */
-    HEGEL_LABEL_FLAT_MAP = 11,
-    /*
-     Outer span around a `filter` / rejection-sampling wrapper.
-     */
-    HEGEL_LABEL_FILTER = 12,
-    /*
-     Outer span around a `map` / pure transformation.
-     */
-    HEGEL_LABEL_MAPPED = 13,
-    /*
-     Outer span around a `sampled_from` / pick-from-collection draw.
-     */
-    HEGEL_LABEL_SAMPLED_FROM = 14,
-    /*
-     Outer span around the variant discriminator of a sum-type draw.
-     */
-    HEGEL_LABEL_ENUM_VARIANT = 15,
-    /*
-     Span around one swarm-testing feature-flag draw. Emitted internally
-     by the engine's state-machine rule selection
-     (`hegel_state_machine_next_rule`); callers normally never open this
-     span themselves.
-     */
-    HEGEL_LABEL_FEATURE_FLAG = 16,
-    /*
-     Span around one regex string draw. Emitted internally by
-     `hegel_generate_string`; callers normally never open this span
-     themselves. Likewise for the other engine-side compound draws below.
-     */
-    HEGEL_LABEL_REGEX = 17,
-    /*
-     Span around one email-address draw (`hegel_generate_string`).
-     */
-    HEGEL_LABEL_EMAIL = 18,
-    /*
-     Span around one URL draw (`hegel_generate_string`).
-     */
-    HEGEL_LABEL_URL = 19,
-    /*
-     Span around one domain-name draw (`hegel_generate_string`).
-     */
-    HEGEL_LABEL_DOMAIN = 20,
-    /*
-     Span around one date draw (`hegel_generate_date`).
-     */
-    HEGEL_LABEL_DATE = 21,
-    /*
-     Span around one time draw (`hegel_generate_time`).
-     */
-    HEGEL_LABEL_TIME = 22,
-    /*
-     Span around one datetime draw (`hegel_generate_datetime`).
-     */
-    HEGEL_LABEL_DATETIME = 23,
-    /*
-     Span around one UUID draw (`hegel_generate_uuid`).
-     */
-    HEGEL_LABEL_UUID = 24,
-    /*
-     Span around one IP-address draw (`hegel_generate_ipv4` /
-     `hegel_generate_ipv6`).
-     */
-    HEGEL_LABEL_IP_ADDRESS = 25,
-    /*
-     Span around one integer draw (`hegel_generate_integer` /
-     `hegel_generate_integer_big`). Emitted internally, like every
-     per-draw label: same-label spans are what the engine's mutation
-     machinery duplicates to propose repeated values.
-     */
-    HEGEL_LABEL_INTEGER = 26,
-    /*
-     Span around one float draw (`hegel_generate_float`).
-     */
-    HEGEL_LABEL_FLOAT = 27,
-    /*
-     Span around one boolean draw (`hegel_generate_boolean`).
-     */
-    HEGEL_LABEL_BOOLEAN = 28,
-    /*
-     Span around one bytes draw (`hegel_generate_bytes`).
-     */
-    HEGEL_LABEL_BYTES = 29,
-    /*
-     Span around one text string draw (`hegel_generate_string` with a
-     text generator).
-     */
-    HEGEL_LABEL_STRING = 30,
-    /*
-     Outer span around one stateful-testing rule invocation, grouping all
-     the draws a single rule makes so the shrinker can delete a whole step
-     at once. Opened by the frontend's state-machine driver.
-     */
-    HEGEL_LABEL_STATEFUL_RULE = 31,
-    /*
-     Span around one fresh-identifier draw (`hegel_pool_add`). Emitted
-     internally by the engine.
-     */
-    HEGEL_LABEL_FRESH_ID = 32,
-    /*
-     Span around one choose-from-set draw (`hegel_pool_generate`). Emitted
-     internally by the engine.
-     */
-    HEGEL_LABEL_SET_CHOICE = 33,
-    /*
-     Span around the concurrency-level draw made by
-     `hegel_new_state_machine`.
-     */
-    HEGEL_LABEL_CONCURRENCY = 34,
-    /*
-     Span around one sub-value of a recursive generator: the leaf-or-branch
-     decision plus the drawn content. Every sub-value at every depth uses
-     this same label, which is what lets the shrinker replace a tree with
-     one of its own subtrees.
-     */
-    HEGEL_LABEL_RECURSIVE = 35,
-} hegel_label_t;
-
-/*
- Which source of randomness the engine draws from. Set via
- `hegel_settings_set_backend`.
- */
-typedef enum {
-    /*
-     Choose automatically (the default): urandom when running inside
-     Antithesis, otherwise the default backend.
-     */
-    HEGEL_BACKEND_AUTO = 0,
-    /*
-     Expand a single seeded PRNG. Runs are reproducible from the seed and
-     shrinking / replay work as usual.
-     */
-    HEGEL_BACKEND_DEFAULT = 1,
-    /*
-     Read fresh entropy from `/dev/urandom` on every draw, falling back to
-     an OS-seeded PRNG on platforms without it. Intended for running under
-     Antithesis, whose fuzzer controls `/dev/urandom`; you almost
-     certainly don't want it otherwise.
-     */
-    HEGEL_BACKEND_URANDOM = 2,
-} hegel_backend_t;
-
-/*
- Verbosity of engine-emitted output (logs, per-case traces). Set via
- `hegel_settings_set_verbosity`.
- */
-typedef enum {
-    /*
-     Nothing besides the final result.
-     */
-    HEGEL_VERBOSITY_QUIET = 0,
-    /*
-     A short summary line per run. The default.
-     */
-    HEGEL_VERBOSITY_NORMAL = 1,
-    /*
-     Per-test-case progress and drawn values, plus panic diagnostics as
-     they happen.
-     */
-    HEGEL_VERBOSITY_VERBOSE = 2,
-    /*
-     As verbose, plus shrinker trace output.
-     */
-    HEGEL_VERBOSITY_DEBUG = 3,
-} hegel_verbosity_t;
-
-/*
- How a run reacts when it detects nondeterministic test behavior — a test
- whose structure or outcome changes when the same choices are replayed.
- Set via `hegel_settings_set_nondeterminism_strictness`.
- */
-typedef enum {
-    /*
-     Switch to nondeterministic handling silently: failures are confirmed
-     by repeated replay before they are reported or shrunk. The default.
-     */
-    HEGEL_NONDETERMINISM_QUIET = 0,
-    /*
-     Switch as under quiet, printing a one-line notice once per run.
-     */
-    HEGEL_NONDETERMINISM_WARN = 1,
-    /*
-     Abort the run with a flaky-test / nondeterminism error, for suites
-     that use determinism as a lint.
-     */
-    HEGEL_NONDETERMINISM_ERROR = 2,
-} hegel_nondeterminism_strictness_t;
 
 /*
  Outcome of a single test case. Passed to `hegel_mark_complete`.
@@ -724,7 +552,8 @@ typedef struct hegel_run_result_t hegel_run_result_t;
  and then freed. Settings can be reused across runs.
 
  A configured handle may be shared across threads, but do not call setters
- concurrently on the same handle.
+ concurrently on the same handle, or concurrently with
+ `hegel_settings_get_database` reads of it.
  */
 typedef struct hegel_settings_t hegel_settings_t;
 
@@ -884,23 +713,62 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
 
 /*
  Parameters:
- `out_settings`: Receives a handle initialized with libhegel's
-   defaults: 100 test cases, all phases enabled, normal verbosity, no
-   seed, and the default disk database under `.hegel/`.
+ `out_settings`: Receives a handle initialized from the default settings
+   profile.
 
- Returns `HEGEL_OK`.
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when profile resolution
+ fails: a default-profile setting names an unknown profile, or a
+ `hegel.toml` is malformed. Read the message with
+ `hegel_context_last_error`.
 
- When a CI environment is detected (via `CI`, `GITHUB_ACTIONS`, and
- similar variables) the defaults change: the database is disabled and
- derandomization is enabled. Override either with the explicit setters.
+ A profile is a named settings delta. Two names are reserved: `base` is
+ the immutable base settings (100 test cases, all phases enabled, normal
+ verbosity, no seed, the disk database under `.hegel/`), and `default`
+ is the default profile, the one in effect when nothing names a profile:
+ the strongest set of `hegel_set_default_profile`, the
+ `HEGEL_DEFAULT_PROFILE` environment variable, and the top-level
+ `default = "<profile>"` entry in `hegel.toml`, else the detected
+ environment (`workload` inside Antithesis, detected via
+ `ANTITHESIS_OUTPUT_DIR`, or `ci` on a CI server, detected via `CI`,
+ `GITHUB_ACTIONS`, and similar variables), else `development`. This
+ function resolves `default`.
 
- When running inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`)
- the database is disabled and every health check is skipped. The database
- can still be enabled with `hegel_settings_set_database`; the health
- checks cannot be re-enabled, since Antithesis's thread pausing would trip
- wall-clock checks such as `TooSlow` spuriously.
+ Three ordinary profiles ship with libhegel: `development` (the base
+ settings, unchanged — what local runs get), `ci` (derandomization on,
+ database disabled, the `too_slow` health check suppressed), and
+ `workload` (database disabled, every health check suppressed). A custom profile without an explicit `extends` extends
+ `default`, skipping any candidate already in its chain, so it sits on
+ `ci` when resolved on a CI server and on `development` locally. The
+ shipped profiles themselves extend `base` and never layer over one
+ another. Extending or selecting `base` pins the plain base settings.
+
+ Profiles are modified and defined in a `hegel.toml` found in the current
+ directory or the nearest ancestor, and registered programmatically with
+ `hegel_settings_register_profile`; use `hegel_settings_new_for_profile`
+ to resolve one by name.
  */
-hegel_result_t hegel_settings_new(hegel_context_t *ctx, hegel_settings_t **out_settings);
+hegel_result_t hegel_settings_new(hegel_context_t *ctx,
+                                  hegel_settings_t **out_settings);
+
+/*
+ Parameters:
+ `name`: The profile to resolve: reserved (`base`, `default`), shipped
+   (`development`, `ci`, `workload`), defined in `hegel.toml`, or
+   registered with `hegel_settings_register_profile`.
+ `out_settings`: Receives a handle initialized from that profile.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when the profile is unknown
+ or a `hegel.toml` is malformed. Read the message with
+ `hegel_context_last_error`.
+
+ Selecting a profile by name does not change what the default profile is:
+ the named profile still implicitly extends `default` (see
+ `hegel_settings_new`), so it layers over the environment's profile —
+ except `base`, which is always the plain base settings.
+ */
+hegel_result_t hegel_settings_new_for_profile(hegel_context_t *ctx,
+                                              const char *name,
+                                              hegel_settings_t **out_settings);
 
 /*
  Parameters:
@@ -919,9 +787,6 @@ hegel_result_t hegel_settings_free(hegel_context_t *ctx, hegel_settings_t *s);
 
  The enum-valued setters take `uint32_t` rather than the enum type so
  that an out-of-range value is an error instead of undefined behavior.
-
- Once an explicit backend has been set on a handle there is no way to
- change it within a run.
  */
 hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
                                           hegel_settings_t *s,
@@ -936,18 +801,6 @@ hegel_result_t hegel_settings_set_backend(hegel_context_t *ctx,
  Returns `HEGEL_OK`.
  */
 hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_settings_t *s, uint64_t n);
-
-/*
- Parameters:
- `n`: Target number of steps to run per stateful test case. Each stateful
-   case runs at least one step and at most `n`. The default is 50. `n`
-   must be at least 1.
-
- Returns `HEGEL_OK`.
- */
-hegel_result_t hegel_settings_set_stateful_step_count(hegel_context_t *ctx,
-                                                      hegel_settings_t *s,
-                                                      int64_t n);
 
 /*
  Parameters:
@@ -1025,10 +878,30 @@ hegel_result_t hegel_settings_set_show_statistics(hegel_context_t *ctx,
 
 /*
  Parameters:
- `database`: NULL sets it to the default: `./.hegel/examples/`. `""`
-   disables the database entirely. Discovered failures will not be
-   stored. Anything else is used as the database root directory. The
-   directory will be created if it does not already exist.
+ `yes`: When `true`, a test case may make any number of choices (draws,
+   spans, collection and clone steps). By default a test case is
+   concluded as an overrun once it has made 2^20 choices: the draw that
+   would exceed the limit returns `HEGEL_E_STOP_TEST`, and the frontend
+   reports the case with `HEGEL_STATUS_OVERRUN`. Suppressing the
+   `TestCasesTooLarge` health check (see
+   `hegel_settings_set_suppress_health_check`) removes the limit too. A
+   long-running test case — a concurrent state machine driven for hours,
+   say — needs it removed; the cost is the memory to record every choice
+   it makes.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_unbounded_choices(hegel_context_t *ctx,
+                                                    hegel_settings_t *s,
+                                                    bool yes);
+
+/*
+ Parameters:
+ `database`: NULL sets it to the default: `./.hegel/examples/`, including
+   resetting a value the handle already carries. `""` disables the
+   database entirely. Discovered failures will not be stored. Anything
+   else is used as the database root directory. The directory will be
+   created if it does not already exist.
 
  Returns `HEGEL_OK`.
  */
@@ -1046,6 +919,36 @@ hegel_result_t hegel_settings_set_database(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_database_key(hegel_context_t *ctx,
                                                hegel_settings_t *s,
                                                const char *key);
+
+/*
+ Parameters:
+ `file`: The source file the test is defined in.
+ `begin_line`: The line in `file` where the test's definition begins.
+ `class_name`: The class, module or package enclosing the test function.
+ `function`: The name of the test function.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` if any string is NULL or
+ not valid UTF-8.
+
+ Records where the test under these settings lives. Inside
+ [Antithesis](https://antithesis.com/) (detected via
+ `ANTITHESIS_OUTPUT_DIR`), libhegel then reports the verdict of every run
+ started from these settings, and of every test case replayed from a blob
+ with them, as one `always` assertion in the SDK format Antithesis
+ collects — identified as `<class_name>::<function> passes properties` and
+ located at `file:begin_line` — so the property is listed alongside the
+ assertions in the system under test and flagged when it fails. Outside
+ Antithesis the location is unused. Without a location nothing is
+ reported. Like the database key, the location is per-test identity rather
+ than a setting: `hegel_settings_register_profile` does not snapshot it.
+ Each call replaces the previous location.
+ */
+hegel_result_t hegel_settings_set_test_location(hegel_context_t *ctx,
+                                                hegel_settings_t *s,
+                                                const char *file,
+                                                uint32_t begin_line,
+                                                const char *class_name,
+                                                const char *function);
 
 /*
  Parameters:
@@ -1068,6 +971,204 @@ hegel_result_t hegel_settings_set_phases(hegel_context_t *ctx,
 hegel_result_t hegel_settings_set_suppress_health_check(hegel_context_t *ctx,
                                                         hegel_settings_t *s,
                                                         uint32_t checks);
+
+/*
+ Parameters:
+ `yes`: When `true`, a failure should be reported with a copy-pasteable
+   reproduction line for its counterexample. Defaults to `true`. libhegel
+   itself never acts on this
+   value — the reproduce blob is always attached to the failure and
+   printing it is the caller's decision — but carrying it in the settings
+   lets profiles configure it for every Hegel library.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_print_blob(hegel_context_t *ctx, hegel_settings_t *s, bool yes);
+
+/*
+ Parameters:
+ `name`: The profile name to register: ASCII letters, digits, `-` and
+   `_` only. The reserved names `base` and `default` are rejected.
+ `settings`: The settings to snapshot. The caller keeps ownership; the
+   handle's database key is not part of the snapshot.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid or reserved
+ name.
+
+ Registers a complete snapshot of `settings` as the profile `name`,
+ process-wide, replacing any earlier registration of the same name.
+ Registering a shipped name replaces that profile wholesale. A
+ `hegel.toml` section for `name` still merges over the snapshot, and may
+ not set `extends` on it. Registration is not retroactive: settings
+ handles already created keep their values.
+ */
+hegel_result_t hegel_settings_register_profile(hegel_context_t *ctx,
+                                               const char *name,
+                                               const hegel_settings_t *settings);
+
+/*
+ Parameters:
+ `name`: The profile the `default` alias should resolve to, or NULL to
+   clear an earlier call. The name is not required to exist yet; naming
+   the `default` alias itself is rejected.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid name.
+
+ Sets the default settings profile for the whole process, taking
+ precedence over `HEGEL_DEFAULT_PROFILE`, the `default` entry in
+ `hegel.toml`, and environment detection (see `hegel_settings_new`). Like
+ registration it is not retroactive: settings handles already created
+ keep their values.
+ */
+hegel_result_t hegel_set_default_profile(hegel_context_t *ctx, const char *name);
+
+/*
+ Parameters:
+ `out`: Receives the configured number of test cases.
+
+ Returns `HEGEL_OK`.
+
+ The `hegel_settings_get_*` functions read a settings handle back — for
+ example one resolved from a profile by `hegel_settings_new` — so a
+ Hegel library can present the effective configuration. Each takes a
+ `const` handle and one out parameter, and fails with
+ `HEGEL_E_INVALID_HANDLE` / `HEGEL_E_INVALID_ARG` on a null handle or out
+ pointer.
+ */
+hegel_result_t hegel_settings_get_test_cases(hegel_context_t *ctx,
+                                             const hegel_settings_t *s,
+                                             uint64_t *out);
+
+/*
+ Parameters:
+ `out`: Receives the configured verbosity.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_verbosity(hegel_context_t *ctx,
+                                            const hegel_settings_t *s,
+                                            hegel_verbosity_t *out);
+
+/*
+ Parameters:
+ `out_seed`: Receives the configured seed when one is set, else 0.
+ `out_has_seed`: Receives whether a seed is set.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_seed(hegel_context_t *ctx,
+                                       const hegel_settings_t *s,
+                                       uint64_t *out_seed,
+                                       bool *out_has_seed);
+
+/*
+ Parameters:
+ `out`: Receives whether derandomization is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_derandomize(hegel_context_t *ctx,
+                                              const hegel_settings_t *s,
+                                              bool *out);
+
+/*
+ Parameters:
+ `out_database`: Receives the database value, mirroring the setter's
+   convention: NULL for the default, `""` for disabled, else the root
+   directory path. The pointer borrows the handle and stays valid until
+   the next `hegel_settings_set_database` call on it or
+   `hegel_settings_free`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_database(hegel_context_t *ctx,
+                                           const hegel_settings_t *s,
+                                           const char **out_database);
+
+/*
+ Parameters:
+ `out`: Receives the enabled phases as a bitwise OR of `hegel_phase_t`
+   values.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_phases(hegel_context_t *ctx,
+                                         const hegel_settings_t *s,
+                                         uint32_t *out);
+
+/*
+ Parameters:
+ `out`: Receives the suppressed health checks as a bitwise OR of
+   `hegel_health_check_t` values, as resolved from the profile and any
+   `hegel_settings_set_suppress_health_check` call.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_suppress_health_check(hegel_context_t *ctx,
+                                                        const hegel_settings_t *s,
+                                                        uint32_t *out);
+
+/*
+ Parameters:
+ `out`: Receives whether multi-bug reporting is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_report_multiple_failures(hegel_context_t *ctx,
+                                                           const hegel_settings_t *s,
+                                                           bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether the statistics block is enabled.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_show_statistics(hegel_context_t *ctx,
+                                                  const hegel_settings_t *s,
+                                                  bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether test cases may make any number of choices (see
+   `hegel_settings_set_unbounded_choices`).
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_unbounded_choices(hegel_context_t *ctx,
+                                                    const hegel_settings_t *s,
+                                                    bool *out);
+
+/*
+ Parameters:
+ `out`: Receives whether reproduction lines should be printed. See
+   `hegel_settings_set_print_blob`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_print_blob(hegel_context_t *ctx,
+                                             const hegel_settings_t *s,
+                                             bool *out);
+
+/*
+ Parameters:
+ `out`: Receives the configured backend.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_backend(hegel_context_t *ctx,
+                                          const hegel_settings_t *s,
+                                          hegel_backend_t *out);
+
+/*
+ Parameters:
+ `out`: Receives the configured nondeterminism strictness.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_nondeterminism_strictness(hegel_context_t *ctx,
+                                                            const hegel_settings_t *s,
+                                                            hegel_nondeterminism_strictness_t *out);
 
 /*
  Parameters:
@@ -1323,10 +1424,17 @@ hegel_result_t hegel_test_case_set_worker(hegel_context_t *ctx,
  Libraries should wrap each compound generator in a span.
 
  Parameters:
- `label`: Identifies what kind of structure this span groups. The
-   values reserved by libhegel are the `hegel_label_t` constants in
-   `hegel.h`. Libraries may use any stable `u64` to define their own
-   spans.
+ `label`: Identifies the generator that opened the span. Labels have no
+   meaning beyond identity: libhegel treats two spans with the same label
+   as coming from the same generator, and so as candidates for swapping,
+   duplicating and reordering with each other, and does nothing else with
+   them. Any value is valid as long as the same generator always uses the
+   same label; derive labels with `hegel_label_from_name` and
+   `hegel_label_combine` (or the same hashes computed ahead of time)
+   rather than numbering them by hand, so that generators with the same
+   shape but different components — a list of integers and a list of
+   strings, say — get different labels. libhegel opens spans around its
+   own draws with labels derived from names of the form `hegel.<kind>`.
 
  Returns `HEGEL_OK`.
 
@@ -1345,6 +1453,46 @@ hegel_result_t hegel_start_span(hegel_context_t *ctx, hegel_test_case_t *tc, uin
  Closes the most recently opened span.
  */
 hegel_result_t hegel_stop_span(hegel_context_t *ctx, hegel_test_case_t *tc, bool discard);
+
+/*
+ The span label for a generator identified by a name: the 64-bit FNV-1a
+ hash of the name's bytes. Use it for the label of a generator with no
+ component generators (`hegel_label_from_name("mylib.integers")`), and
+ for the first argument of `hegel_label_combine` for one that has
+ components. A name only has to be stable and unique to its generator; a
+ prefix naming the library keeps it clear of libhegel's own `hegel.<kind>`
+ names and of other libraries'.
+
+ Parameters:
+ `name`: Non-NULL, NUL-terminated. Hashed as bytes, so any encoding
+   works as long as the generator always uses the same one.
+ `out_label`: Receives the label.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a NULL `name` or
+ `out_label`.
+ */
+hegel_result_t hegel_label_from_name(hegel_context_t *ctx, const char *name, uint64_t *out_label);
+
+/*
+ The span label for a generator built from other generators: a hash of
+ the given labels, in order. Pass the generator's own label (from
+ `hegel_label_from_name`) first and its components' labels after it, so
+ that `lists(integers())` and `lists(text())` get different labels while
+ every `lists(integers())` gets the same one. Combining is
+ order-sensitive, and combining a single label does not return it
+ unchanged.
+
+ Parameters:
+ `labels`: `len` labels. May be NULL when `len` is 0.
+ `out_label`: Receives the combined label.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a NULL `labels` with a
+ non-zero `len` or a NULL `out_label`.
+ */
+hegel_result_t hegel_label_combine(hegel_context_t *ctx,
+                                   const uint64_t *labels,
+                                   size_t len,
+                                   uint64_t *out_label);
 
 /*
  For variable-length values, libhegel decides how many elements to
@@ -1565,7 +1713,10 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  Register a *state machine* for engine-owned stateful (rule-based)
  testing, sequential or concurrent: `num_rules` rules — each assigned to
  a concurrency group by `rule_groups`, an array of group ids parallel to
- `rule_names` — and `num_invariants` invariants, with names as
+ `rule_names`, and given a selection weight by `rule_weights`, an array
+ of `num_rules` finite, strictly positive doubles parallel to
+ `rule_names` (NULL for all-equal weights) — and `num_invariants`
+ invariants, with names as
  NUL-terminated UTF-8, plus concurrency bounds. `invariant_always_check`
  is an array of `num_invariants` flags parallel to `invariant_names`
  (NULL for all-false): `hegel_state_machine_should_check_invariant`
@@ -1582,11 +1733,20 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  `max_concurrency` (concurrency bugs need concurrency) rather than
  shrink-biased toward the minimum. Pass `min_concurrency ==
  max_concurrency` to fix the level without consuming entropy — `1, 1`
- for a sequential machine.
+ for a sequential machine. `step_count` is the target number of counted
+ rounds the machine runs per test case: every case runs at least one
+ round and at most `step_count` (at concurrency 1, where a round is one
+ rule, that is at most `step_count` completed rules), and each sampled
+ invariant is checked with probability `1 / step_count` per join point.
+ The engine has no default; frontends typically use 50.
 
  The engine owns rule selection — including swarm testing, where each
  worker enables a random subset of rules (at least one per group) and
- selection draws only from that subset. The caller drives execution in
+ selection draws only from that subset, with probability proportional
+ to `rule_weights` among the enabled rules of the current group. A
+ rule's realized frequency therefore depends on which other rules its
+ worker has enabled: the weights are a guide, not a guarantee. The
+ caller drives execution in
  rounds: on the root test-case handle it asks
  `hegel_state_machine_next_group` whether another round should run, then
  each worker asks `hegel_state_machine_next_rule` which rule to run and
@@ -1616,26 +1776,29 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  exhausted (the caller should abort the body and call
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
- is `HEGEL_STATE_MACHINE_DONE`, `min_concurrency < 1`,
- `max_concurrency < min_concurrency`, or on null / non-UTF-8 names.
+ is `HEGEL_STATE_MACHINE_DONE`, an entry of `rule_weights` is not finite
+ and positive, `min_concurrency < 1`, `max_concurrency < min_concurrency`,
+ `step_count < 1`, or on null / non-UTF-8 names.
  */
 hegel_result_t hegel_new_state_machine(hegel_context_t *ctx,
                                        hegel_test_case_t *tc,
                                        const char *const *rule_names,
                                        const int64_t *rule_groups,
+                                       const double *rule_weights,
                                        size_t num_rules,
                                        const char *const *invariant_names,
                                        const bool *invariant_always_check,
                                        size_t num_invariants,
                                        int64_t min_concurrency,
                                        int64_t max_concurrency,
+                                       int64_t step_count,
                                        hegel_state_machine_t **out_state_machine,
                                        int64_t *out_concurrency);
 
 /*
  Start the machine's next round: make the per-round stop decision (a
  recorded boolean draw with a small stop probability, bounded by the
- `stateful_step_count` setting) and, if the test case continues, draw
+ machine's `step_count`) and, if the test case continues, draw
  which concurrency group is current for the round. Writes the current
  group's id (its value in the creating `rule_groups`) into
  `*out_group_id` when a new round has begun and the workers should pull
@@ -1731,10 +1894,10 @@ hegel_result_t hegel_state_machine_rule_rejected(hegel_context_t *ctx,
  current join point, writing the decision into `*out_should_check`: true
  unconditionally (consuming no entropy) for an invariant whose
  `invariant_always_check` flag was set at creation, otherwise a
- recorded boolean draw that is true with probability
- `1 / stateful_step_count`, so each sampled invariant's expected number
- of sampled runs over a full-length test case is one, regardless of the
- step count. The caller owns the machine's guaranteed invariant checks —
+ recorded boolean draw that is true with probability `1 / step_count`
+ (the machine's creation-time step count), so each sampled invariant's
+ expected number of sampled runs over a full-length test case is one,
+ regardless of the step count. The caller owns the machine's guaranteed invariant checks —
  its initial state, and its final state once
  `hegel_state_machine_next_group` signals termination — and should run
  those unconditionally, without calling this.

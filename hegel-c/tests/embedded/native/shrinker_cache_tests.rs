@@ -16,6 +16,7 @@ use crate::exchange::drive_no_yield;
 use crate::native::core::choices::BooleanChoice;
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
+#[cfg(not(target_family = "wasm"))]
 use crate::native::shrinker::search::FindInteger;
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 
@@ -65,6 +66,7 @@ fn replace_rejects_value_that_fails_kind_validate() {
     assert!(!drive_no_yield(shrinker.replace(&values)).unwrap());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn find_integer_bails_when_exponential_probe_overflows() {
     use crate::native::shrinker::search::SearchStep;

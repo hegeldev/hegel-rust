@@ -226,12 +226,31 @@ fn newest_hegel_rlib(dirs: &[PathBuf]) -> PathBuf {
 ///   across toolchains;
 /// - a type too long for a `required for` note is elided as `, ...>` by
 ///   stable but `, _>` by nightly; the nightly form is rewritten to
-///   stable's.
+///   stable's;
+/// - a `required by a bound in` note keeps only the source line its `^^^`
+///   label points at: newer toolchains also print the enclosing item's
+///   header (`impl TestCase {`) above it, with a `...` line for the gap.
 fn normalize_e0283_stderr(raw: &str) -> String {
     let mut out = Vec::new();
     let mut in_impl_list = false;
+    let mut in_bound_note = false;
+    let mut bound_source = None;
     for line in raw.lines() {
         let trimmed = line.trim_start();
+        if in_bound_note {
+            if trimmed == "..." {
+                continue;
+            }
+            if trimmed.starts_with('|') && trimmed.contains('^') {
+                out.extend(bound_source.take());
+                out.push(format!(" {trimmed}"));
+                in_bound_note = false;
+                continue;
+            }
+        }
+        if trimmed.starts_with("note: required by a bound in") {
+            in_bound_note = true;
+        }
         if in_impl_list {
             // List entries vary by toolchain: backticked "`X` implements
             // `Y`" lines, bare type names, and the "and N others" tail.
@@ -294,7 +313,11 @@ fn normalize_e0283_stderr(raw: &str) -> String {
         let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
         if digits > 0 && trimmed[digits..].trim_start().starts_with('|') {
             let rest = trimmed[digits..].trim_start();
-            out.push(format!("LL {rest}"));
+            if in_bound_note {
+                bound_source = Some(format!("LL {rest}"));
+            } else {
+                out.push(format!("LL {rest}"));
+            }
             continue;
         }
         out.push(line.to_string());
@@ -307,14 +330,22 @@ fn normalize_e0283_stderr(raw: &str) -> String {
 
 /// Compile `case` against the freshly built hegel rlib and return its
 /// normalized stderr (see [`normalize_e0283_stderr`]). The case must fail to
-/// compile.
+/// compile. The diagnostic width is pinned to rustc's non-terminal default:
+/// it decides which types in the `required for` notes are elided to `...`,
+/// and would otherwise follow the width of whatever terminal ran the test.
 fn compile_failing_case(case: &str) -> String {
     let search_dirs = crate_search_dirs();
     let rlib = newest_hegel_rlib(&search_dirs);
     let out_dir = tempfile::tempdir().unwrap();
     let mut command = Command::new(rustc_binary());
     command
-        .args(["--edition", "2021", "--emit=metadata", "--color=never"])
+        .args([
+            "--edition",
+            "2021",
+            "--emit=metadata",
+            "--color=never",
+            "--diagnostic-width=140",
+        ])
         .arg("--extern")
         .arg({
             let mut arg = std::ffi::OsString::from("hegel=");

@@ -165,29 +165,32 @@ class CurrentVersionTest(unittest.TestCase):
             self.assertEqual(release.current_version(manifest), "0.19.1")
 
 
+class ReleaseTagsTest(unittest.TestCase):
+    def test_rust_only_release_tags_only_hegel_rust(self) -> None:
+        self.assertEqual(release.release_tags("0.23.3", None), ["v0.23.3"])
+
+    def test_c_release_tags_both_crates(self) -> None:
+        self.assertEqual(
+            release.release_tags("0.23.3", "0.24.0"), ["v0.23.3", "libhegel-v0.24.0"]
+        )
+
+    def test_libhegel_release_is_titled_after_libhegel(self) -> None:
+        self.assertEqual(release.libhegel_release_title("0.24.0"), "libhegel v0.24.0")
+
+
 class ReleasePrDetailsTest(unittest.TestCase):
-    def test_rust_only_release_mentions_no_tag(self) -> None:
-        title, body = release.release_pr_details("0.23.3", [])
+    def test_rust_only_release_names_its_tag(self) -> None:
+        title, body = release.release_pr_details("0.23.3", ["v0.23.3"])
         self.assertEqual(title, "Release v0.23.3")
-        self.assertNotIn("tag", body)
-        self.assertIn("The crates.io publish succeeded.", body)
+        self.assertIn("after tagging v0.23.3 failed", body)
+        self.assertIn("The tags and crates.io publish succeeded.", body)
 
-    def test_tagged_release_names_the_pushed_tag(self) -> None:
-        title, body = release.release_pr_details("0.23.3", ["v0.24.0"])
+    def test_c_release_names_both_tags(self) -> None:
+        title, body = release.release_pr_details(
+            "0.23.3", ["v0.23.3", "libhegel-v0.24.0"]
+        )
         self.assertEqual(title, "Release v0.23.3")
-        self.assertIn("after tagging v0.24.0", body)
-        self.assertIn("The tag and crates.io publish succeeded.", body)
-
-
-class BuildReleaseNotesTest(unittest.TestCase):
-    def test_root_only_is_passed_through(self) -> None:
-        self.assertEqual(release.build_release_notes("root body", None), "root body")
-
-    def test_both_are_combined_under_a_heading(self) -> None:
-        notes = release.build_release_notes("root body", "c body")
-        self.assertIn("root body", notes)
-        self.assertIn("## libhegel C ABI", notes)
-        self.assertIn("c body", notes)
+        self.assertIn("after tagging v0.23.3 and libhegel-v0.24.0 failed", body)
 
 
 if __name__ == "__main__":

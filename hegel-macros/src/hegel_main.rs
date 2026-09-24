@@ -11,6 +11,7 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
     let main_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
+            profile: None,
             settings_args: Vec::new(),
         }
     } else {
@@ -88,9 +89,8 @@ pub fn expand_main(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let new_body: TokenStream = quote! {
         {
-            let __hegel_default_settings: ::hegel::Settings = #default_settings_expr;
             let __hegel_settings: ::hegel::Settings = match ::hegel::__apply_cli_args(
-                __hegel_default_settings,
+                || -> ::hegel::Settings { #default_settings_expr },
                 ::std::env::args(),
             ) {
                 ::hegel::CliOutcome::Success(s) => s,

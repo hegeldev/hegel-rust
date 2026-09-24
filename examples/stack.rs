@@ -46,7 +46,7 @@ impl IntegerStack {
 #[hegel::test]
 fn test_integer_stack(tc: TestCase) {
     let stack = IntegerStack { stack: Vec::new() };
-    hegel::stateful::run(stack, tc);
+    hegel::stateful::machine(stack).run(tc);
 }
 
 fn main() {}

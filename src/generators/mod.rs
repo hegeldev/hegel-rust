@@ -13,6 +13,7 @@ mod default;
 mod deferred;
 #[allow(clippy::module_inception)]
 mod generators;
+mod labels;
 mod misc;
 mod numeric;
 mod recursive;
@@ -22,7 +23,7 @@ mod time;
 mod tuples;
 
 #[doc(hidden)]
-pub use crate::test_case::{Collection, TestCase, labels};
+pub use crate::test_case::{Collection, TestCase};
 
 #[doc(inline)]
 pub use crate::tuples;
@@ -37,8 +38,6 @@ pub use combinators::{
     SampledFromGenerator, one_of, optional, sampled_from,
 };
 pub use compose::ComposedGenerator;
-#[doc(hidden)]
-pub use compose::fnv1a_hash;
 pub use default::{DefaultGenerator, default};
 pub use deferred::{DeferredGeneratorDefinition, deferred, deferred_silent};
 pub(crate) use generators::draw_and_print_value;
@@ -46,6 +45,7 @@ pub use generators::{
     BoxedGenerator, BoxedPrintableGenerator, Filtered, FlatMapped, Generator, Mapped,
     PrintableGenerator, PrintedAsCall, PrintedAsDebug, PrintedAsValue, PrintedWith,
 };
+pub use labels::{combine_labels, label_from_name};
 pub use misc::{BoolGenerator, JustGenerator, booleans, just, unit, weighted_booleans};
 pub use numeric::{Float, FloatGenerator, Integer, IntegerGenerator, floats, integers};
 pub use recursive::{RecursiveGenerator, SubtreeGenerator, recursive};

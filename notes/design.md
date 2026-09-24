@@ -498,8 +498,11 @@ generation. Without the split every quantitative runner behavior silently change
 
 ### ABI summary
 
-Added: `hegel_settings_set_nondeterminism_strictness`, `hegel_failure_caveat`,
-`hegel_run_start_blob`; blob prefixes 2/3. Changed: run status 3 retired;
+Added: `hegel_settings_set_nondeterminism_strictness` and its getter (the setting is a
+profile setting: `ProfileDelta` field, `hegel.toml` key `nondeterminism_strictness =
+quiet|warn|error`, read back by the frontend like every other), `hegel_failure_caveat`,
+`hegel_run_start_blob` (whose run reports its verdict to Antithesis through the settings'
+test location exactly as `hegel_run_start` does); blob prefixes 2/3. Changed: run status 3 retired;
 `hegel_test_case_is_nondeterministic` renamed to `hegel_test_case_should_capture` with no
 shim (decision 50), now covering every execution a failure report can be built from;
 concurrent machine creation no longer rejects, and no longer declares the run

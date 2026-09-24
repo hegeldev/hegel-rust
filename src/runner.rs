@@ -1,4 +1,3 @@
-use crate::antithesis::TestLocation;
 use crate::test_case::TestCase;
 
 /// Health checks that can be suppressed during test execution.
@@ -12,7 +11,10 @@ pub enum HealthCheck {
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
+    /// Generated test cases are too large: they routinely reach the limit
+    /// on the number of choices a single test case may make. Suppressing
+    /// this check also removes that limit, so a test case can run
+    /// indefinitely; see [`Settings::suppress_health_check`].
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -82,8 +84,8 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. When running inside Antithesis this
-    /// backend is selected automatically unless you set one explicitly.
+    /// and reproduce generation directly. The shipped `workload` settings
+    /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
     /// source differs. On platforms without `/dev/urandom` (Windows) it falls
@@ -128,20 +130,26 @@ pub enum NondeterminismStrictness {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled,
-/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
-/// default.
+/// # Profiles
 ///
-/// Inside [Antithesis](https://antithesis.com/) (detected via
-/// `ANTITHESIS_OUTPUT_DIR`), the database and all health checks are disabled
-/// by default: Antithesis owns reproduction, and its thread pausing would
-/// trip wall-clock checks such as [`HealthCheck::TooSlow`] spuriously. The
-/// database can still be enabled explicitly with [`Settings::database`];
-/// health checks stay off.
+/// The values a `Settings` starts from come from a named *profile*,
+/// resolved by the engine. Two names are reserved: `base` is the immutable
+/// base settings, and `default` is the default profile — the one in effect
+/// when nothing names a profile, chosen by [`Settings::set_default_profile`],
+/// `HEGEL_DEFAULT_PROFILE`, or the `default` entry in `hegel.toml`, else by
+/// the environment (`workload` inside Antithesis, `ci` on a CI server,
+/// `development` locally). [`Settings::new`] resolves `default`;
+/// [`Settings::from_profile`] resolves a profile by name. Profiles are
+/// modified and defined in a `hegel.toml` at the package or workspace root,
+/// or registered with [`Settings::register_profile`].
+///
+/// The [`docs::settings`](crate::docs::settings) page covers the whole
+/// system: every setting and the layers it can be set in, the shipped
+/// profiles, inheritance, the `hegel.toml` format, and the programmatic
+/// API.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
-    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) nondeterminism_strictness: NondeterminismStrictness,
     pub(crate) seed: Option<u64>,
@@ -152,58 +160,91 @@ pub struct Settings {
     pub(crate) report_multiple_failures: bool,
     pub(crate) show_statistics: bool,
     pub(crate) print_blob: bool,
-    /// The randomness backend, or `None` to let it be chosen automatically
-    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
-    /// [`Settings::backend`] always wins over the automatic choice.
-    pub(crate) backend: Option<Backend>,
+    pub(crate) backend: Backend,
 }
 
 impl Settings {
-    /// Create settings with defaults. Detects CI environments automatically;
-    /// Antithesis detection happens in the engine.
+    /// Create settings from the `default` profile described in the
+    /// [profiles](Settings#profiles) section. Panics when profile
+    /// resolution fails: a default-profile setting names an unknown
+    /// profile, or a `hegel.toml` is malformed.
     pub fn new() -> Self {
-        Self::for_ci(is_in_ci())
+        Self::from_resolution(crate::ffi::settings_from_profile(None))
     }
 
-    fn for_ci(in_ci: bool) -> Self {
-        Self {
-            test_cases: 100,
-            stateful_step_count: 50,
-            verbosity: Verbosity::Normal,
-            nondeterminism_strictness: NondeterminismStrictness::Quiet,
-            seed: None,
-            derandomize: in_ci,
-            database: if in_ci {
-                Database::Disabled
-            } else {
-                Database::Unset
-            },
-            suppress_health_check: if in_ci {
-                vec![HealthCheck::TooSlow]
-            } else {
-                Vec::new()
-            },
-            phases: vec![
-                Phase::Explicit,
-                Phase::Reuse,
-                Phase::Generate,
-                Phase::Target,
-                Phase::Shrink,
-            ],
-            report_multiple_failures: false,
-            show_statistics: false,
-            print_blob: false,
-            backend: None,
+    /// Create settings from the named profile: reserved (`base`,
+    /// `default`), shipped (`development`, `ci`, `workload`), defined in
+    /// `hegel.toml`, or registered with [`Settings::register_profile`].
+    /// Selecting a profile does not change what the default profile is, and
+    /// the named profile still implicitly extends `default`, so it layers
+    /// over the environment's profile — except `base`, which is always the
+    /// plain base settings. Panics when the profile is unknown or a
+    /// `hegel.toml` is malformed; [`Settings::try_from_profile`] reports
+    /// the failure as an `Err` instead.
+    pub fn from_profile(name: &str) -> Self {
+        Self::from_resolution(Self::try_from_profile(name).map_err(|e| e.message))
+    }
+
+    /// [`Settings::from_profile`], reporting resolution failure as an `Err`
+    /// carrying the engine's diagnostic instead of panicking.
+    pub fn try_from_profile(name: &str) -> Result<Self, ProfileError> {
+        crate::ffi::settings_from_profile(Some(name)).map_err(|message| ProfileError { message })
+    }
+
+    fn from_resolution(resolution: Result<Self, String>) -> Self {
+        resolution.unwrap_or_else(|message| crate::test_case::invalid_argument!("{message}"))
+    }
+
+    /// Set the default profile for the whole process: the profile
+    /// [`Settings::new`] resolves and profiles without `extends` layer
+    /// over. Takes precedence over `HEGEL_DEFAULT_PROFILE` and the
+    /// `default` entry in `hegel.toml`; the `--profile` flag of a
+    /// `#[hegel::main]` binary calls this. The name is not required to
+    /// exist yet.
+    ///
+    /// Like [`Settings::register_profile`] this is not retroactive, so it
+    /// must run before the tests that should see it; under `cargo test`
+    /// prefer the `default` entry in `hegel.toml`.
+    ///
+    /// Panics when `name` is not a valid profile name.
+    pub fn set_default_profile(name: &str) {
+        if let Err(message) = crate::ffi::set_default_profile(Some(name)) {
+            crate::test_case::invalid_argument!("{message}");
         }
     }
 
-    /// Select the randomness backend.
+    /// Register a complete snapshot of `settings` as the profile `name`,
+    /// process-wide, replacing any earlier registration of the same name.
+    /// Registering a shipped profile's name replaces that profile; a
+    /// `hegel.toml` section for `name` still merges on top of the snapshot.
     ///
-    /// By default the backend is chosen automatically: [`Backend::Urandom`]
-    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
-    /// Calling this pins the choice, overriding the automatic detection.
+    /// Registration is not retroactive (settings values already created
+    /// keep their fields), so it must run before the tests that use the
+    /// profile. A `#[hegel::main]` binary or an embedding controls that
+    /// ordering. Under `cargo test` there is no reliable pre-test hook, so
+    /// prefer `hegel.toml` there.
+    ///
+    /// Panics when `name` is not a valid profile name (ASCII letters,
+    /// digits, `-` and `_`) or is one of the reserved names `base` and
+    /// `default`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::Settings;
+    ///
+    /// Settings::register_profile("nightly", Settings::from_profile("ci").test_cases(10_000));
+    /// ```
+    pub fn register_profile(name: &str, settings: Settings) {
+        if let Err(message) = crate::ffi::register_profile(name, &settings) {
+            crate::test_case::invalid_argument!("{message}");
+        }
+    }
+
+    /// Select the randomness backend (base value: [`Backend::Default`]; the
+    /// shipped `workload` profile selects [`Backend::Urandom`]).
     pub fn backend(mut self, backend: Backend) -> Self {
-        self.backend = Some(backend);
+        self.backend = backend;
         self
     }
 
@@ -216,15 +257,6 @@ impl Settings {
     /// smoke pass) without editing source.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
-        self
-    }
-
-    /// Set the target number of steps run per stateful test case (default:
-    /// 50). Each stateful case runs at least one step and at most this many.
-    /// Has no effect on non-stateful tests. `n` must be at least 1; a smaller
-    /// value makes the run fail with a usage error.
-    pub fn stateful_step_count(mut self, n: i64) -> Self {
-        self.stateful_step_count = n;
         self
     }
 
@@ -242,12 +274,27 @@ impl Settings {
     }
 
     /// Set a fixed seed for reproducibility, or `None` for random.
+    ///
+    /// A fixed seed takes precedence over [`derandomize`](Self::derandomize).
+    ///
+    /// The `HEGEL_SEED` environment variable, when set and non-empty,
+    /// overrides this value at runtime — including a value set explicitly
+    /// here or via `#[hegel::test(seed = ...)]`: an integer is the seed to
+    /// use, and the literal value `none` clears a fixed seed (matching the
+    /// `--seed` CLI flag's vocabulary).
     pub fn seed(mut self, seed: Option<u64>) -> Self {
         self.seed = seed;
         self
     }
 
-    /// When true, use a fixed seed derived from the test name. Enabled by default in CI.
+    /// When true, use a fixed seed derived from the test name. Enabled by
+    /// the shipped `ci` profile. Has no effect when a fixed
+    /// [`seed`](Self::seed) is set.
+    ///
+    /// The `HEGEL_DERANDOMIZE` environment variable, when set and
+    /// non-empty, overrides this value at runtime: `true`, `1` or `yes`
+    /// turns it on and `false`, `0` or `no` turns it off, whatever the
+    /// profile or the test's own settings say.
     pub fn derandomize(mut self, derandomize: bool) -> Self {
         self.derandomize = derandomize;
         self
@@ -285,12 +332,19 @@ impl Settings {
     }
 
     /// Print a copy-pasteable `#[hegel::reproduce_failure("…")]` line for the
-    /// counterexample when a test fails. Defaults to `false`.
+    /// counterexample when a test fails. Defaults to `true`: on CI, with the
+    /// database disabled, the blob is the way to reproduce a failure locally.
     ///
-    /// This setting only controls printing. A failure without a blob — an
-    /// unconfirmed nondeterministic failure reported caveat-only, or one
-    /// reproduced from a blob replay — prints no reproducer line. Has
-    /// effect only on the native backend.
+    /// The reproduce blob is always *attached* to a failure that has one, and
+    /// this setting only controls whether it is printed to the failure
+    /// output. A failure without a blob — an unconfirmed nondeterministic
+    /// failure reported caveat-only, or one reproduced from a blob replay —
+    /// prints no reproducer line. Has effect only on the native backend.
+    ///
+    /// The `HEGEL_PRINT_BLOB` environment variable, when set and non-empty,
+    /// overrides this value at runtime: `true`, `1` or `yes` turns it on
+    /// and `false`, `0` or `no` turns it off, so a failure can be turned
+    /// into a reproducer line for one run without editing the test.
     pub fn print_blob(mut self, print_blob: bool) -> Self {
         self.print_blob = print_blob;
         self
@@ -301,6 +355,30 @@ impl Settings {
     /// Health checks detect common issues like excessive filtering or slow
     /// tests. Use this to suppress specific checks when they are expected.
     /// Replaces any previously configured suppressions, like [`Settings::phases`].
+    ///
+    /// Suppressing [`HealthCheck::TestCasesTooLarge`] also removes the limit
+    /// on the number of choices a single test case may make, which is
+    /// otherwise 2^20 (1,048,576). Every draw counts as at least one choice,
+    /// as does each element of a collection, each step of a state machine,
+    /// and each cloned [`TestCase`](crate::TestCase); a test case that
+    /// reaches the limit is stopped and discarded. Suppress the check for a
+    /// test case that is meant to run for a long time, such as a concurrent
+    /// state machine driven for hours:
+    ///
+    /// ```no_run
+    /// use hegel::{HealthCheck, TestCase};
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test(test_cases = 1, suppress_health_check = [HealthCheck::TestCasesTooLarge])]
+    /// fn soak(tc: TestCase) {
+    ///     for _ in 0..5_000_000 {
+    ///         let _: u8 = tc.draw(gs::integers());
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// The engine records every choice a test case makes, so an unlimited
+    /// test case's memory grows with its length.
     ///
     /// # Example
     ///
@@ -369,13 +447,33 @@ impl Settings {
                 self.show_statistics = true;
             }
         }
+        if let Some(value) = env("HEGEL_SEED") {
+            if !value.is_empty() {
+                self.seed = if value == "none" {
+                    None
+                } else {
+                    match value.parse::<u64>() {
+                        Ok(n) => Some(n),
+                        Err(_) => panic!("HEGEL_SEED must be an integer or 'none', got {value:?}"),
+                    }
+                };
+            }
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_DERANDOMIZE") {
+            self.derandomize = b;
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB") {
+            self.print_blob = b;
+        }
         self
     }
 
     /// The settings a `#[hegel::main]` binary runs with: one test case, with
     /// the `TooSlow` and `TestCasesTooLarge` health checks suppressed, since
     /// both measure how valid test cases accumulate over a run and a run of
-    /// one has nothing to measure.
+    /// one has nothing to measure. Suppressing `TestCasesTooLarge` also
+    /// removes the choice limit, which suits a binary's one test case: it is
+    /// typically meant to run for a long time.
     pub(crate) fn for_single_test_case(mut self) -> Self {
         self.test_cases = 1;
         for check in [HealthCheck::TooSlow, HealthCheck::TestCasesTooLarge] {
@@ -415,6 +513,22 @@ pub(crate) enum Database {
     Path(String),
 }
 
+/// Why [`Settings::try_from_profile`] could not resolve a profile: the name
+/// is unknown, or a `hegel.toml` is malformed. The `Display` impl carries
+/// the engine's diagnostic.
+#[derive(Debug, Clone)]
+pub struct ProfileError {
+    pub(crate) message: String,
+}
+
+impl std::fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProfileError {}
+
 #[doc(hidden)]
 pub fn hegel<F>(test_fn: F)
 where
@@ -427,29 +541,33 @@ fn env_var(key: &str) -> Option<String> {
     std::env::var_os(key).map(|value| value.to_string_lossy().into_owned())
 }
 
-fn is_in_ci() -> bool {
-    is_in_ci_from(env_var)
+/// The boolean vocabulary shared by the `--derandomize` flag and the
+/// boolean environment overrides.
+pub(crate) fn parse_bool(s: &str) -> Option<bool> {
+    match s {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
 }
 
-fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
-    const CI_VARS: &[(&str, Option<&str>)] = &[
-        ("CI", None),
-        ("TF_BUILD", Some("true")),
-        ("BUILDKITE", Some("true")),
-        ("CIRCLECI", Some("true")),
-        ("CIRRUS_CI", Some("true")),
-        ("CODEBUILD_BUILD_ID", None),
-        ("GITHUB_ACTIONS", Some("true")),
-        ("GITLAB_CI", None),
-        ("HEROKU_TEST_RUN_ID", None),
-        ("TEAMCITY_VERSION", None),
-        ("bamboo.buildKey", None),
-    ];
+fn env_bool(env: impl Fn(&str) -> Option<String>, key: &str) -> Option<bool> {
+    let value = env(key).filter(|value| !value.is_empty())?;
+    match parse_bool(&value) {
+        Some(b) => Some(b),
+        None => panic!("{key} must be true or false, got {value:?}"),
+    }
+}
 
-    CI_VARS.iter().any(|(key, value)| match value {
-        None => env(key).is_some(),
-        Some(expected) => env(key).as_deref() == Some(expected),
-    })
+/// Where a test is defined, as the `#[hegel::test]` and `#[hegel::main]`
+/// macros record it: passed to the engine, which reports the test's verdict
+/// against it when running under [Antithesis](https://antithesis.com/).
+#[doc(hidden)]
+pub struct TestLocation {
+    pub function: String,
+    pub file: String,
+    pub class: String,
+    pub begin_line: u32,
 }
 
 #[doc(hidden)]
@@ -512,14 +630,14 @@ where
     /// generating fresh test cases.
     ///
     /// A failure blob encodes a counterexample: the choice sequence of a
-    /// deterministic failure, or the stored failing timelines of a
-    /// nondeterministic one. Enable [`print_blob`](Settings::print_blob) to
-    /// have a native failure print one. When set, [`run`](Self::run) replays
-    /// the blob — a deterministic blob up to four times, each attempt free
-    /// to draw fresh values past the recorded choices, stopping at the first
-    /// failure; a nondeterministic blob's stored timelines until one fails,
-    /// under a replay budget — bypassing generation and shrinking, so you
-    /// can reproduce a CI failure locally.
+    /// deterministic failure, or the counterexample graph of a
+    /// nondeterministic one. A native failure prints one while
+    /// [`print_blob`](Settings::print_blob) is true. When set,
+    /// [`run`](Self::run) replays the blob — a deterministic blob up to four
+    /// times, each attempt free to draw fresh values past the recorded
+    /// choices, stopping at the first failure; a nondeterministic blob's
+    /// graph until a replay fails, under a replay budget — bypassing
+    /// generation and shrinking, so you can reproduce a CI failure locally.
     ///
     /// First-wins: if a blob is already set, further calls are ignored.
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated

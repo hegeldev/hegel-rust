@@ -21,6 +21,7 @@ fn main() {
             .database(None)
             .derandomize(true)
             .test_cases(500)
+            .print_blob(false)
             .report_multiple_failures(true),
     )
     .run();

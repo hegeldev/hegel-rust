@@ -19,15 +19,15 @@ fn antithesis_jsonl_fixture(tc: hegel::TestCase) {
     let _ = tc.draw(gs::booleans());
 }
 
-/// The source line of the `#[hegel::test]` attribute on
-/// `antithesis_jsonl_fixture`, which the SDK reports as the assertion
-/// location's `begin_line`. Scanned from this file's own source so the
-/// assertion doesn't break when the file is edited.
-fn jsonl_fixture_begin_line() -> u64 {
+/// The source line of the `#[hegel::test]` attribute on the fixture named
+/// `fixture`, which the SDK reports as the assertion location's
+/// `begin_line`. Scanned from this file's own source so the assertion
+/// doesn't break when the file is edited.
+fn fixture_begin_line(fixture: &str) -> u64 {
     let lines: Vec<&str> = include_str!("test_antithesis.rs").lines().collect();
     let fn_line = lines
         .iter()
-        .position(|l| l.starts_with("fn antithesis_jsonl_fixture"))
+        .position(|l| l.starts_with(&format!("fn {fixture}(")))
         .expect("fixture fn not found in source")
         + 1;
     let attr_line = lines[..fn_line - 1]
@@ -62,7 +62,7 @@ fn test_antithesis_jsonl_written_when_env_set() {
         "function": "antithesis_jsonl_fixture",
         "file": "tests/test_antithesis.rs",
         "class": "test_antithesis",
-        "begin_line": jsonl_fixture_begin_line(),
+        "begin_line": fixture_begin_line("antithesis_jsonl_fixture"),
         "begin_column": 0,
     });
 
@@ -99,6 +99,61 @@ fn test_antithesis_jsonl_written_when_env_set() {
     );
 }
 
+#[hegel::test]
+#[ignore = "fixture: run via exec::self_test"]
+fn antithesis_failing_jsonl_fixture(tc: hegel::TestCase) {
+    let _ = tc.draw(gs::booleans());
+    panic!("the property does not hold");
+}
+
+/// A failing test is reported to Antithesis exactly once: the run reports
+/// its verdict, and the final replay of the counterexample that re-raises
+/// the failure does not report a second time.
+#[test]
+fn test_a_failing_test_reports_its_verdict_once() {
+    let output_dir = TempDir::new().unwrap();
+    let output_path = output_dir.path().to_str().unwrap().to_string();
+
+    self_test("antithesis_failing_jsonl_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", &output_path)
+        .expect_failure("the property does not hold")
+        .run();
+
+    let contents = std::fs::read_to_string(output_dir.path().join("sdk.jsonl")).unwrap();
+    let events: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    let expected_id = "test_antithesis::antithesis_failing_jsonl_fixture passes properties";
+    let expected_location = serde_json::json!({
+        "function": "antithesis_failing_jsonl_fixture",
+        "file": "tests/test_antithesis.rs",
+        "class": "test_antithesis",
+        "begin_line": fixture_begin_line("antithesis_failing_jsonl_fixture"),
+        "begin_column": 0,
+    });
+    let event = |hit: bool, condition: bool| {
+        serde_json::json!({
+            "antithesis_assert": {
+                "hit": hit,
+                "must_hit": true,
+                "assert_type": "always",
+                "display_type": "Always",
+                "condition": condition,
+                "id": expected_id,
+                "message": expected_id,
+                "location": expected_location,
+            }
+        })
+    };
+    assert_eq!(
+        events,
+        [event(false, false), event(true, false)],
+        "{contents}"
+    );
+}
+
 #[test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_plain_run_fixture() {
@@ -120,8 +175,9 @@ fn test_nonexistent_antithesis_output_dir_panics() {
 }
 
 /// Filters out every input. Outside Antithesis this trips the
-/// `FilterTooMuch` health check; inside Antithesis health checks are off, so
-/// the run ends quietly with no valid inputs.
+/// `FilterTooMuch` health check; inside Antithesis the `workload` profile
+/// suppresses every health check, so the run ends quietly with no valid
+/// inputs.
 #[hegel::test]
 #[ignore = "fixture: run via exec::self_test"]
 fn antithesis_filter_everything_fixture(tc: hegel::TestCase) {
@@ -134,6 +190,16 @@ fn test_health_checks_are_disabled_in_antithesis() {
     let output_dir = TempDir::new().unwrap();
     self_test("antithesis_filter_everything_fixture")
         .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .run();
+}
+
+#[test]
+fn test_health_checks_run_in_antithesis_under_a_profile_that_does_not_extend_antithesis() {
+    let output_dir = TempDir::new().unwrap();
+    self_test("antithesis_filter_everything_fixture")
+        .env("ANTITHESIS_OUTPUT_DIR", output_dir.path().to_str().unwrap())
+        .env("HEGEL_DEFAULT_PROFILE", "base")
+        .expect_failure("FailedHealthCheck: FilterTooMuch")
         .run();
 }
 

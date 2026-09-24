@@ -10,6 +10,7 @@
 //! match the equivalent `gs::booleans()` / `gs::integers()` draws.
 
 use super::*;
+use crate::native::core::BUFFER_SIZE;
 use crate::native::core::choices::BooleanChoice;
 use alloc::vec;
 
@@ -59,10 +60,12 @@ fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
         vec![0],
+        vec![1.0],
         alloc::vec::Vec::new(),
         alloc::vec::Vec::new(),
         2,
         2,
+        50,
     ) {
         Ok(_) => Ok(()),
         Err(_) => Err(TestCaseResult::Overrun),
@@ -320,7 +323,10 @@ fn cached_test_function_serves_interesting_from_cache_with_origin_and_spans() {
             assert_eq!(second.spans[0].label, "7");
             assert_eq!(second.spans[0].start, 0);
             assert_eq!(second.spans[0].end, 1);
-            assert_eq!(second.spans[1].label, "28");
+            assert_eq!(
+                second.spans[1].label,
+                crate::native::draws::LABEL_BOOLEAN.to_string()
+            );
             assert_eq!(second.spans[1].parent, Some(0));
         },
     );
@@ -771,6 +777,41 @@ fn span_mutation_returns_interesting_proposal() {
     );
 }
 
+/// A recursive value's span and its first sub-value's span share a label
+/// and a start; whichever the probe picks as the donor, the proposal must
+/// splice without reaching outside the choice sequence.
+#[test]
+fn span_mutation_handles_same_label_spans_sharing_a_start() {
+    with_counting_ctx(
+        |ds| {
+            for _ in 0..3 {
+                if rbool(ds).is_err() {
+                    return TestCaseResult::Overrun;
+                }
+            }
+            TestCaseResult::Valid
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true), bool_node(false)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: "L".to_string(),
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 3), span(0, 1)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert!(count.get() >= 1);
+            assert_eq!(ctx.calls as usize, count.get());
+            assert!(!ctx.origins.any_live());
+        },
+    );
+}
+
 #[test]
 fn span_mutation_stops_when_example_budget_is_full() {
     with_counting_ctx(
@@ -846,20 +887,14 @@ fn span_mutation_extends_diverged_proposals_with_random_draws() {
 #[test]
 fn create_rng_default_backend_is_prng() {
     let settings = Settings::new().seed(Some(123));
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Prng(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Prng(_)));
 }
 
 #[cfg(unix)]
 #[test]
 fn create_rng_urandom_backend_reads_urandom() {
     let settings = Settings::new().backend(crate::settings::Backend::Urandom);
-    assert!(matches!(
-        create_rng(&settings, None),
-        Ok(EngineRng::Urandom(_))
-    ));
+    assert!(matches!(create_rng(&settings, None), EngineRng::Urandom(_)));
 }
 
 /// Drive [`reproduce_blob`] to completion with a synchronous body.
@@ -992,11 +1027,11 @@ fn a_truly_stale_v1_blob_still_reports_stale_within_budget() {
 /// none for a clone stream, which opens no span of its own.
 fn kind_label(value: &ChoiceValue) -> Option<u64> {
     match value {
-        ChoiceValue::Integer(_) => Some(26),
-        ChoiceValue::Float(_) => Some(27),
-        ChoiceValue::Boolean(_) => Some(28),
-        ChoiceValue::Bytes(_) => Some(29),
-        ChoiceValue::String(_) => Some(30),
+        ChoiceValue::Integer(_) => Some(crate::native::draws::LABEL_INTEGER),
+        ChoiceValue::Float(_) => Some(crate::native::draws::LABEL_FLOAT),
+        ChoiceValue::Boolean(_) => Some(crate::native::draws::LABEL_BOOLEAN),
+        ChoiceValue::Bytes(_) => Some(crate::native::draws::LABEL_BYTES),
+        ChoiceValue::String(_) => Some(crate::native::draws::LABEL_STRING),
         ChoiceValue::Clone(_) => None,
     }
 }
@@ -1369,29 +1404,36 @@ fn too_large_check_quiet_when_enough_valid_cases() {
 
 #[test]
 fn large_initial_check_reports_on_overrun() {
-    let msg = large_initial_check(true, Status::Invalid, 0, false);
+    let msg = large_initial_check(true, Status::Invalid, 0, BUFFER_SIZE, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
 
 #[test]
 fn large_initial_check_reports_on_large_valid_example() {
-    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, false);
+    let msg = large_initial_check(false, Status::Valid, BUFFER_SIZE, BUFFER_SIZE, false);
     assert!(msg.unwrap().contains("LargeInitialTestCase"));
 }
 
 #[test]
+fn large_initial_check_never_fires_on_size_without_a_bound() {
+    assert!(large_initial_check(false, Status::Valid, usize::MAX, usize::MAX, false).is_none());
+}
+
+#[test]
 fn large_initial_check_quiet_for_small_valid_example() {
-    assert!(large_initial_check(false, Status::Valid, 1, false).is_none());
+    assert!(large_initial_check(false, Status::Valid, 1, BUFFER_SIZE, false).is_none());
 }
 
 #[test]
 fn large_initial_check_quiet_when_suppressed() {
-    assert!(large_initial_check(true, Status::Invalid, 0, true).is_none());
+    assert!(large_initial_check(true, Status::Invalid, 0, BUFFER_SIZE, true).is_none());
 }
 
 #[test]
 fn large_initial_check_quiet_for_interesting() {
-    assert!(large_initial_check(false, Status::Interesting, BUFFER_SIZE, false).is_none());
+    assert!(
+        large_initial_check(false, Status::Interesting, BUFFER_SIZE, BUFFER_SIZE, false).is_none()
+    );
 }
 
 #[test]
@@ -1550,6 +1592,45 @@ fn reuse_randomly_samples_secondary_corpus_when_it_overflows_the_shortfall() {
     assert!(
         result.map(|r| !r.failures.is_empty()).unwrap_or(false),
         "a sampled secondary entry must still reproduce the bug"
+    );
+}
+
+#[test]
+fn reuse_skips_secondary_corpus_once_a_primary_entry_reproduces() {
+    use crate::native::bignum::BigInt;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4242))]).unwrap(),
+    );
+    let secondary_key = crate::native::database::sub_key(b"k", b"secondary");
+    db.save(
+        &secondary_key,
+        &serialize_choices(&[ChoiceValue::Integer(BigInt::from(4243))]).unwrap(),
+    );
+
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .phases([Phase::Reuse])
+            .test_cases(10)
+            .report_multiple_failures(true)
+            .verbosity(Verbosity::Quiet),
+        "k",
+        |ds| match rint(ds, i64::MIN, i64::MAX) {
+            Ok(4242) => boom("primary bug"),
+            Ok(4243) => boom("secondary bug"),
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert_eq!(result.failures.len(), 1);
+    assert!(
+        result.failures[0].origin.contains("primary bug"),
+        "the secondary entry must not be replayed once a primary entry reproduces"
     );
 }
 
@@ -1975,6 +2056,35 @@ fn a_flipped_reuse_run_persists_v2_entries() {
         db.fetch(&secondary).contains(&seeded),
         "the stale v1 entry is demoted, not deleted"
     );
+}
+
+#[test]
+fn debug_runs_log_the_loaded_config_path() {
+    use std::sync::{Arc, Mutex};
+    for (path, expected) in [
+        (Some("/a/hegel.toml"), "loaded config: /a/hegel.toml"),
+        (None, "no config file loaded"),
+    ] {
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = Arc::clone(&lines);
+        let mut settings = Settings::new()
+            .database(None)
+            .test_cases(2)
+            .verbosity(Verbosity::Debug)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            }));
+        settings.config_path = path.map(String::from);
+        reuse_run(settings, "k", |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        })
+        .unwrap();
+        assert!(
+            lines.lock().unwrap().iter().any(|l| l == expected),
+            "missing {expected:?}"
+        );
+    }
 }
 
 #[test]
@@ -3179,7 +3289,7 @@ fn the_evidence_batch_replays_the_graph_it_grafts_into() {
         async |ctx| {
             let origin = format!("Panic: {bug}");
             ctx.nd_flip();
-            let boolean = crate::hegel_label_t::HEGEL_LABEL_BOOLEAN as u64;
+            let boolean = crate::native::draws::LABEL_BOOLEAN;
             let raw = Arc::new(Graph::from_run(&Run {
                 steps: vec![
                     crate::native::graph::Step {
@@ -4642,6 +4752,7 @@ fn nd_reports_each_origin_with_its_own_caveat_and_blob() {
     let mut settings = Settings::new()
         .database(None)
         .test_cases(30)
+        .report_multiple_failures(true)
         .verbosity(Verbosity::Quiet);
     settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
@@ -5501,23 +5612,26 @@ fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
 
 /// [`branching_body`]'s failing odd-execution run: true, then span 1 with
 /// true, true, 42.
+const BOOL: u64 = crate::native::draws::LABEL_BOOLEAN;
+const INT: u64 = crate::native::draws::LABEL_INTEGER;
+
 fn branch_s() -> Run {
     Run {
         steps: vec![
             crate::native::graph::Step {
-                addr: vec![(28, 0)],
+                addr: vec![(BOOL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (28, 0)],
+                addr: vec![(1, 0), (BOOL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (28, 1)],
+                addr: vec![(1, 0), (BOOL, 1)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (26, 0)],
+                addr: vec![(1, 0), (INT, 0)],
                 value: ChoiceValue::Integer(BigInt::from(42)),
             },
         ],
@@ -5530,15 +5644,15 @@ fn branch_t() -> Run {
     Run {
         steps: vec![
             crate::native::graph::Step {
-                addr: vec![(28, 0)],
+                addr: vec![(BOOL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(2, 0), (26, 0)],
+                addr: vec![(2, 0), (INT, 0)],
                 value: ChoiceValue::Integer(BigInt::from(7)),
             },
             crate::native::graph::Step {
-                addr: vec![(2, 0), (26, 1)],
+                addr: vec![(2, 0), (INT, 1)],
                 value: ChoiceValue::Integer(BigInt::from(9)),
             },
         ],
@@ -5566,11 +5680,11 @@ fn branch_s_witness() -> RunResult {
         discarded: false,
     };
     witness.spans = vec![
-        span(28, 0, 1, 0, None),
+        span(BOOL, 0, 1, 0, None),
         span(1, 1, 4, 0, None),
-        span(28, 1, 2, 1, Some(1)),
-        span(28, 2, 3, 1, Some(1)),
-        span(26, 3, 4, 1, Some(1)),
+        span(BOOL, 1, 2, 1, Some(1)),
+        span(BOOL, 2, 3, 1, Some(1)),
+        span(INT, 3, 4, 1, Some(1)),
     ];
     assert_eq!(run_of(&witness), branch_s());
     witness
@@ -5918,6 +6032,7 @@ fn nd_shrinking_never_lowers_the_failure_probability_at_the_noise_floor() {
     let mut settings = Settings::new()
         .database(None)
         .test_cases(30)
+        .report_multiple_failures(true)
         .verbosity(Verbosity::Quiet);
     settings.nd_force = true;
     let result = reuse_run(settings, "k", |ds| {
@@ -6137,7 +6252,7 @@ fn an_origin_admitted_during_the_final_replay_is_not_blobbed() {
 #[test]
 fn unconfirmed_origins_report_caveat_only_when_nothing_confirmed() {
     with_engine(
-        nd_settings(),
+        nd_settings().report_multiple_failures(true),
         None,
         |_ds| TestCaseResult::Valid,
         async |ctx| {
@@ -7509,6 +7624,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     let settings = Settings::new()
         .database(Some(path))
         .phases([Phase::Reuse, Phase::Shrink])
+        .report_multiple_failures(true)
         .verbosity(Verbosity::Quiet);
     let result = run_main_sync(
         &settings,
@@ -7845,7 +7961,7 @@ fn the_warn_notice_is_suppressed_in_antithesis() {
     let sink = Arc::clone(&lines);
     let seen_bug = AtomicBool::new(false);
     let result = reuse_run(
-        Settings::for_env(false, true)
+        Settings::base(true)
             .phases([Phase::Generate, Phase::Shrink])
             .report_multiple_failures(false)
             .nondeterminism_strictness(NondeterminismStrictness::Warn)

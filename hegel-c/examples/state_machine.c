@@ -62,9 +62,9 @@ int main(void) {
         hegel_state_machine_t *machine;
         int64_t concurrency;
         if (hegel_new_state_machine(ctx, tc,
-                                    RULES, RULE_GROUPS, NUM_RULES,
+                                    RULES, RULE_GROUPS, NULL, NUM_RULES,
                                     INVARIANTS, NULL, NUM_INVARIANTS,
-                                    1, 1, &machine, &concurrency) != HEGEL_OK) {
+                                    1, 1, 50, &machine, &concurrency) != HEGEL_OK) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;

@@ -15,6 +15,7 @@ pub mod floats;
 pub(crate) mod graph;
 pub(crate) mod graph_shrink;
 pub mod intervalsets;
+pub mod labels;
 pub(crate) mod nd;
 pub mod printer;
 pub mod re;

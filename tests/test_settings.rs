@@ -118,6 +118,88 @@ fn test_hegel_database_env_disables_database() {
         .run();
 }
 
+/// Fixture for `test_hegel_seed_env_overrides_a_fixed_seed`, run via
+/// self-exec: prints the sequence a compiled-in seed of 4242 draws, so the
+/// parent can tell whether `HEGEL_SEED` replaced that seed.
+#[test]
+#[ignore = "fixture: run via exec::self_test"]
+fn env_seed_fixture() {
+    hegel::Hegel::new(|tc| {
+        println!("DRAW:{}", tc.draw(gs::integers::<u64>()));
+    })
+    .settings(
+        hegel::Settings::new()
+            .seed(Some(4242))
+            .derandomize(false)
+            .test_cases(32)
+            .database(None),
+    )
+    .run();
+}
+
+fn seed_fixture_draws(seed: Option<&str>) -> Vec<String> {
+    let mut cmd = self_test("env_seed_fixture").env_remove("HEGEL_SEED");
+    if let Some(seed) = seed {
+        cmd = cmd.env("HEGEL_SEED", seed);
+    }
+    cmd.run()
+        .stdout
+        .lines()
+        .filter(|line| line.starts_with("DRAW:"))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn test_hegel_seed_env_overrides_a_fixed_seed() {
+    let compiled_in = seed_fixture_draws(None);
+    let seven = seed_fixture_draws(Some("7"));
+    let seven_again = seed_fixture_draws(Some("7"));
+    let nine = seed_fixture_draws(Some("9"));
+    assert_eq!(seven.len(), 32);
+    assert_eq!(seven, seven_again);
+    assert_ne!(seven, compiled_in);
+    assert_ne!(seven, nine);
+}
+
+/// Fixture for `test_hegel_print_blob_env_overrides_an_explicit_setting`,
+/// run via self-exec: a failing property whose settings turn `print_blob`
+/// off, so a reproducer line in its output can only come from
+/// `HEGEL_PRINT_BLOB=true`.
+#[test]
+#[ignore = "fixture: run via exec::self_test"]
+fn env_print_blob_fixture() {
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        let n = tc.draw(gs::integers::<u8>().min_value(1));
+        assert_eq!(n, 0);
+    })
+    .settings(
+        hegel::Settings::new()
+            .test_cases(1)
+            .derandomize(true)
+            .print_blob(false)
+            .database(None),
+    )
+    .run();
+}
+
+#[test]
+fn test_hegel_print_blob_env_overrides_an_explicit_setting() {
+    let without = self_test("env_print_blob_fixture")
+        .env_remove("HEGEL_PRINT_BLOB")
+        .expect_failure("assertion `left == right` failed")
+        .run();
+    assert!(
+        !without.stderr.contains("reproduce_failure("),
+        "unexpected reproducer line:\n{}",
+        without.stderr
+    );
+    self_test("env_print_blob_fixture")
+        .env("HEGEL_PRINT_BLOB", "true")
+        .expect_failure(r#"#\[hegel::reproduce_failure\("[A-Za-z0-9+/=_-]+"\)\]"#)
+        .run();
+}
+
 #[test]
 fn test_settings_verbosity_debug() {
     let mut count = 0;

@@ -1,7 +1,7 @@
 use crate::native::HashMap;
 use alloc::vec::Vec;
 
-use crate::native::bignum::{BigInt, ToPrimitive};
+use crate::native::bignum::{BigInt, Sign, ToPrimitive};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{
     ChoiceData, ChoiceNode, ChoiceValue, FloatChoice, float_to_index, index_to_float, sort_key,
@@ -50,7 +50,11 @@ impl<'a> Shrinker<'a> {
     /// Shrink float choices toward simpler values using the float lex ordering.
     ///
     /// Steps per float node:
-    /// 1. Try replacing with simplest().
+    /// 1. Try replacing with simplest(), then with the simplest non-zero
+    ///    value. The second is the answer for a predicate that rejects zero
+    ///    inside a bounded range, where the index bisection of step 4 is not
+    ///    monotone: below the simplest in-range value every index decodes
+    ///    out of range, and above it in- and out-of-range values interleave.
     /// 2. From ±inf, try ±f64::MAX (and -inf → +inf). Needed because the
     ///    later integer search saturates well below f64::MAX (i128::MAX as
     ///    f64 ≪ f64::MAX) and the lex-index bisection never lands on MAX's
@@ -82,6 +86,15 @@ impl<'a> Shrinker<'a> {
                 if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
                     self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
                         .await?;
+                }
+
+                let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
+                if v != 0.0 {
+                    let s = fc.simplest_nonzero()?;
+                    if ChoiceValue::Float(s) != ChoiceValue::Float(v) {
+                        self.replace(&HashMap::from_iter([(i, ChoiceValue::Float(s))]))
+                            .await?;
+                    }
                 }
 
                 let v = self.float_at(i).ok_or(PassExit::NodeGone)?;
@@ -357,6 +370,167 @@ impl<'a> Shrinker<'a> {
         }
         Ok(())
     }
+
+    /// Trade magnitude between nearby numeric pairs along their product.
+    ///
+    /// [`Shrinker::redistribute_integers`] and
+    /// [`Shrinker::redistribute_numeric_pairs`] keep a pair's *sum* fixed,
+    /// the right move under `a + b > c`. Under a bound on a product —
+    /// `a · k > MAX` with `k` in a small range, or `|to − from| > f64::MAX`
+    /// with `to` a few ulps short of the far end of its range — lowering
+    /// the earlier draw needs the later one raised by a proportional
+    /// amount that the sum moves' unit steps never reach. For each pair
+    /// `(i, j)` of two integers or two floats with `j - i <= 4`, both away
+    /// from their shrink targets, this tries the later draw at the far end
+    /// of its range and at twice and ten times its distance from its
+    /// target, with the earlier draw's distance scaled down by the same
+    /// factor so the product of the two distances is kept (integers try
+    /// both roundings), and, for an earlier draw on the wrong side of its
+    /// target, both draws mirrored around their targets. Every attempt
+    /// lowers the earlier draw, so the sort key improves whatever happens
+    /// to the later one, and the single-node passes then finish the
+    /// earlier draw against the raised later one. Repeats on a pair while
+    /// an attempt is accepted.
+    pub(super) async fn scale_numeric_pairs(&mut self) -> ShrinkResult<()> {
+        let len = self.current_nodes.len();
+        for i in 0..len {
+            for gap in 1..=4 {
+                let j = i + gap;
+                if j >= self.current_nodes.len() {
+                    break;
+                }
+                loop {
+                    let (Some(num_i), Some(num_j)) = (
+                        self.current_nodes.get(i).and_then(|n| numeric_at(&n.data)),
+                        self.current_nodes.get(j).and_then(|n| numeric_at(&n.data)),
+                    ) else {
+                        break;
+                    };
+                    let mut accepted = false;
+                    for (val_i, val_j) in scaled_candidates(&num_i, &num_j) {
+                        if self
+                            .replace(&HashMap::from_iter([(i, val_i), (j, val_j)]))
+                            .await?
+                        {
+                            accepted = true;
+                            break;
+                        }
+                    }
+                    if !accepted {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The factors by which [`Shrinker::scale_numeric_pairs`] raises the later
+/// draw's distance from its target, after trying the far end of its range.
+const SCALE_FACTORS: [u32; 2] = [2, 10];
+
+/// The `(earlier, later)` replacements [`Shrinker::scale_numeric_pairs`]
+/// tries for a pair, in order: the mirror of a pair whose earlier draw is
+/// below its target, then the later draw at its far bound and at each of
+/// [`SCALE_FACTORS`] times its distance, with the earlier draw scaled down
+/// to keep the product of the distances. Empty for a mixed integer/float
+/// pair, or when either draw sits at its target.
+fn scaled_candidates(num_i: &Numeric, num_j: &Numeric) -> Vec<(ChoiceValue, ChoiceValue)> {
+    match (num_i, num_j) {
+        (Numeric::Integer(ic_i, v_i), Numeric::Integer(ic_j, v_j)) => {
+            scaled_integer_candidates(ic_i, v_i, ic_j, v_j)
+        }
+        (Numeric::Float(fc_i, v_i), Numeric::Float(fc_j, v_j)) => {
+            scaled_float_candidates(fc_i, *v_i, fc_j, *v_j)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn scaled_integer_candidates(
+    ic_i: &IntegerChoice,
+    v_i: &BigInt,
+    ic_j: &IntegerChoice,
+    v_j: &BigInt,
+) -> Vec<(ChoiceValue, ChoiceValue)> {
+    let (t_i, t_j) = (ic_i.clamped_shrink_towards(), ic_j.clamped_shrink_towards());
+    let (d_i, d_j) = (v_i - &t_i, v_j - &t_j);
+    if d_i.sign() == Sign::NoSign || d_j.sign() == Sign::NoSign {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut push = |a: BigInt, b: BigInt| {
+        if ic_i.validate(&a) && ic_j.validate(&b) {
+            out.push((ChoiceValue::Integer(a), ChoiceValue::Integer(b)));
+        }
+    };
+    if d_i.sign() == Sign::Minus {
+        push(&t_i - &d_i, &t_j - &d_j);
+    }
+    let bound = if d_j.sign() == Sign::Plus {
+        &ic_j.max_value - &t_j
+    } else {
+        &ic_j.min_value - &t_j
+    };
+    let scaled: Vec<BigInt> = SCALE_FACTORS
+        .iter()
+        .map(|&f| &d_j * BigInt::from(f))
+        .collect();
+    let step_i = BigInt::from(if d_i.sign() == Sign::Plus { 1 } else { -1 });
+    for raised in core::iter::once(bound).chain(scaled) {
+        if raised.magnitude() <= d_j.magnitude() {
+            continue;
+        }
+        let quotient_magnitude = (d_i.magnitude() * d_j.magnitude()) / raised.magnitude();
+        let quotient = if d_i.sign() == Sign::Minus {
+            -BigInt::from(quotient_magnitude)
+        } else {
+            BigInt::from(quotient_magnitude)
+        };
+        for scaled_i in [quotient.clone(), &quotient + &step_i] {
+            if scaled_i.magnitude() < d_i.magnitude() {
+                push(&t_i + &scaled_i, &t_j + &raised);
+            }
+        }
+    }
+    out
+}
+
+fn scaled_float_candidates(
+    fc_i: &FloatChoice,
+    v_i: f64,
+    fc_j: &FloatChoice,
+    v_j: f64,
+) -> Vec<(ChoiceValue, ChoiceValue)> {
+    if !v_i.is_finite() || !v_j.is_finite() || v_i == 0.0 || v_j == 0.0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut push = |a: f64, b: f64| {
+        if fc_i.validate(a) && fc_j.validate(b) {
+            out.push((ChoiceValue::Float(a), ChoiceValue::Float(b)));
+        }
+    };
+    if v_i.is_sign_negative() {
+        push(-v_i, -v_j);
+    }
+    let bound = if v_j > 0.0 {
+        fc_j.max_value.min(f64::MAX)
+    } else {
+        fc_j.min_value.max(-f64::MAX)
+    };
+    let scaled = SCALE_FACTORS.iter().map(|&f| v_j * f64::from(f));
+    for raised in core::iter::once(bound).chain(scaled) {
+        if !raised.is_finite() || raised.abs() <= v_j.abs() {
+            continue;
+        }
+        let scaled_i = v_i * (v_j / raised);
+        if scaled_i.abs() < v_i.abs() {
+            push(scaled_i, raised);
+        }
+    }
+    out
 }
 
 /// A numeric (integer or float) constraint/value pair, extracted from a

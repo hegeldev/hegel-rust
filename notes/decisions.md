@@ -1165,3 +1165,37 @@ Append-only. Each entry: the decision, rejected alternatives, rationale. "DRM" =
     730 executions (the pool's 4 727) and reproduces 60/60, but half its stored paths
     (4 of 8) are runs the body cannot make, `branch` likewise in 12/20. (Found by measurement — DRM: "Sounds good. Please do." to the measurement
     proposed at the end of decision 78's turn.)
+
+## 2026-09-24
+
+80. **Main merged in (`origin/main` at `6237563f`); the branch's settings join the profile
+    system and its tests speak main's labels.** 125 commits of main since the last merge
+    (`eb1930b7`): the profile system (`hegel.toml`, shipped `development`/`ci`/`workload`
+    profiles, `hegel_settings_new_for_profile`, getters for every setting), the
+    `stateful::Machine` builder with a per-machine `step_count` argument to
+    `hegel_new_state_machine` (replacing the `stateful_step_count` setting), opaque hashed
+    span labels (`hegel_label_from_name`/`hegel_label_combine`; the `hegel_label_t` enum is
+    gone), Antithesis reporting moved into libhegel (`hegel_settings_set_test_location`,
+    the engine reports the run's verdict once), the choice limit (`BUFFER_SIZE` 2^20,
+    `unbounded_choices`), rule weights, wasm support, and four shrinking improvements. The
+    branch's resolutions: `nondeterminism_strictness` is a profile setting like the rest —
+    `ProfileDelta` field, `hegel.toml` key (`quiet|warn|error`), the new
+    `hegel_settings_get_nondeterminism_strictness` getter the frontend's `read_settings`
+    needs, a row in the settings page; `nd_force` stays test-only. Main's concurrent-machine
+    regime (`Engine.nondeterministic`, `reject_concurrent_machine`, the "Concurrent state
+    machine detected" notice and its tests) is dropped where the merge revived it — decision
+    70 stands. The engine-owned final replay and `hegel_run_start_blob` stay; the blob-replay
+    run now carries the settings' Antithesis reporter like `hegel_run_start`, since the
+    frontend no longer reports. `stateful_step_count` leaves the engine's `Settings` and
+    `FamilyCore` (main's per-machine argument does the job). Two semantic drifts surfaced
+    only by the engine's own suite, which CI does not run outside the coverage job: the ND
+    tests built counterexample graphs with the retired label numbers (26 = integer, 28 =
+    boolean), so under hashed labels every graph walk misjoined and 22 tests failed for one
+    reason — the helpers now use `draws::LABEL_*`; and `report_multiple_failures` now
+    defaults to `false` in the base profile, so the three tests that count two origins set it.
+    One main bug found by a branch test: `descend_index` (main's new geometric index
+    descent) indexed `current_nodes[i]` before its own bounds check, panicking when an
+    adopted candidate is shorter than the node index; the guard moves first. Merge commit
+    carries both pending release files: `hegel-c/RELEASE.md` (minor) now also holds main's
+    pending shrinking notes; the root `RELEASE.md` describes the graph rather than the
+    pool. (DRM: "Please merge in main, fix anything that you regard as high priority.")

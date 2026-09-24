@@ -1,7 +1,12 @@
+use super::{combine_labels, label_from_name};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
-use crate::test_case::{TestCase, invalid_argument, labels};
+use crate::test_case::{TestCase, invalid_argument};
 use std::marker::PhantomData;
 use std::sync::Arc;
+
+const MAP_LABEL: u64 = label_from_name("hegel.map");
+const FLAT_MAP_LABEL: u64 = label_from_name("hegel.flat_map");
+const FILTER_LABEL: u64 = label_from_name("hegel.filter");
 
 /// The core trait for all generators.
 ///
@@ -11,6 +16,27 @@ pub trait Generator<T> {
     /// Produce a value.
     #[doc(hidden)]
     fn do_draw(&self, tc: &TestCase) -> T;
+
+    /// The label identifying this generator to the engine.
+    ///
+    /// A label is an opaque `u64` with no meaning beyond identity: the engine
+    /// treats two spans with the same label as coming from the same
+    /// generator, and so as candidates for swapping, duplicating and
+    /// reordering when it shrinks and mutates test cases. Two generators that
+    /// draw the same shape of value should share a label, and generators
+    /// that draw different shapes should not.
+    ///
+    /// The default label is derived from the generator's type name, which is
+    /// right for a generator with no component generators. A generator built
+    /// from other generators should combine a label of its own with its
+    /// components' labels, so that, say, a list of integers and a list of
+    /// strings get different labels while every list of integers gets the
+    /// same one; see [`combine_labels`](super::combine_labels) for how. A
+    /// generator that merely wraps another without changing what it draws
+    /// should return the wrapped generator's label.
+    fn label(&self) -> u64 {
+        label_from_name(std::any::type_name::<Self>())
+    }
 
     /// Transform generated values using a function.
     ///
@@ -274,6 +300,10 @@ where
     G: Generator<T>,
     F: Fn(&T, &mut PrettyPrinter) + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
@@ -301,6 +331,10 @@ where
     G: Generator<T>,
     T: PrettyPrintable,
 {
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
@@ -326,6 +360,10 @@ where
     G: Generator<T>,
     T: std::fmt::Debug,
 {
+    fn label(&self) -> u64 {
+        self.source.label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
@@ -346,6 +384,10 @@ where
 }
 
 impl<T, G: Generator<T>> Generator<T> for &G {
+    fn label(&self) -> u64 {
+        (*self).label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
@@ -369,8 +411,12 @@ where
     G: Generator<T>,
     F: Fn(T) -> U + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[MAP_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> U {
-        tc.start_span(labels::MAPPED);
+        tc.start_span(self.label());
         let result = (self.f)(self.source.do_draw(tc));
         tc.stop_span(false);
         result
@@ -449,6 +495,10 @@ where
     G: PrintableGenerator<T>,
     F: Fn(T) -> U + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[MAP_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> U {
         self.do_draw_and_print(tc, &mut PrettyPrinter::noop())
     }
@@ -460,7 +510,7 @@ where
     F: Fn(T) -> U + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
-        tc.start_span(labels::MAPPED);
+        tc.start_span(self.label());
         printer.begin_group(self.open.chars().count(), &self.open);
         let input = tc.draw_and_print(&self.source, printer);
         printer.end_group(")");
@@ -485,7 +535,7 @@ where
     /// The one flat-map body both draw paths run; only how the derived
     /// generator is drawn (silently or printing) is injected.
     fn draw_flat_mapped(&self, tc: &TestCase, draw_next: impl FnOnce(G2, &TestCase) -> U) -> U {
-        tc.start_span(labels::FLAT_MAP);
+        tc.start_span(combine_labels(&[FLAT_MAP_LABEL, self.source.label()]));
         let intermediate = self.source.do_draw(tc);
         let next_gen = (self.f)(intermediate);
         let result = draw_next(next_gen, tc);
@@ -500,6 +550,10 @@ where
     G2: Generator<U>,
     F: Fn(T) -> G2 + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[FLAT_MAP_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> U {
         self.draw_flat_mapped(tc, |next_gen, tc| next_gen.do_draw(tc))
     }
@@ -535,11 +589,12 @@ where
     fn draw_filtered(
         &self,
         tc: &TestCase,
+        label: u64,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
     ) -> T {
         for _ in 0..3 {
-            tc.start_span(labels::FILTER);
+            tc.start_span(label);
             let mut speculation = printer.speculate();
             let value = draw(&self.source, tc, speculation.printer());
             if (self.predicate)(&value) {
@@ -560,10 +615,17 @@ where
     G: Generator<T>,
     F: Fn(&T) -> bool + Send + Sync,
 {
+    fn label(&self) -> u64 {
+        combine_labels(&[FILTER_LABEL, self.source.label()])
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
-        self.draw_filtered(tc, &mut PrettyPrinter::noop(), |source, tc, _| {
-            source.do_draw(tc)
-        })
+        self.draw_filtered(
+            tc,
+            self.label(),
+            &mut PrettyPrinter::noop(),
+            |source, tc, _| source.do_draw(tc),
+        )
     }
 }
 
@@ -573,7 +635,7 @@ where
     F: Fn(&T) -> bool + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        self.draw_filtered(tc, printer, |source, tc, printer| {
+        self.draw_filtered(tc, self.label(), printer, |source, tc, printer| {
             tc.draw_and_print(source, printer)
         })
     }
@@ -593,6 +655,10 @@ impl<T> Clone for BoxedGenerator<'_, T> {
 }
 
 impl<T> Generator<T> for BoxedGenerator<'_, T> {
+    fn label(&self) -> u64 {
+        self.inner.label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
     }
@@ -631,6 +697,10 @@ impl<T> Clone for BoxedPrintableGenerator<'_, T> {
 }
 
 impl<T> Generator<T> for BoxedPrintableGenerator<'_, T> {
+    fn label(&self) -> u64 {
+        self.inner.label()
+    }
+
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
     }

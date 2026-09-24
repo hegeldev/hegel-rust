@@ -2,10 +2,12 @@ mod common;
 
 use common::utils::{assert_matches_regex, capture_hegel_output};
 use hegel::generators as gs;
-use hegel::stateful::{ConcurrentPool, concurrent_pool, run_concurrent};
+use hegel::stateful::{ConcurrentPool, concurrent_pool, machine};
 use hegel::{HealthCheck, Hegel, Settings, TestCase, Verbosity};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     payload
@@ -43,7 +45,7 @@ fn test_concurrent_counter_passes(tc: TestCase) {
     let m = Counter {
         value: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 1, 1);
+    machine(m).run_concurrent(tc);
 }
 
 struct InvariantCounts {
@@ -84,14 +86,9 @@ fn always_run_invariants_run_at_every_join_point() {
             sampled_runs: Arc::clone(&sampled_in),
             always_runs: Arc::clone(&always_in),
         };
-        run_concurrent(m, tc, 1, 1);
+        machine(m).run_concurrent(tc);
     })
-    .settings(
-        Settings::new()
-            .test_cases(20)
-            .stateful_step_count(50)
-            .database(None),
-    )
+    .settings(Settings::new().test_cases(20).database(None))
     .run();
     let rules_run = rules_run.load(Ordering::SeqCst);
     let sampled_runs = sampled_runs.load(Ordering::SeqCst);
@@ -147,7 +144,7 @@ fn test_grouped_machine_passes(tc: TestCase) {
     let m = Grouped {
         log: Mutex::new(Vec::new()),
     };
-    run_concurrent(m, tc, 1, 3);
+    machine(m).max_concurrency(3).run_concurrent(tc);
 }
 
 struct Boom;
@@ -164,9 +161,14 @@ impl Boom {
 #[test]
 fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
-            .settings(Settings::new().database(None).print_blob(true))
-            .run();
+        Hegel::new(|tc| {
+            machine(Boom)
+                .min_concurrency(2)
+                .max_concurrency(2)
+                .run_concurrent(tc)
+        })
+        .settings(Settings::new().database(None).print_blob(true))
+        .run();
     });
     let payload = result.expect_err("the failing machine must fail the run");
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
@@ -208,9 +210,19 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
 #[test]
 fn quiet_nondeterministic_runs_stay_quiet_but_still_fail() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
-            .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
-            .run();
+        Hegel::new(|tc| {
+            machine(Boom)
+                .min_concurrency(2)
+                .max_concurrency(2)
+                .run_concurrent(tc)
+        })
+        .settings(
+            Settings::new()
+                .database(None)
+                .print_blob(false)
+                .verbosity(Verbosity::Quiet),
+        )
+        .run();
     });
     let payload = result.expect_err("the failing machine must fail the run even when quiet");
     assert_matches_regex(&panic_message(&payload), "concurrent boom");
@@ -225,7 +237,10 @@ fn output_before_the_machine_is_captured_in_the_failure_report() {
         Hegel::new(|tc: TestCase| {
             let seed: i64 = tc.draw(gs::integers());
             tc.note(&format!("preamble for seed {seed}"));
-            run_concurrent(Boom, tc, 2, 2);
+            machine(Boom)
+                .min_concurrency(2)
+                .max_concurrency(2)
+                .run_concurrent(tc);
         })
         .settings(Settings::new().database(None))
         .run();
@@ -243,7 +258,7 @@ fn output_before_the_machine_is_captured_in_the_failure_report() {
 #[test]
 fn a_run_with_max_concurrency_one_stays_deterministic() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 1, 1))
+        Hegel::new(|tc| machine(Boom).run_concurrent(tc))
             .settings(Settings::new().database(None).print_blob(true))
             .run();
     });
@@ -283,10 +298,15 @@ fn a_stale_blob_on_a_concurrent_test_reports_that_it_did_not_reproduce() {
         .unwrap();
 
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Boom, tc, 2, 2))
-            .settings(Settings::new().database(None))
-            .reproduce_failure(blob)
-            .run();
+        Hegel::new(|tc| {
+            machine(Boom)
+                .min_concurrency(2)
+                .max_concurrency(2)
+                .run_concurrent(tc)
+        })
+        .settings(Settings::new().database(None))
+        .reproduce_failure(blob)
+        .run();
     });
     let payload = result.expect_err("the stale blob cannot replay a concurrent test");
     assert_matches_regex(&panic_message(&payload), "did not reproduce");
@@ -307,11 +327,14 @@ impl Exhaust {
 #[test]
 fn an_overrunning_worker_classifies_the_case_as_an_overrun() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(Exhaust, tc, 1, 1))
+        Hegel::new(|tc| machine(Exhaust).run_concurrent(tc))
             .settings(
                 Settings::new()
                     .database(None)
-                    .suppress_health_check([HealthCheck::LargeInitialTestCase])
+                    .suppress_health_check([
+                        HealthCheck::LargeInitialTestCase,
+                        HealthCheck::TooSlow,
+                    ])
                     .verbosity(Verbosity::Quiet),
             )
             .run();
@@ -336,7 +359,7 @@ impl DeepSpans {
 #[test]
 fn an_engine_invalid_conclusion_classifies_the_case_as_invalid() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(DeepSpans, tc, 1, 1))
+        Hegel::new(|tc| machine(DeepSpans).run_concurrent(tc))
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
@@ -360,7 +383,7 @@ impl NestAndBoom {
 #[test]
 fn a_panic_that_loses_to_an_engine_side_conclusion_is_discarded() {
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(NestAndBoom, tc, 1, 1))
+        Hegel::new(|tc| machine(NestAndBoom).run_concurrent(tc))
             .settings(
                 Settings::new()
                     .database(None)
@@ -392,7 +415,7 @@ impl UsageError {
 #[test]
 fn a_workers_usage_error_aborts_the_run_verbatim() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(UsageError, tc, 1, 1))
+        Hegel::new(|tc| machine(UsageError).run_concurrent(tc))
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
@@ -424,7 +447,7 @@ fn a_concurrent_invariant_failure_names_the_invariant() {
             let m = BrokenModel {
                 value: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1, 1);
+            machine(m).run_concurrent(tc);
         })
         .settings(Settings::new().database(None))
         .run();
@@ -457,7 +480,7 @@ fn an_invariant_assumption_failure_at_a_join_point_invalidates_the_case() {
             let m = LateReject {
                 checks: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1, 2);
+            machine(m).max_concurrency(2).run_concurrent(tc);
         })
         .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
@@ -531,7 +554,7 @@ fn test_concurrent_pool_across_workers(tc: TestCase) {
         pool: concurrent_pool(&tc),
         next: AtomicI64::new(0),
     };
-    run_concurrent(m, tc, 1, 3);
+    machine(m).max_concurrency(3).run_concurrent(tc);
 }
 
 struct RacyCounter {
@@ -570,7 +593,7 @@ fn racy_smoke_test_reports_only_genuine_failures() {
                 value: AtomicI64::new(0),
                 increments: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1, 4);
+            machine(m).max_concurrency(4).run_concurrent(tc);
         })
         .settings(
             Settings::new()
@@ -608,7 +631,7 @@ impl hegel::stateful::ConcurrentStateMachine for NoRules {
 #[test]
 fn a_machine_without_rules_is_a_usage_error() {
     let (_, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(NoRules, tc, 1, 1))
+        Hegel::new(|tc| machine(NoRules).run_concurrent(tc))
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
     });
@@ -643,9 +666,14 @@ fn worker_of(line: &str) -> Option<usize> {
 fn a_rounds_lines_group_by_worker() {
     static TICKS: AtomicI64 = AtomicI64::new(0);
     let (lines, result) = capture_hegel_output(|| {
-        Hegel::new(|tc| run_concurrent(GroupedTicker { ticks: &TICKS }, tc, 2, 2))
-            .settings(Settings::new().database(None).verbosity(Verbosity::Verbose))
-            .run();
+        Hegel::new(|tc| {
+            machine(GroupedTicker { ticks: &TICKS })
+                .min_concurrency(2)
+                .max_concurrency(2)
+                .run_concurrent(tc)
+        })
+        .settings(Settings::new().database(None).verbosity(Verbosity::Verbose))
+        .run();
     });
     result.expect_err("the ticker must run out of ticks and fail");
     let first_header = lines
@@ -690,7 +718,10 @@ fn invalid_concurrency_bounds_are_a_usage_error() {
                 let m = Counter {
                     value: AtomicI64::new(0),
                 };
-                run_concurrent(m, tc, min, max);
+                machine(m)
+                    .min_concurrency(min)
+                    .max_concurrency(max)
+                    .run_concurrent(tc);
             })
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .run();
@@ -701,6 +732,129 @@ fn invalid_concurrency_bounds_are_a_usage_error() {
             "concurrency bounds must satisfy 1 <= min <= max",
         );
     }
+}
+
+#[test]
+fn runner_steps_bounds_the_rounds_per_test_case() {
+    let rules_per_case: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(Vec::new()));
+    let rules_in = Arc::clone(&rules_per_case);
+    Hegel::new(move |tc: TestCase| {
+        let m = InvariantCounts {
+            rules_run: Arc::new(AtomicI64::new(0)),
+            sampled_runs: Arc::new(AtomicI64::new(0)),
+            always_runs: Arc::new(AtomicI64::new(0)),
+        };
+        let rules_run = Arc::clone(&m.rules_run);
+        machine(m).steps(3).run_concurrent(tc);
+        rules_in
+            .lock()
+            .unwrap()
+            .push(rules_run.load(Ordering::SeqCst));
+    })
+    .settings(Settings::new().test_cases(50).database(None))
+    .run();
+    let rules_per_case = rules_per_case.lock().unwrap();
+    assert!(rules_per_case.iter().all(|&n| (1..=3).contains(&n)));
+    let full = rules_per_case.iter().filter(|&&n| n == 3).count();
+    assert!(
+        full > rules_per_case.len() / 2,
+        "expected most of {} test cases to run exactly 3 rules, got {full}",
+        rules_per_case.len()
+    );
+}
+
+struct ThreadRecorder {
+    threads: Arc<Mutex<HashSet<ThreadId>>>,
+}
+
+#[hegel::concurrent_state_machine]
+impl ThreadRecorder {
+    #[rule]
+    fn record(&self, _: TestCase) {
+        self.threads
+            .lock()
+            .unwrap()
+            .insert(std::thread::current().id());
+    }
+}
+
+#[test]
+fn a_runner_without_bounds_runs_on_a_single_worker() {
+    let levels: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let levels_in = Arc::clone(&levels);
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(move |tc: TestCase| {
+            let threads = Arc::new(Mutex::new(HashSet::new()));
+            let m = ThreadRecorder {
+                threads: Arc::clone(&threads),
+            };
+            machine(m).steps(20).run_concurrent(tc);
+            levels_in
+                .lock()
+                .unwrap()
+                .push(threads.lock().unwrap().len());
+        })
+        .settings(
+            Settings::new()
+                .test_cases(30)
+                .database(None)
+                .verbosity(Verbosity::Quiet),
+        )
+        .run();
+    });
+    result.unwrap();
+    let levels = levels.lock().unwrap();
+    assert_eq!(levels.len(), 30);
+    assert!(levels.iter().all(|&n| n == 1), "{levels:?}");
+}
+
+#[test]
+fn a_runner_with_a_raised_maximum_uses_several_workers() {
+    let levels: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    let levels_in = Arc::clone(&levels);
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(move |tc: TestCase| {
+            let threads = Arc::new(Mutex::new(HashSet::new()));
+            let m = ThreadRecorder {
+                threads: Arc::clone(&threads),
+            };
+            machine(m).steps(20).max_concurrency(3).run_concurrent(tc);
+            levels_in
+                .lock()
+                .unwrap()
+                .push(threads.lock().unwrap().len());
+        })
+        .settings(
+            Settings::new()
+                .test_cases(30)
+                .database(None)
+                .verbosity(Verbosity::Quiet),
+        )
+        .run();
+    });
+    result.unwrap();
+    let levels = levels.lock().unwrap();
+    assert!(levels.iter().all(|&n| (1..=3).contains(&n)), "{levels:?}");
+    assert!(
+        levels.iter().any(|&n| n > 1),
+        "expected some test case to run on more than one worker: {levels:?}"
+    );
+}
+
+#[test]
+fn a_step_count_below_one_is_a_usage_error() {
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            let m = Counter {
+                value: AtomicI64::new(0),
+            };
+            machine(m).steps(0).run_concurrent(tc);
+        })
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+        .run();
+    });
+    let payload = result.expect_err("a zero step count cannot run");
+    assert_matches_regex(&panic_message(&payload), "step count must be at least 1");
 }
 
 /// Exhaust the whole family draw budget on a clone stream, leaving the root
@@ -742,7 +896,7 @@ fn pool_add_on_an_exhausted_stream_is_an_overrun() {
             let m = AddAfterExhaustion {
                 pool: concurrent_pool(&tc),
             };
-            run_concurrent(m, tc, 1, 1);
+            machine(m).run_concurrent(tc);
         })
         .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
@@ -779,7 +933,7 @@ fn budget_exhaustion_during_machine_creation_is_an_overrun() {
             let m = Counter {
                 value: AtomicI64::new(0),
             };
-            run_concurrent(m, tc, 1, 1);
+            machine(m).run_concurrent(tc);
         })
         .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
         .run();
@@ -801,7 +955,10 @@ impl Noop {
 /// flip the run by itself: the bodies below go nondeterministic later, at
 /// their first replay miss.
 fn concurrent_noise(tc: &TestCase) {
-    run_concurrent(Noop, tc.clone(), 2, 2);
+    machine(Noop)
+        .min_concurrency(2)
+        .max_concurrency(2)
+        .run_concurrent(tc.clone());
 }
 
 #[test]
@@ -816,12 +973,7 @@ fn an_unconfirmed_one_shot_failure_reports_caveat_only() {
                 panic!("boom on the third case with {x}");
             }
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .stateful_step_count(1)
-                .print_blob(true),
-        )
+        .settings(Settings::new().database(None).print_blob(true))
         .run();
     });
     let payload = result.expect_err("the third case fails the run");
@@ -849,12 +1001,7 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
                 panic!("boom on the third case with {x}");
             }
         })
-        .settings(
-            Settings::new()
-                .database(None)
-                .stateful_step_count(1)
-                .verbosity(Verbosity::Verbose),
-        )
+        .settings(Settings::new().database(None).verbosity(Verbosity::Verbose))
         .run();
     });
     let payload = result.expect_err("the third case fails the run");
@@ -869,5 +1016,103 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
         diagnostics, 1,
         "the diagnostic prints live at discovery; the caveat-only report \
          has no reproducing capture to reprint (decision 70): {lines:?}"
+    );
+}
+
+struct WeightedGroups {
+    log: Mutex<Vec<&'static str>>,
+}
+
+#[hegel::concurrent_state_machine]
+impl WeightedGroups {
+    #[rule(group = "letters", weight = 2.5)]
+    fn alpha(&self, _: TestCase) {
+        self.log.lock().unwrap().push("alpha");
+    }
+
+    #[rule(weight = 4, group = "letters")]
+    fn beta(&self, _: TestCase) {
+        self.log.lock().unwrap().push("beta");
+    }
+
+    #[rule(weight = 0.5)]
+    fn anonymous(&self, _: TestCase) {
+        self.log.lock().unwrap().push("anonymous");
+    }
+
+    #[rule(group = "numbers")]
+    fn one(&self, _: TestCase) {
+        self.log.lock().unwrap().push("one");
+    }
+}
+
+#[test]
+fn concurrent_rule_weight_argument_sets_the_rule_weight() {
+    use hegel::stateful::{ANONYMOUS_GROUP, ConcurrentStateMachine};
+    let m = WeightedGroups {
+        log: Mutex::new(Vec::new()),
+    };
+    let rules = m.rules();
+    let rules: Vec<(&str, &str, f64)> = rules
+        .iter()
+        .map(|r| (r.name.as_str(), r.group.as_str(), r.weight))
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            ("alpha", "letters", 2.5),
+            ("beta", "letters", 4.0),
+            ("anonymous", ANONYMOUS_GROUP, 0.5),
+            ("one", "numbers", 1.0),
+        ]
+    );
+}
+
+#[hegel::test]
+fn test_weighted_grouped_machine_passes(tc: TestCase) {
+    let m = WeightedGroups {
+        log: Mutex::new(Vec::new()),
+    };
+    machine(m).max_concurrency(3).run_concurrent(tc);
+}
+
+#[test]
+fn concurrent_rule_new_takes_the_weight() {
+    use hegel::stateful::ConcurrentRule;
+    let rule = ConcurrentRule::new("hit", "g", 3.0, |_m: &Counter, _tc| {});
+    assert_eq!(rule.weight, 3.0);
+    assert_eq!(rule.group, "g");
+    assert_eq!(rule.name, "hit");
+}
+
+struct BadConcurrentWeight;
+
+impl hegel::stateful::ConcurrentStateMachine for BadConcurrentWeight {
+    fn rules(&self) -> Vec<hegel::stateful::ConcurrentRule<Self>> {
+        vec![hegel::stateful::ConcurrentRule::new(
+            "bad",
+            "g",
+            0.0,
+            |_m: &Self, _tc| {},
+        )]
+    }
+    fn invariants(&self) -> Vec<hegel::stateful::ConcurrentInvariant<Self>> {
+        vec![]
+    }
+}
+
+#[test]
+fn a_non_positive_concurrent_rule_weight_is_a_usage_error() {
+    let (_, result) = capture_hegel_output(|| {
+        Hegel::new(|tc| {
+            machine(BadConcurrentWeight).run_concurrent(tc);
+        })
+        .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
+        .run();
+    });
+    let payload = result.expect_err("a zero rule weight cannot run");
+    assert_matches_regex(
+        &panic_message(&payload),
+        "rule weights must be finite and positive, but rule 0 \\(bad\\) has weight 0",
     );
 }

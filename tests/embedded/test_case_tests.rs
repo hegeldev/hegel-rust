@@ -15,7 +15,7 @@ use crate::runner::Settings;
 /// of each test; `hegel_run_free` tolerates the un-marked in-flight case.
 fn emitting_test_case() -> (RunHandle, TestCase) {
     let settings = Settings::new().database(None);
-    let c_settings = SettingsHandle::build(&settings, None);
+    let c_settings = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()
@@ -138,7 +138,7 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
     use std::panic::AssertUnwindSafe;
     let (_run, tc) = emitting_test_case();
 
-    tc.start_span(gs::labels::LIST);
+    tc.start_span(gs::label_from_name("test.list"));
     drive_to_overrun(&tc);
 
     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| tc.stop_span(false))).unwrap_err();
@@ -147,8 +147,10 @@ fn span_calls_after_overrun_unwind_as_stop_test() {
         "stop_span after overrun should unwind as StopTest"
     );
 
-    let payload =
-        std::panic::catch_unwind(AssertUnwindSafe(|| tc.start_span(gs::labels::LIST))).unwrap_err();
+    let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        tc.start_span(gs::label_from_name("test.list"))
+    }))
+    .unwrap_err();
     assert!(
         payload.downcast_ref::<crate::control::StopTest>().is_some(),
         "start_span after overrun should unwind as StopTest"

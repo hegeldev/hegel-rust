@@ -192,6 +192,52 @@
 //! HEGEL_STATISTICS=1 cargo test my_test -- --nocapture
 //! ```
 //!
+//! Three more variables cover the settings a single `cargo test` invocation
+//! most often needs to change: `HEGEL_SEED` fixes the seed (or clears a
+//! compiled-in one with `none`), `HEGEL_DERANDOMIZE` turns the derived
+//! per-test seed on or off, and `HEGEL_PRINT_BLOB` turns the
+//! `#[hegel::reproduce_failure("…")]` line on or off, so a failure can be
+//! captured for replay without editing the test:
+//!
+//! ```bash
+//! HEGEL_SEED=7 HEGEL_PRINT_BLOB=true cargo test my_test
+//! ```
+//!
+//! ## Settings profiles
+//!
+//! Suite-wide settings live in named *profiles*. Hegel ships three:
+//! `development` (what local runs get), `ci` (selected automatically on CI
+//! servers), and `workload` (selected automatically inside
+//! [Antithesis](https://antithesis.com/)). Modify them or define your own
+//! in a `hegel.toml` at your package or workspace root:
+//!
+//! ```toml
+//! [profiles.development]
+//! test_cases = 200
+//!
+//! [profiles.nightly]
+//! test_cases = 10000
+//! ```
+//!
+//! A profile layers over whichever profile the environment selects, so on
+//! CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` →
+//! `development`, unless it pins a parent with `extends`. Select one for a
+//! test with
+//! `#[hegel::test(profile = "nightly")]`, or as the suite-wide default with
+//! a `default = "nightly"` entry at the top of `hegel.toml` or the
+//! `HEGEL_DEFAULT_PROFILE` environment variable:
+//!
+//! ```bash
+//! HEGEL_DEFAULT_PROFILE=nightly cargo test
+//! ```
+//!
+//! The [`docs::settings`] page covers the whole settings system: every
+//! setting, the layers it can be set in and how they combine, what each
+//! shipped profile sets, the reserved `base` and `default` names, profile
+//! inheritance, every `hegel.toml` key, the `HEGEL_CONFIG` variable for
+//! naming the config file directly, and the programmatic
+//! [`Settings::register_profile`] and [`Settings::set_default_profile`].
+//!
 //! ## Threading
 //!
 //! [`TestCase`] is `Send` but not `Sync`: you can clone it and move the clone
@@ -266,11 +312,11 @@
 #![forbid(future_incompatible)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-pub(crate) mod antithesis;
 #[doc(hidden)]
 pub mod backend;
 pub(crate) mod cli;
 pub(crate) mod control;
+pub mod docs;
 #[doc(hidden)]
 pub mod explicit_test_case;
 pub mod extras;
@@ -318,7 +364,7 @@ pub mod prelude {
 pub use test_case::{__IsTestCase, __assert_is_test_case, with_output_override};
 
 #[doc(hidden)]
-pub use antithesis::TestLocation;
+pub use runner::TestLocation;
 
 /// Derive a generator for a struct or enum.
 ///
@@ -583,7 +629,7 @@ pub use hegel_macros::state_machine;
 
 /// Derive a [`ConcurrentStateMachine`](crate::stateful::ConcurrentStateMachine)
 /// implementation from an `impl` block, for concurrent stateful testing via
-/// [`stateful::run_concurrent`].
+/// [`stateful::Machine::run_concurrent`].
 ///
 /// Methods annotated `#[rule(group = "name")]` become rules assigned to the
 /// named concurrency group; methods annotated `#[invariant]` become
@@ -596,12 +642,14 @@ pub use hegel_macros::state_machine;
 /// A bare `#[rule]` with no `group = "..."` argument is assigned to a
 /// single shared anonymous group, so a machine with no group annotations
 /// is maximally concurrent: any rule may overlap with any other, and naming
-/// groups is how overlap gets restricted.
+/// groups is how overlap gets restricted. `#[rule(group = "name", weight =
+/// w)]` also hints how often a rule should be chosen compared to
+/// other rules in its group. This is not a distributional guarantee.
 ///
 /// The model is shared by reference across worker threads, so rules and
 /// invariants must take `&self` (mutable state needs interior mutability),
 /// and the model type must be `Sync`. See
-/// [`run_concurrent`](crate::stateful::run_concurrent) for the full
+/// [`Machine::run_concurrent`](crate::stateful::Machine::run_concurrent) for the full
 /// execution model.
 ///
 /// ```no_run
@@ -642,7 +690,7 @@ pub use hegel_macros::state_machine;
 /// #[hegel::test]
 /// fn test_kv(tc: TestCase) {
 ///     let m = KvTest { store: Mutex::new(std::collections::HashMap::new()) };
-///     hegel::stateful::run_concurrent(m, tc, 1, 3);
+///     hegel::stateful::machine(m).max_concurrency(3).run_concurrent(tc);
 /// }
 /// ```
 pub use hegel_macros::concurrent_state_machine;
@@ -677,6 +725,11 @@ pub use hegel_macros::concurrent_state_machine;
 ///     assert!(x + 0 == x);
 /// }
 /// ```
+///
+/// `profile = "<name>"` is special: it makes the remaining attribute args
+/// build on [`Settings::from_profile`] instead of [`Settings::new`]. It
+/// cannot be combined with a positional settings expression, which is
+/// already a complete starting point.
 ///
 /// You can use other test attribute macros, like `tokio::test`, by putting them *before* `hegel::test`:
 ///
@@ -740,9 +793,18 @@ pub use hegel_macros::test_helper;
 /// suppressed: both judge how a run accumulates valid test cases, which a
 /// run of exactly one cannot be judged on. `FilterTooMuch` applies as usual.
 ///
+/// Because `TestCasesTooLarge` is suppressed, the one test case also has no
+/// limit on the number of choices it may make — a binary's test case is
+/// often meant to run for a long time, as when it drives a concurrent state
+/// machine — so it is never stopped as an overrun. See
+/// [`Settings::suppress_health_check`].
+///
 /// Supported CLI flags (with defaults taken from the attribute args):
-/// `--seed`, `--verbosity`, `--derandomize`, `--database`,
-/// `--suppress-health-check`, `--backend`, `-h` / `--help`.
+/// `--profile`, `--seed`, `--verbosity`, `--derandomize`, `--database`,
+/// `--suppress-health-check`, `--backend`, `-h` / `--help`. `--profile`
+/// sets the process's default settings profile before the attribute args
+/// are evaluated, exactly like the `HEGEL_DEFAULT_PROFILE` environment
+/// variable, so compiled-in settings apply on top of the named profile.
 ///
 /// ```no_run
 /// use hegel::TestCase;
@@ -788,5 +850,5 @@ pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
 pub use runner::{
-    Backend, HealthCheck, Hegel, NondeterminismStrictness, Phase, Settings, Verbosity,
+    Backend, HealthCheck, Hegel, NondeterminismStrictness, Phase, ProfileError, Settings, Verbosity,
 };
