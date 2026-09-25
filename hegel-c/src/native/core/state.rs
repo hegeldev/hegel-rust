@@ -2662,8 +2662,7 @@ mod float_sample {
         f64::from_bits(v.to_bits() - 1)
     }
 
-    /// Tries `f` on the two options in a coin-flipped order: either is equally
-    /// likely when both produce a value, and the other is used when one has none.
+    /// Tries `f` on both options in a coin-flipped order, taking the first value.
     pub(super) fn coin_flip_first<T: Copy, R>(
         options: [T; 2],
         rng: &mut EngineRng,
@@ -2673,11 +2672,8 @@ mod float_sample {
         f(options[first], rng).or_else(|| f(options[1 - first], rng))
     }
 
-    /// A value of a coin-flipped sign whose magnitude `sample` draws from the
-    /// finite nonzero magnitudes `fc` admits on that sign, given as a closed
-    /// interval `[lo, hi]` of positive finite floats. A sign the range rules out,
-    /// or on which `sample` has nothing to offer, yields to the other sign; `None`
-    /// when neither sign works.
+    /// A coin-flipped sign with a magnitude from `sample` over the finite nonzero
+    /// magnitudes `[lo, hi]` `fc` admits on that sign; a dead sign yields to the other.
     pub(super) fn signed_magnitude_sample(
         fc: &FloatChoice,
         rng: &mut EngineRng,
@@ -2699,10 +2695,8 @@ mod float_sample {
         })
     }
 
-    /// A magnitude in `[lo, hi]` (`0 < lo <= hi`, finite) with every binade the
-    /// interval touches equally likely, and the mantissa uniform within the chosen
-    /// binade. A plain uniform draw would give the top binade half the mass; this
-    /// gives the small magnitudes their share. The subnormals count as one binade.
+    /// A magnitude in `[lo, hi]` (`0 < lo <= hi`, finite): a uniform binade, then a
+    /// uniform mantissa within it. The subnormals count as one binade.
     pub(super) fn log_uniform_magnitude(lo: f64, hi: f64, rng: &mut EngineRng) -> f64 {
         let (e_lo, e_hi) = (lo.to_bits() >> 52, hi.to_bits() >> 52);
         let e = rng.random_range(e_lo..=e_hi);
@@ -2719,9 +2713,8 @@ mod float_sample {
         f64::from_bits((e << 52) | rng.random_range(m_lo..=m_hi))
     }
 
-    /// A value whose magnitude lies in `band`: a coin-flipped sign, then
-    /// [`log_uniform_magnitude`] over the band's intersection with the admitted
-    /// magnitudes. `None` when the band does not meet the range.
+    /// [`signed_magnitude_sample`] with [`log_uniform_magnitude`] over `band`;
+    /// `None` when the band misses the range.
     pub(super) fn banded_magnitude_sample(
         fc: &FloatChoice,
         band: (f64, f64),
@@ -2733,9 +2726,7 @@ mod float_sample {
         })
     }
 
-    /// One of `candidates`, uniformly among those valid for `fc` and bit-distinct
-    /// (so `min + 1` coinciding with `max`, say, is not double-weighted). `None`
-    /// when none is valid.
+    /// Uniformly one of the valid, bit-distinct `candidates`; `None` when none is valid.
     pub(super) fn pick_valid<const N: usize>(
         fc: &FloatChoice,
         candidates: [f64; N],
@@ -2802,13 +2793,8 @@ mod float_sample {
         banded_magnitude_sample(fc, (smallest, float_pow2(1 - e) - smallest), rng)
     }
 
-    /// A value in `(1 - 2^-l, 1 + 2^-l)` with a coin-flipped sign, for an `l`
-    /// uniform over the width's mantissa bits (`1..=52`, or `1..=23` for `f32`):
-    /// a quarter of the draws sit within a handful of ulps of `±1`, the rest
-    /// spread out to `±0.5`. Floats this close to 1 are bit-monotone, so each side
-    /// of 1 is a contiguous run of the width's bit patterns; each run is
-    /// intersected with the admitted magnitudes and a pattern drawn uniformly from
-    /// a coin-flipped non-empty side.
+    /// A value in `(1 - 2^-l, 1 + 2^-l)` of a coin-flipped sign, `l` uniform over the
+    /// width's mantissa bits, drawn as a bit pattern from a coin-flipped side of 1.
     pub(super) fn float_near_one_sample(
         fc: &FloatChoice,
         width: FloatWidth,
@@ -2830,11 +2816,8 @@ mod float_sample {
         })
     }
 
-    /// An integer in `[lo, hi]` with every binade the interval touches equally
-    /// likely and the integers within the chosen binade uniform; `0`, when `lo`
-    /// admits it, is a binade of its own. The integer counterpart of
-    /// [`log_uniform_magnitude`]: a uniform draw would put half its mass in the
-    /// top binade and make small integers vanish on a wide range.
+    /// Integer counterpart of [`log_uniform_magnitude`]: a uniform binade of
+    /// `[lo, hi]`, then a uniform integer within it; `0` is a binade of its own.
     pub(super) fn log_uniform_integer(lo: u64, hi: u64, rng: &mut EngineRng) -> u64 {
         let bits = |v: u64| 64 - v.leading_zeros();
         let b = rng.random_range(bits(lo)..=bits(hi));
@@ -2846,10 +2829,8 @@ mod float_sample {
         rng.random_range(first.max(lo)..=last.min(hi))
     }
 
-    /// An integer-valued float of a coin-flipped sign, every binade of magnitude
-    /// the range touches equally likely (see [`log_uniform_integer`]), capped at
-    /// `±2^53` (`±2^24` for `f32`) where the integers stop being exactly
-    /// representable. Zero belongs to the signed-zero category, not to this one.
+    /// A nonzero integer of a coin-flipped sign via [`log_uniform_integer`], capped
+    /// at `±2^53` (`±2^24` for `f32`) where integers stop being exact.
     pub(super) fn float_integer_sample(
         fc: &FloatChoice,
         width: FloatWidth,
@@ -2863,10 +2844,8 @@ mod float_sample {
         })
     }
 
-    /// A half-integer (`…, -0.5, 0.5, 1.5, …`) of a coin-flipped sign, every
-    /// binade of magnitude the range touches equally likely — `0.5` alone in its
-    /// binade, then `1.5`, then `2.5` and `3.5`, … — capped below `±2^52` (`±2^23`
-    /// for `f32`), beyond which `k + 0.5` no longer rounds to itself.
+    /// A half-integer (`k + 0.5`) of a coin-flipped sign via [`log_uniform_integer`],
+    /// capped below `±2^52` (`±2^23` for `f32`) where `k + 0.5` stops being exact.
     pub(super) fn float_half_integer_sample(
         fc: &FloatChoice,
         width: FloatWidth,
@@ -2916,8 +2895,7 @@ mod float_sample {
         banded_magnitude_sample(fc, band, rng)
     }
 
-    /// Any NaN: half the time the canonical quiet NaN, otherwise a uniformly
-    /// random payload (quiet or signalling), each with a random sign.
+    /// A NaN of random sign: the canonical quiet NaN or a random payload, half each.
     pub(super) fn float_nan_sample(
         fc: &FloatChoice,
         _width: FloatWidth,
@@ -2952,8 +2930,7 @@ mod float_sample {
         pick_valid(fc, [width.max(), -width.max()], rng)
     }
 
-    /// The largest integer past which not every integer is representable:
-    /// `±2^53` (`±2^24` for `f32`).
+    /// `±2^53` (`±2^24` for `f32`), past which not every integer is representable.
     pub(super) fn float_max_exact_integer_sample(
         fc: &FloatChoice,
         width: FloatWidth,
@@ -2971,12 +2948,8 @@ mod float_sample {
         pick_valid(fc, [0.0, -0.0], rng)
     }
 
-    /// A power of two, or the float of the width just below one: the two floats
-    /// straddling a binade boundary, where the ulp doubles (below `MIN_POSITIVE`
-    /// that is the largest subnormal). The sign is a coin flip; the exponent is
-    /// uniform over the width's normal binades whose power of two the range
-    /// admits on that sign; the predecessor is used half the time, when it is
-    /// also in range.
+    /// A power of two of the width or its predecessor, straddling a binade boundary:
+    /// coin-flipped sign, uniform normal exponent, predecessor half the time if in range.
     pub(super) fn float_binade_edge_sample(
         fc: &FloatChoice,
         width: FloatWidth,
