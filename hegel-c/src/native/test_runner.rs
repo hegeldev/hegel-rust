@@ -1542,7 +1542,9 @@ impl<'a> Engine<'a> {
                 } else {
                     &[][..]
                 };
-                let mut out = Vec::new();
+                let mut out = Vec::with_capacity(
+                    start_a + 2 * replacement.len() + mid.len() + (values.len() - end_b),
+                );
                 out.extend_from_slice(&values[..start_a]);
                 out.extend_from_slice(replacement);
                 out.extend_from_slice(mid);
