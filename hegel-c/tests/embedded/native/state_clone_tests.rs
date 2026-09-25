@@ -104,6 +104,40 @@ fn reassemble_embeds_child_records_recursively() {
 }
 
 #[test]
+fn reassemble_takes_the_record_of_a_child_whose_handle_was_released() {
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(11));
+    draw(&mut parent);
+    let child = parent.clone_stream().unwrap();
+    let values = {
+        let mut c = child.lock();
+        c.start_span(7);
+        let values = (draw(&mut c), draw(&mut c));
+        c.stop_span(false);
+        values
+    };
+    drop(child);
+    draw(&mut parent);
+    parent.conclude(Status::Valid, None);
+    parent.reassemble();
+
+    let Some(stream) = parent.nodes[1].data.as_clone() else {
+        panic!("clone node was not realized");
+    };
+    let child_values: Vec<ChoiceValue> = stream.nodes().iter().map(|n| n.value().clone()).collect();
+    assert_eq!(
+        child_values,
+        vec![
+            ChoiceValue::Integer(values.0.into()),
+            ChoiceValue::Integer(values.1.into()),
+        ]
+    );
+    assert_eq!(stream.spans().len(), 1);
+    assert_eq!(stream.spans()[0].label, 7);
+    assert_eq!(stream.spans()[0].end, 2);
+    assert!(parent.clone_children.is_empty());
+}
+
+#[test]
 fn replaying_a_reassembled_sequence_reproduces_every_stream() {
     let mut parent = NativeTestCase::new_random(EngineRng::seeded(17));
     let p0 = draw(&mut parent);

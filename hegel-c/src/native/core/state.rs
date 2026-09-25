@@ -2068,15 +2068,26 @@ impl NativeTestCase {
     /// A no-op until the family has concluded: streams can still grow while
     /// the family is running, and a concluded family's streams cannot (every
     /// draw fails fast), so the records are snapshotted exactly once.
+    ///
+    /// A child whose only remaining handle is the parent's (the driver has
+    /// released its clone) gives up its record rather than copying it: the
+    /// child is dropped on the spot and nothing can observe it afterwards.
     pub fn reassemble(&mut self) {
         if self.family.status().is_none() {
             return;
         }
         for (idx, handle) in core::mem::take(&mut self.clone_children) {
+            let sole_owner = Arc::strong_count(&handle) == 1;
             let mut child = handle.lock();
             child.freeze();
             child.reassemble();
-            let stream = RealizedStream::new(child.nodes.clone(), child.spans.clone().into_vec());
+            let stream = if sole_owner {
+                let nodes = core::mem::take(&mut child.nodes);
+                let spans = core::mem::take(&mut child.spans).into_vec();
+                RealizedStream::new(nodes, spans)
+            } else {
+                RealizedStream::new(child.nodes.clone(), child.spans.clone().into_vec())
+            };
             let was_forced = self.nodes[idx].was_forced;
             self.nodes[idx] = ChoiceNode::clone_stream(Arc::new(stream), was_forced);
         }
