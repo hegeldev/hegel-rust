@@ -1491,6 +1491,12 @@ impl core::ops::Index<usize> for Spans {
     }
 }
 
+impl core::ops::IndexMut<usize> for Spans {
+    fn index_mut(&mut self, i: usize) -> &mut Span {
+        &mut self.inner[i]
+    }
+}
+
 /// Observer hook called by [`NativeTestCase`] after each draw and on
 /// conclusion.  All methods have default no-op implementations so
 /// concrete observers only need to override the callbacks they care
@@ -2115,9 +2121,7 @@ impl NativeTestCase {
     /// Set the span's end and credit its draws to its parent's closed
     /// children, for [`Self::draw_address`].
     fn close_span(&mut self, idx: usize, end: usize) {
-        let Some(span) = self.spans.get_mut(idx) else {
-            return;
-        };
+        let span = &mut self.spans[idx];
         span.end = end;
         let inside = end - span.start;
         match span.parent {
