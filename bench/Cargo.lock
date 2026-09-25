@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "hegeltest-c",
  "hegeltest-macros",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-c"
-version = "0.43.5"
+version = "0.43.6"
 dependencies = [
  "dashu-int",
  "hashbrown",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "hegeltest-macros"
-version = "0.47.2"
+version = "0.47.3"
 dependencies = [
  "proc-macro2",
  "quote",

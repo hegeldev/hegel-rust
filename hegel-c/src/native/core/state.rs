@@ -1592,6 +1592,25 @@ impl NativeTestCase {
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
+        Self::for_owned_choices_and_template(
+            choices.to_vec(),
+            prefix_nodes,
+            trailing,
+            max_size,
+            observer,
+        )
+    }
+
+    /// [`Self::for_choices_and_template`] taking ownership of `choices`, for
+    /// a caller that has already built the vector: the replay keeps it as its
+    /// prefix instead of copying it.
+    pub fn for_owned_choices_and_template(
+        choices: Vec<ChoiceValue>,
+        prefix_nodes: Option<&[ChoiceNode]>,
+        trailing: Option<ChoiceTemplate>,
+        max_size: usize,
+        observer: Option<Box<dyn DataObserver>>,
+    ) -> Self {
         let max_size = max_size.max(choices.len());
         let budget = if trailing.is_some() {
             max_size
@@ -1599,7 +1618,7 @@ impl NativeTestCase {
             usize::MAX
         };
         Self::new_stream(
-            choices.to_vec(),
+            choices,
             prefix_nodes.map(|n| n.to_vec()),
             None,
             trailing,
@@ -1664,7 +1683,17 @@ impl NativeTestCase {
         prefix_nodes: Option<&[ChoiceNode]>,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
-        Self::for_choices_and_template(choices, prefix_nodes, None, choices.len(), observer)
+        Self::for_owned_choices(choices.to_vec(), prefix_nodes, observer)
+    }
+
+    /// [`Self::for_choices`] taking ownership of `choices`.
+    pub fn for_owned_choices(
+        choices: Vec<ChoiceValue>,
+        prefix_nodes: Option<&[ChoiceNode]>,
+        observer: Option<Box<dyn DataObserver>>,
+    ) -> Self {
+        let len = choices.len();
+        Self::for_owned_choices_and_template(choices, prefix_nodes, None, len, observer)
     }
 
     /// A test case that replays `prefix` for the first positions and then
@@ -1677,7 +1706,16 @@ impl NativeTestCase {
         rng: EngineRng,
         max_size: usize,
     ) -> Result<Self, InternalError> {
-        Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
+        Self::for_owned_probe(prefix.to_vec(), rng, max_size)
+    }
+
+    /// [`Self::for_probe`] taking ownership of `prefix`.
+    pub fn for_owned_probe(
+        prefix: Vec<ChoiceValue>,
+        rng: EngineRng,
+        max_size: usize,
+    ) -> Result<Self, InternalError> {
+        Self::for_owned_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
     /// Attach an RNG for post-prefix random draws.  Internal builder used by

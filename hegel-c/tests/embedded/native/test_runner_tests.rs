@@ -188,12 +188,14 @@ fn cached_test_function_executes_a_proposal_longer_than_a_known_conclusion() {
         },
         async |ctx, count| {
             let known = [ChoiceValue::Boolean(false)];
-            ctx.cached_test_function(&known, None, 0).await.unwrap();
+            ctx.cached_test_function(known.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 1);
 
             let run = ctx
                 .cached_test_function(
-                    &[ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
+                    vec![ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)],
                     None,
                     0,
                 )
@@ -216,11 +218,17 @@ fn cached_test_function_executes_novel_then_serves_repeat() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            let first = ctx
+                .cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            let second = ctx
+                .cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(second.status, Status::Valid);
             assert_eq!(count.get(), 1, "exact repeat must be served from the cache");
         },
@@ -244,16 +252,25 @@ fn cached_test_function_executes_a_truncated_known_path_to_overrun() {
         },
         async |ctx, count| {
             let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
-            let first = ctx.cached_test_function(&full, None, 0).await.unwrap();
+            let first = ctx
+                .cached_test_function(full.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(first.status, Status::Valid);
             assert_eq!(count.get(), 1);
 
             let truncated = [ChoiceValue::Boolean(false)];
-            let overrun = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            let overrun = ctx
+                .cached_test_function(truncated.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(overrun.status, Status::EarlyStop);
             assert_eq!(count.get(), 2);
 
-            let again = ctx.cached_test_function(&truncated, None, 0).await.unwrap();
+            let again = ctx
+                .cached_test_function(truncated.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(again.status, Status::EarlyStop);
             assert_eq!(
                 count.get(),
@@ -278,11 +295,16 @@ fn cached_test_function_probe_executes_a_truncated_prefix_with_continuation() {
         },
         async |ctx, count| {
             let full = [ChoiceValue::Boolean(false), ChoiceValue::Boolean(true)];
-            ctx.cached_test_function(&full, None, 0).await.unwrap();
+            ctx.cached_test_function(full.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 1);
 
             let prefix = [ChoiceValue::Boolean(false)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
+            let run = ctx
+                .cached_test_function(prefix.to_vec(), None, 1)
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(
                 count.get(),
@@ -309,12 +331,18 @@ fn cached_test_function_serves_interesting_from_cache_with_origin_and_spans() {
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
 
-            let first = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            let first = ctx
+                .cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert!(first.origin.is_some());
             assert_eq!(count.get(), 1);
 
-            let second = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            let second = ctx
+                .cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(second.status, Status::Interesting);
             assert_eq!(
                 count.get(),
@@ -356,14 +384,14 @@ fn a_repeated_stateful_probe_is_served() {
                 )]),
             ));
             let first = ctx
-                .cached_test_function(std::slice::from_ref(&clone), None, 0)
+                .cached_test_function(vec![clone.clone()], None, 0)
                 .await
                 .unwrap();
             assert_eq!(first.status, Status::Interesting);
             assert_eq!(count.get(), 1);
 
             let second = ctx
-                .cached_test_function(std::slice::from_ref(&clone), None, 0)
+                .cached_test_function(vec![clone.clone()], None, 0)
                 .await
                 .unwrap();
             assert_eq!(second.status, Status::Interesting);
@@ -434,10 +462,12 @@ fn a_verdict_flip_on_a_generation_window_repeat_aborts_as_flaky() {
         async |ctx, count| {
             ctx.collect_statistics = true;
             let choices = [ChoiceValue::Boolean(true)];
-            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            ctx.cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 1);
 
-            let repeat = ctx.cached_test_function(&choices, None, 0).await;
+            let repeat = ctx.cached_test_function(choices.to_vec(), None, 0).await;
             assert_eq!(count.get(), 2, "generation-window repeats execute");
             match repeat {
                 Err(crate::backend::RunError::Flaky(msg)) => {
@@ -470,12 +500,18 @@ fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
         },
         async |ctx, count| {
             let choices = [ChoiceValue::Boolean(true)];
-            ctx.cached_test_function(&choices, None, 0).await.unwrap();
-            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            ctx.cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
+            ctx.cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 1, "served before the flip");
 
             let flipping = [ChoiceValue::Boolean(false)];
-            ctx.cached_test_function(&flipping, None, 0).await.unwrap();
+            ctx.cached_test_function(flipping.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 2);
             assert!(ctx.nondeterministic);
             assert!(
@@ -485,7 +521,9 @@ fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
                 "the flip flushes the cache"
             );
 
-            ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            ctx.cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(count.get(), 3, "nothing is served after the flip");
         },
     );
@@ -664,7 +702,10 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
         },
         async |ctx, count| {
             let prefix = [ChoiceValue::Boolean(true)];
-            let run = ctx.cached_test_function(&prefix, None, 1).await.unwrap();
+            let run = ctx
+                .cached_test_function(prefix.to_vec(), None, 1)
+                .await
+                .unwrap();
             assert_eq!(run.status, Status::Valid);
             assert_eq!(count.get(), 1);
             assert_eq!(run.nodes.len(), 2);
@@ -1191,7 +1232,10 @@ fn genuine_overrun_is_early_stop_and_not_cached() {
             assert_eq!(run.status, Status::EarlyStop);
 
             let choices: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value().clone()).collect();
-            let replay = ctx.cached_test_function(&choices, None, 0).await.unwrap();
+            let replay = ctx
+                .cached_test_function(choices.to_vec(), None, 0)
+                .await
+                .unwrap();
             assert_eq!(replay.status, Status::EarlyStop);
             assert_eq!(count.get(), 2, "an overrun is never served");
         },

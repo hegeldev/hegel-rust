@@ -310,15 +310,16 @@ impl<'a> Shrinker<'a> {
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
     pub async fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
-        if sort_key(nodes) == sort_key(&self.current_nodes) {
+        let against_current = sort_key(nodes).cmp(&sort_key(&self.current_nodes));
+        if against_current == core::cmp::Ordering::Equal {
             return Ok(true);
         }
-        let cmp: &[ChoiceNode] = if nodes.len() > self.current_nodes.len() {
-            &nodes[..self.current_nodes.len()]
+        let current_below = if nodes.len() > self.current_nodes.len() {
+            sort_key(&self.current_nodes) < sort_key(&nodes[..self.current_nodes.len()])
         } else {
-            nodes
+            against_current == core::cmp::Ordering::Greater
         };
-        if sort_key(&self.current_nodes) < sort_key(cmp) {
+        if current_below {
             return Ok(false);
         }
         if nodes.len() == self.current_nodes.len() {

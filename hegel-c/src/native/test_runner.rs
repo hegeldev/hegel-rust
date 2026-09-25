@@ -1316,34 +1316,17 @@ impl<'a> Engine<'a> {
     /// nondeterministic nothing is served: identical choices need not
     /// produce identical outcomes, so every replay executes the body. While
     /// the cache holds no full entry (the whole generation phase) the key is
-    /// not even built.
+    /// not even built. `choices` is taken by value: an executed replay keeps
+    /// it as the test case's prefix rather than copying it.
     async fn cached_test_function(
         &mut self,
-        choices: &[ChoiceValue],
+        choices: Vec<ChoiceValue>,
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if !self.nondeterministic && self.exec_cache.serves_anything() {
-            let key = hegel_internal_unwrap!(
-                serialize_choices(choices),
-                "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"
-            );
-            if let Some(hit) = self.exec_cache.serve(&key) {
-                return Ok(RunResult {
-                    status: hit.status,
-                    nodes: hit.nodes,
-                    spans: hit.spans,
-                    origin: hit.origin,
-                    target_observations: HashMap::default(),
-                    events: Vec::new(),
-                });
-            }
-        }
-        let ntc = if extend == 0 {
-            NativeTestCase::for_choices(choices, nodes, None)
-        } else {
-            let budget = crate::native::core::flattened_values_len(choices).saturating_add(extend);
-            NativeTestCase::for_probe(choices, self.rng_spawn(), budget)?
+        let ntc = match self.replay_of(choices, nodes, extend)? {
+            Replay::Served(run) => return Ok(run),
+            Replay::Execute(ntc) => ntc,
         };
         let (run, mismatch) = self.test_function(ntc).await?;
         if let Some(err) = mismatch {
@@ -1351,6 +1334,48 @@ impl<'a> Engine<'a> {
         }
         Ok(run)
     }
+
+    /// The synchronous half of [`Self::cached_test_function`]: the served
+    /// conclusion when the cache holds an exact repeat of `choices`, else
+    /// the test case that will replay them. Kept out of the async function
+    /// so its temporaries take no room in the future, which the shrinker
+    /// boxes once per attempt.
+    fn replay_of(
+        &mut self,
+        choices: Vec<ChoiceValue>,
+        nodes: Option<&[ChoiceNode]>,
+        extend: usize,
+    ) -> Result<Replay, RunError> {
+        if !self.nondeterministic && self.exec_cache.serves_anything() {
+            let key = hegel_internal_unwrap!(
+                serialize_choices(&choices),
+                "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"
+            );
+            if let Some(hit) = self.exec_cache.serve(&key) {
+                return Ok(Replay::Served(RunResult {
+                    status: hit.status,
+                    nodes: hit.nodes,
+                    spans: hit.spans,
+                    origin: hit.origin,
+                    target_observations: HashMap::default(),
+                    events: Vec::new(),
+                }));
+            }
+        }
+        Ok(Replay::Execute(if extend == 0 {
+            NativeTestCase::for_owned_choices(choices, nodes, None)
+        } else {
+            let budget = crate::native::core::flattened_values_len(&choices).saturating_add(extend);
+            NativeTestCase::for_owned_probe(choices, self.rng_spawn(), budget)?
+        }))
+    }
+}
+
+/// What [`Engine::replay_of`] found for a proposal: a conclusion served
+/// from the execution cache, or the test case to execute.
+enum Replay {
+    Served(RunResult),
+    Execute(NativeTestCase),
 }
 
 /// The engine side of the shrinker's [`ShrinkProbe`]: routes every requested
@@ -1375,12 +1400,16 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                 ShrinkRun::Full(nodes) => {
                     let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     self.engine
-                        .cached_test_function(&choices, Some(nodes), 0)
+                        .cached_test_function(choices, Some(nodes), 0)
                         .await?
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
                     self.engine
-                        .cached_test_function(prefix, None, max_size.saturating_sub(prefix.len()))
+                        .cached_test_function(
+                            prefix.to_vec(),
+                            None,
+                            max_size.saturating_sub(prefix.len()),
+                        )
                         .await?
                 }
             };
@@ -1493,7 +1522,7 @@ impl<'a> Engine<'a> {
             let extend = self
                 .choice_bound()
                 .saturating_sub(crate::native::core::flattened_values_len(&attempt));
-            let run = self.cached_test_function(&attempt, None, extend).await?;
+            let run = self.cached_test_function(attempt, None, extend).await?;
             if run.status == Status::Interesting {
                 return Ok(());
             }

@@ -21,6 +21,7 @@
 use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::control::{InternalError, hegel_internal_unwrap};
@@ -103,11 +104,15 @@ pub(crate) struct Recorded {
     pub(crate) verdict_mismatch: bool,
 }
 
+/// The full tier's key: one shared copy of the serialized values, held by
+/// the map and by the eviction order alike.
+type FullKey = Arc<[u8]>;
+
 #[derive(Default)]
 pub(crate) struct ExecCache {
     verdicts: HashMap<Digest, Verdict>,
-    full: HashMap<Vec<u8>, CachedRun>,
-    full_order: VecDeque<Vec<u8>>,
+    full: HashMap<FullKey, CachedRun>,
+    full_order: VecDeque<FullKey>,
     full_bytes: usize,
     max_full_bytes: Option<usize>,
 }
@@ -156,16 +161,18 @@ impl ExecCache {
                 }
             }
         };
-        if keep_full && !recorded.verdict_mismatch && !self.full.contains_key(key) {
-            let entry = CachedRun {
-                status,
-                origin: origin.map(String::from),
-                nodes: nodes.to_vec(),
-                spans: spans.to_vec(),
-            };
-            self.full_bytes += entry.cost(key.len());
-            self.full_order.push_back(key.to_vec());
-            self.full.insert(key.to_vec(), entry);
+        if keep_full && !recorded.verdict_mismatch {
+            if let hashbrown::hash_map::Entry::Vacant(slot) = self.full.entry(FullKey::from(key)) {
+                let entry = CachedRun {
+                    status,
+                    origin: origin.map(String::from),
+                    nodes: nodes.to_vec(),
+                    spans: spans.to_vec(),
+                };
+                self.full_bytes += entry.cost(key.len());
+                self.full_order.push_back(Arc::clone(slot.key()));
+                slot.insert(entry);
+            }
             let bound = self.max_full_bytes.unwrap_or(FULL_TIER_MAX_BYTES);
             while self.full_bytes > bound && !self.full_order.is_empty() {
                 let oldest = self.full_order.pop_front().unwrap_or_default();
