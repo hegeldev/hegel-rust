@@ -491,11 +491,11 @@ impl GenerationParameters {
 }
 
 impl Default for GenerationParameters {
-    /// A fixed fallback used only when no test-case parameters have been drawn
-    /// (a replay-only test case never samples, so it never consults these). The
-    /// values are the mean of [`Self::draw`] — each category's Dirichlet
-    /// concentration over their total — so any accidental use still produces a
-    /// reasonable distribution rather than a degenerate one.
+    /// The mean of [`Self::draw`]: each category's Dirichlet concentration
+    /// over their total. The engine always draws a test case's parameters
+    /// before it samples (see [`NativeTestCase::rng`]); this fixed set is
+    /// what the sampler microbenchmarks run under, so their timings do not
+    /// include a draw.
     fn default() -> Self {
         let total = DIRICHLET_ALPHA_ENDPOINT
             + DIRICHLET_ALPHA_INTERESTING

@@ -1809,3 +1809,26 @@ fn replay_only_family_has_no_swarm_parameters() {
     assert_eq!(tc.draw_integer(0i64, 10).unwrap(), 1);
     assert!(tc.family().generation_parameters().is_none());
 }
+
+#[test]
+fn default_swarm_parameters_are_the_dirichlet_mean() {
+    let params = GenerationParameters::default();
+    let total = DIRICHLET_ALPHA_ENDPOINT
+        + DIRICHLET_ALPHA_INTERESTING
+        + DIRICHLET_ALPHA_DIFFUSE
+        + DIRICHLET_ALPHA_MIDDLE;
+    assert_eq!(
+        params.endpoint_probability,
+        DIRICHLET_ALPHA_ENDPOINT / total
+    );
+    assert_eq!(
+        params.interesting_probability,
+        DIRICHLET_ALPHA_INTERESTING / total
+    );
+    assert_eq!(params.diffuse_probability, DIRICHLET_ALPHA_DIFFUSE / total);
+    let middle = 1.0
+        - params.endpoint_probability
+        - params.interesting_probability
+        - params.diffuse_probability;
+    assert!((middle - DIRICHLET_ALPHA_MIDDLE / total).abs() < 1e-12);
+}
