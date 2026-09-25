@@ -3,7 +3,9 @@
 
 use super::*;
 use crate::exchange::drive_no_yield;
-use crate::native::core::{CloneRecord, EngineError, NativeTestCase, RealizedStream, Span, Status};
+use crate::native::core::{
+    CloneRecord, EngineError, FloatWidth, NativeTestCase, RealizedStream, Span, Status,
+};
 use crate::native::graph::{DRAW_LABEL, START, Step};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::rng::EngineRng;
@@ -339,7 +341,9 @@ fn an_early_exits_shrink_keeps_no_value_the_walk_never_serves() {
 }
 
 fn float_body(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
-    let f = draw(tc, 1, |tc| tc.draw_float(0.0, 100.0, false, false, 5e-324))?;
+    let f = draw(tc, 1, |tc| {
+        tc.draw_float(FloatWidth::F64, 0.0, 100.0, false, false, 5e-324)
+    })?;
     Some(f >= 2.5)
 }
 
