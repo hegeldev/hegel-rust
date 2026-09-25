@@ -511,14 +511,7 @@ impl Default for IntegerGenerationParameters {
 }
 
 /// The mixture weights of the value categories a float draw chooses between.
-/// Drawn from the `DIRICHLET_ALPHA_FLOAT_*` concentrations, independently of
-/// [`IntegerGenerationParameters`], so the float categories and their
-/// weightings evolve on their own. Every category has its own field and the
-/// fields sum to 1. The last is the default draw, a coin flip between the
-/// continuous uniform over the range and a log-uniform over its binades:
-/// [`biased_float_sample`] falls through to it once the decision draw passes
-/// the sixteen special categories, and also when the chosen category has
-/// nothing valid to offer, so its weight is the remainder in practice.
+/// Fields sum to 1. The last is the default draw
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FloatGenerationParameters {
     /// A range endpoint (`min`, `max` and their neighbours).
@@ -561,9 +554,7 @@ pub struct FloatGenerationParameters {
 
 impl FloatGenerationParameters {
     /// Dirichlet concentrations, in the field order of the struct, which is also
-    /// the order [`Self::from_weights`] destructures. A new category is a new
-    /// constant, a new slot here, a new field above, and a line in that
-    /// conversion.
+    /// the order [`Self::from_weights`] destructures.
     const ALPHAS: [f64; 17] = [
         DIRICHLET_ALPHA_FLOAT_ENDPOINT,
         DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
