@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.47.2 - 2026-09-25
+
+This release updates the `hegeltest-c` dependency to 0.43.5.
+
 ## 0.47.1 - 2026-09-24
 
 Fix compilation with the `static-engine` feature by enabling the `std` feature, which provides the allocator and panic runtime required to build its library artifacts.
