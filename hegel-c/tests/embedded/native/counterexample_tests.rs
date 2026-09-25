@@ -556,3 +556,20 @@ fn the_history_thins_raws_first_then_old_accepts_once_over_its_byte_bound() {
     assert!(c.history().bytes() <= HISTORY_BYTES);
     assert!(c.history().entries().iter().all(|e| e.accept));
 }
+
+#[test]
+fn a_history_of_two_over_the_bound_keeps_the_newest() {
+    let mut c = Counterexample::default();
+    let huge = 300_000;
+    for first in [1, 2] {
+        let mut nodes = vec![int_node(0); huge];
+        nodes[0] = int_node(first);
+        c.record_sighting(&nodes, &[], true).unwrap();
+    }
+    let entries = c.history().entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].nodes[0].value(),
+        ChoiceValue::Integer(BigInt::from(2))
+    );
+}

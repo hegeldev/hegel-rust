@@ -3201,8 +3201,8 @@ struct EngineShrinkProbe<'e, 'a> {
     output: Output,
 }
 
-/// The deterministic shrinker's probe. A probe that flips the run into
-/// nondeterministic handling ends the shrink at once with
+/// The deterministic shrinker's probe. Once a probe has flipped the run
+/// into nondeterministic handling the next ends the shrink with
 /// [`ShrinkHalt::Stop`]: every further single-run judgment would be
 /// discarded when the origin is requeued for the gauntleted shrink, and
 /// the shrink deadline they would spend is the one that requeue inherits.
@@ -3228,9 +3228,6 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         .await?
                 }
             };
-            if self.engine.nd_active {
-                return Err(ShrinkHalt::Stop);
-            }
             let matched = run.status == Status::Interesting
                 && run.origin.as_deref() == Some(self.target_origin.as_str());
             Ok((matched, run.nodes, Spans::from(run.spans)))
