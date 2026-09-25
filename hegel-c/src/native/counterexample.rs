@@ -97,15 +97,32 @@ impl HistoryEntry {
 
 /// Everything a never-confirmed origin failed with before any flip: raw
 /// sightings and shrink accepts alike, in execution order, deduplicated by
-/// serialized choices, unbounded: a recency bound would evict exactly the
-/// early entries a late detection needs. A late flip backtracks over these
-/// to find the reproduction boundary. Dropped when the origin confirms —
-/// the graph takes over — which also keeps the accept segment sorted: no
+/// serialized choices. A late flip backtracks over these to find the
+/// reproduction boundary. Dropped when the origin confirms — the graph
+/// takes over — which also keeps the accept segment sorted: no
 /// post-restore accept is ever recorded.
+///
+/// Bounded at [`HISTORY_BYTES`] of nodes and spans, because a
+/// deterministic shrink records every accepted probe here and a long
+/// shrink of a large example would otherwise hold gigabytes for a
+/// backtrack that never comes. A plain recency bound would evict exactly
+/// the early entries a late detection needs, so over the bound the
+/// history thins instead: raw sightings go oldest first, then accepts
+/// from the old end of the segment, keeping the oldest accept and the
+/// dense run of newest ones the backtrack's geometric probes land on.
 #[derive(Default)]
 pub(crate) struct History {
     entries: Vec<HistoryEntry>,
-    seen: HashSet<Vec<u8>>,
+    seen: HashSet<u64>,
+    bytes: usize,
+}
+
+/// Upper bound on the nodes and spans a [`History`] holds.
+const HISTORY_BYTES: usize = 32 << 20;
+
+fn entry_bytes(entry: &HistoryEntry) -> usize {
+    entry.nodes.len() * core::mem::size_of::<ChoiceNode>()
+        + entry.spans.len() * core::mem::size_of::<Span>()
 }
 
 impl History {
@@ -119,14 +136,39 @@ impl History {
             serialize_nodes(nodes),
             "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
         );
-        if self.seen.insert(key) {
-            self.entries.push(HistoryEntry {
+        if self.seen.insert(fnv1a(&key)) {
+            let entry = HistoryEntry {
                 nodes: nodes.to_vec(),
                 spans: spans.to_vec(),
                 accept,
-            });
+            };
+            self.bytes += entry_bytes(&entry);
+            self.entries.push(entry);
+            self.thin();
         }
         Ok(())
+    }
+
+    /// Evict entries until the history fits [`HISTORY_BYTES`], the newest
+    /// always kept: the oldest raw sighting first, then the second-oldest
+    /// accept.
+    fn thin(&mut self) {
+        while self.bytes > HISTORY_BYTES && self.entries.len() > 1 {
+            let victim = self
+                .entries
+                .iter()
+                .position(|e| !e.accept)
+                .filter(|&i| i + 1 < self.entries.len())
+                .or_else(|| (self.entries.len() > 2).then_some(1))
+                .unwrap_or(0);
+            let removed = self.entries.remove(victim);
+            self.bytes -= entry_bytes(&removed);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.bytes
     }
 
     pub(crate) fn entries(&self) -> &[HistoryEntry] {

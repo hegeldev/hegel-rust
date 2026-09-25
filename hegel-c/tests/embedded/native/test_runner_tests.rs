@@ -3895,6 +3895,7 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
             ctx.collect_statistics = false;
             let output = ctx.settings.output.clone();
             let mut shrunk = crate::native::HashSet::default();
+            let calls_before = ctx.calls;
             ctx.shrink_origin(
                 origin.to_string(),
                 (vec![int_node(70)], Vec::new()),
@@ -3905,6 +3906,7 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
             )
             .await
             .unwrap();
+            let shrink_calls = ctx.calls - calls_before;
             assert!(
                 ctx.nd_active,
                 "a probe contradicting a generation verdict flips the run"
@@ -3918,9 +3920,20 @@ fn a_mid_shrink_flip_requeues_from_the_pre_shrink_nodes() {
                 &[int_node(70)],
                 "the requeue discards untrusted single-run progress"
             );
+            assert!(
+                shrink_calls <= FLIP_STOPS_SHRINK_CALLS,
+                "the flip ends the deterministic shrink at once instead of \
+                 spending the deadline on judgments the requeue discards: \
+                 {shrink_calls} calls"
+            );
         },
     );
 }
+
+/// Calls a deterministic shrink of `[70]` over a bug at `v >= 50` makes up
+/// to and including the first probe in `50..70`, which flips the run. Run
+/// on instead, the same shrink spends about 250.
+const FLIP_STOPS_SHRINK_CALLS: u64 = 20;
 
 #[test]
 fn an_exact_final_replay_vanish_aborts_under_error_strictness() {

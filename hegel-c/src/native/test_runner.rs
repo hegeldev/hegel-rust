@@ -50,7 +50,7 @@ use crate::native::graph_shrink::{
 };
 use crate::native::nd;
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
+use crate::native::shrinker::{ShrinkHalt, ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::Database;
 use crate::settings::{
@@ -283,7 +283,7 @@ pub(crate) async fn reproduce_blob(
             }
             engine.capture_replays = true;
             let graph = Arc::new(state.graph);
-            let longest = state.longest as usize;
+            let longest = (state.longest as usize).min(engine.choice_bound());
             let source = ReproSource::Graph {
                 graph: Arc::clone(&graph),
                 longest,
@@ -437,7 +437,7 @@ impl<'a> Engine<'a> {
                                 }
                                 StoredEntry::Graph(state) => {
                                     let graph = Arc::new(state.graph);
-                                    let longest = state.longest as usize;
+                                    let longest = (state.longest as usize).min(self.choice_bound());
                                     (
                                         ReproSource::Graph {
                                             graph: Arc::clone(&graph),
@@ -3201,9 +3201,17 @@ struct EngineShrinkProbe<'e, 'a> {
     output: Output,
 }
 
+/// The deterministic shrinker's probe. A probe that flips the run into
+/// nondeterministic handling ends the shrink at once with
+/// [`ShrinkHalt::Stop`]: every further single-run judgment would be
+/// discarded when the origin is requeued for the gauntleted shrink, and
+/// the shrink deadline they would spend is the one that requeue inherits.
 impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
     fn run<'s>(&'s mut self, req: ShrinkRun<'s>) -> crate::native::shrinker::ProbeFuture<'s> {
         Box::pin(async move {
+            if self.engine.nd_active {
+                return Err(ShrinkHalt::Stop);
+            }
             if self.verbosity == Verbosity::Verbose {
                 self.output.line("Running test case");
             }
@@ -3220,6 +3228,9 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
                         .await?
                 }
             };
+            if self.engine.nd_active {
+                return Err(ShrinkHalt::Stop);
+            }
             let matched = run.status == Status::Interesting
                 && run.origin.as_deref() == Some(self.target_origin.as_str());
             Ok((matched, run.nodes, Spans::from(run.spans)))
