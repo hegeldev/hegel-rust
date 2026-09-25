@@ -2679,6 +2679,15 @@ mod float_categories {
         assert!(float_below(f64::MIN_POSITIVE).is_subnormal());
     }
 
+    type Sampler = fn(&FloatChoice, FloatWidth, &mut EngineRng) -> Option<f64>;
+
+    fn direct_draws(sample: Sampler, fc: &FloatChoice, width: FloatWidth) -> Vec<f64> {
+        let mut rng = EngineRng::seeded(42);
+        (0..500)
+            .map(|_| sample(fc, width, &mut rng).unwrap())
+            .collect()
+    }
+
     #[test]
     fn float_pow2_is_the_exact_power_of_two() {
         assert_eq!(float_pow2(0), 1.0);
@@ -2808,5 +2817,212 @@ mod float_categories {
         let halves = vs.iter().filter(|&&v| v == 0.5).count();
         assert!((900..1100).contains(&halves), "{halves}");
         assert_eq!(pick_valid(&fc, [-1.0, 2.0], &mut rng), None);
+    }
+
+    #[test]
+    fn float_endpoint_sample_returns_an_edge_or_its_neighbour() {
+        assert_exactly_set(
+            &direct_draws(
+                float_endpoint_sample,
+                &choice(100.0, 200.0),
+                FloatWidth::F64,
+            ),
+            &[
+                100.0,
+                200.0,
+                100.0f64.next_up(),
+                101.0,
+                199.0,
+                200.0f64.next_down(),
+            ],
+        );
+    }
+
+    #[test]
+    fn float_near_zero_sample_is_a_small_normal() {
+        for v in direct_draws(float_near_zero_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.is_normal() && v.abs() < 0.1, "{v:e}");
+        }
+        for v in direct_draws(float_near_zero_sample, &unbounded(), FloatWidth::F32) {
+            assert!((F32_MIN_POSITIVE..0.1).contains(&v.abs()), "{v:e}");
+        }
+    }
+
+    #[test]
+    fn float_subnormal_sample_is_below_min_positive() {
+        for v in direct_draws(float_subnormal_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v != 0.0 && v.abs() < f64::MIN_POSITIVE, "{v:e}");
+        }
+        for v in direct_draws(float_subnormal_sample, &unbounded(), FloatWidth::F32) {
+            assert!(v != 0.0 && v.abs() < F32_MIN_POSITIVE, "{v:e}");
+        }
+    }
+
+    #[test]
+    fn float_near_one_sample_is_within_half_of_one() {
+        for v in direct_draws(float_near_one_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.abs() > 0.5 && v.abs() < 1.5, "{v}");
+        }
+    }
+
+    #[test]
+    fn float_integer_sample_is_a_nonzero_exact_integer() {
+        for v in direct_draws(float_integer_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v == v.trunc() && v != 0.0 && v.abs() <= TWO_53, "{v}");
+        }
+        for v in direct_draws(float_integer_sample, &unbounded(), FloatWidth::F32) {
+            assert!(v == v.trunc() && v != 0.0 && v.abs() <= TWO_24, "{v}");
+        }
+    }
+
+    #[test]
+    fn float_half_integer_sample_ends_in_a_half() {
+        for v in direct_draws(float_half_integer_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.fract().abs() == 0.5 && v.abs() < TWO_53 / 2.0, "{v}");
+        }
+    }
+
+    #[test]
+    fn float_near_max_for_add_sample_overflows_when_doubled() {
+        for v in direct_draws(float_near_max_for_add_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.is_finite() && v.abs() >= float_pow2(1023), "{v:e}");
+            assert!((v + v).is_infinite());
+        }
+        for v in direct_draws(float_near_max_for_add_sample, &unbounded(), FloatWidth::F32) {
+            assert!(
+                v.abs() <= F32_MAX && (v as f32 + v as f32).is_infinite(),
+                "{v:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_near_max_for_mul_sample_sits_around_sqrt_max() {
+        for v in direct_draws(float_near_max_for_mul_sample, &unbounded(), FloatWidth::F64) {
+            assert!(
+                (float_pow2(511)..float_pow2(513)).contains(&v.abs()),
+                "{v:e}"
+            );
+        }
+        for v in direct_draws(float_near_max_for_mul_sample, &unbounded(), FloatWidth::F32) {
+            assert!((float_pow2(63)..float_pow2(65)).contains(&v.abs()), "{v:e}");
+        }
+    }
+
+    #[test]
+    fn float_near_sqrt_min_positive_sample_sits_around_sqrt_min_positive() {
+        for v in direct_draws(
+            float_near_sqrt_min_positive_sample,
+            &unbounded(),
+            FloatWidth::F64,
+        ) {
+            assert!(
+                (float_pow2(-513)..float_pow2(-510)).contains(&v.abs()),
+                "{v:e}"
+            );
+        }
+        for v in direct_draws(
+            float_near_sqrt_min_positive_sample,
+            &unbounded(),
+            FloatWidth::F32,
+        ) {
+            assert!(
+                (float_pow2(-65)..float_pow2(-62)).contains(&v.abs()),
+                "{v:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_nan_sample_is_nan_only_when_allowed() {
+        for v in direct_draws(float_nan_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.is_nan());
+        }
+        let mut rng = EngineRng::seeded(42);
+        assert_eq!(
+            float_nan_sample(&choice(0.0, 1.0), FloatWidth::F64, &mut rng),
+            None
+        );
+    }
+
+    #[test]
+    fn float_infinity_sample_is_an_admitted_infinity() {
+        assert_exactly_set(
+            &direct_draws(float_infinity_sample, &unbounded(), FloatWidth::F64),
+            &[f64::INFINITY, f64::NEG_INFINITY],
+        );
+        let mut rng = EngineRng::seeded(42);
+        assert_eq!(
+            float_infinity_sample(&choice(0.0, 1.0), FloatWidth::F64, &mut rng),
+            None
+        );
+    }
+
+    #[test]
+    fn float_max_magnitude_sample_is_plus_or_minus_max_of_the_width() {
+        assert_exactly_set(
+            &direct_draws(float_max_magnitude_sample, &unbounded(), FloatWidth::F64),
+            &[f64::MAX, -f64::MAX],
+        );
+        assert_exactly_set(
+            &direct_draws(float_max_magnitude_sample, &unbounded(), FloatWidth::F32),
+            &[F32_MAX, -F32_MAX],
+        );
+    }
+
+    #[test]
+    fn float_max_exact_integer_sample_is_plus_or_minus_two_to_the_mantissa() {
+        assert_exactly_set(
+            &direct_draws(
+                float_max_exact_integer_sample,
+                &unbounded(),
+                FloatWidth::F64,
+            ),
+            &[TWO_53, -TWO_53],
+        );
+        assert_exactly_set(
+            &direct_draws(
+                float_max_exact_integer_sample,
+                &unbounded(),
+                FloatWidth::F32,
+            ),
+            &[TWO_24, -TWO_24],
+        );
+    }
+
+    #[test]
+    fn float_signed_zero_sample_is_an_admitted_zero() {
+        assert_exactly_set(
+            &direct_draws(float_signed_zero_sample, &unbounded(), FloatWidth::F64),
+            &[0.0, -0.0],
+        );
+        assert_exactly_set(
+            &direct_draws(float_signed_zero_sample, &choice(0.0, 1.0), FloatWidth::F64),
+            &[0.0],
+        );
+    }
+
+    #[test]
+    fn float_binade_edge_sample_is_a_power_of_two_or_its_predecessor() {
+        for v in direct_draws(float_binade_edge_sample, &unbounded(), FloatWidth::F64) {
+            let mantissa = v.to_bits() & FLOAT_MANTISSA_MASK;
+            assert!(mantissa == 0 || mantissa == FLOAT_MANTISSA_MASK, "{v:e}");
+        }
+    }
+
+    /// Every finite float is dyadic, so the non-dyadic intent is not observable
+    /// from the output; only finiteness, non-integrality and size are checked.
+    #[test]
+    fn float_non_dyadic_sample_is_a_small_non_integer() {
+        for v in direct_draws(float_non_dyadic_sample, &unbounded(), FloatWidth::F64) {
+            assert!(v.is_finite() && v != v.trunc() && v.abs() <= 101.0, "{v}");
+        }
+        for v in direct_draws(
+            float_non_dyadic_sample,
+            &choice(1000.0, 2000.0),
+            FloatWidth::F64,
+        ) {
+            assert!((1000.0..=2000.0).contains(&v), "{v}");
+        }
     }
 }
