@@ -442,11 +442,9 @@ impl<'a> Shrinker<'a> {
                 }
                 let members: Vec<(usize, alloc::sync::Arc<IntegerChoice>)> = valid
                     .iter()
-                    .filter_map(|&i| match self.current_nodes.get(i).map(|n| &n.data) {
-                        Some(ChoiceData::Integer(ic, v)) if *v == value => {
-                            Some((i, alloc::sync::Arc::clone(ic)))
-                        }
-                        _ => None,
+                    .filter_map(|&i| {
+                        let (ic, _) = self.current_nodes.get(i)?.data.as_integer()?;
+                        Some((i, alloc::sync::Arc::new(ic.clone())))
                     })
                     .collect();
                 self.shrink_stalled_duplicate_subgroups(&value, &members)
