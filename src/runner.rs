@@ -274,6 +274,11 @@ impl Settings {
 
     /// Set how the run reacts when it detects nondeterministic test behavior
     /// (default: [`NondeterminismStrictness::Quiet`]).
+    ///
+    /// The `HEGEL_NONDETERMINISM_STRICTNESS` environment variable, when set
+    /// and non-empty, changes the value a `Settings` starts from, whatever
+    /// the profile says: `quiet`, `warn` or `error`. A value set here takes
+    /// precedence over it.
     pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
         self.nondeterminism_strictness = strictness;
         self

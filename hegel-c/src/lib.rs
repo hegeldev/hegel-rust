@@ -991,6 +991,8 @@ fn cstring_lossy(s: &str) -> CString {
 /// - `HEGEL_SEED`: an integer fixes the seed; `none` clears one.
 /// - `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB`: `true`, `1` or `yes`, or
 ///   `false`, `0` or `no`.
+/// - `HEGEL_NONDETERMINISM_STRICTNESS`: `quiet`, `warn` or `error`, the
+///   `nondeterminism_strictness` value.
 ///
 /// An empty variable is ignored. A malformed one makes this function (and
 /// `hegel_settings_new_for_profile`) fail with `HEGEL_E_INVALID_ARG` and a

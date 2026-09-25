@@ -86,6 +86,10 @@ Engine-managed collections use the `new_collection`/`collection_more`/`collectio
 
 Follow the skills: **new-generator** for the generator itself (struct, builder methods, `Generator` impl, wiring, rustdoc, required tests), **new-default-generator** to wire up `gs::default::<T>()` / `#[derive(DefaultGenerator)]` support, and **add-library-support** for a whole third-party crate integration under `src/extras/`.
 
+### Adding a Setting
+
+A setting is not done until it is reachable every way the others are: a `Settings` builder method in both crates, a `hegel.toml` profile key (`hegel-c/src/config.rs`), `hegel_settings_set_*`/`hegel_settings_get_*` over the C ABI (with `src/ffi.rs` round-tripping it), and a `HEGEL_<SETTING>` environment variable applied in `Settings::with_env_overrides_from` (`hegel-c/src/settings.rs`) with the same vocabulary as the profile key, an empty value ignored and a malformed one rejected with a message naming the variable. Document all of them in `src/docs/settings.md` (the settings table and both environment-variable tables) and the `hegel_settings_new` doc in `hegel-c/src/lib.rs`. Never add a setting without its environment variable: libtest owns the command line, so the variable is the only way to change a setting for one run of a `#[hegel::test]` without editing it.
+
 ### Derive Macro
 
 `#[derive(DefaultGenerator)]` (in `hegel-macros/`) creates a `<Type>Generator` struct with:

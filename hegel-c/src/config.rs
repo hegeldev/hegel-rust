@@ -359,15 +359,13 @@ fn assign(
         }
         "nondeterminism_strictness" => {
             let s = expect_string(src, value, key)?;
-            delta.nondeterminism_strictness = Some(match s {
-                "quiet" => NondeterminismStrictness::Quiet,
-                "warn" => NondeterminismStrictness::Warn,
-                "error" => NondeterminismStrictness::Error,
-                other => {
+            delta.nondeterminism_strictness = Some(match NondeterminismStrictness::parse(s) {
+                Some(strictness) => strictness,
+                None => {
                     return Err(err(
                         line_no,
                         format!(
-                            "`nondeterminism_strictness` expects one of quiet|warn|error, got {other:?}"
+                            "`nondeterminism_strictness` expects one of quiet|warn|error, got {s:?}"
                         ),
                     ));
                 }

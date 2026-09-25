@@ -40,7 +40,8 @@
 //!
 //! Whatever profile is resolved, `base` included, the settings environment
 //! variables (`HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`,
-//! `HEGEL_SEED`, `HEGEL_DERANDOMIZE`, `HEGEL_PRINT_BLOB`; see
+//! `HEGEL_SEED`, `HEGEL_DERANDOMIZE`, `HEGEL_PRINT_BLOB`,
+//! `HEGEL_NONDETERMINISM_STRICTNESS`; see
 //! [`Settings::with_env_overrides_from`]) are applied over the result, so
 //! a settings handle starts from the profile as the environment adjusts
 //! it, and the setters called on it afterwards have the last word.

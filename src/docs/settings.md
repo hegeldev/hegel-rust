@@ -50,6 +50,7 @@ layers below it set and leaves the rest alone:
    | `HEGEL_SEED` | Sets `seed`: an integer is the seed, `none` clears one the profile set. |
    | `HEGEL_DERANDOMIZE` | Sets `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
    | `HEGEL_PRINT_BLOB` | Sets `print_blob`, with the same vocabulary. |
+   | `HEGEL_NONDETERMINISM_STRICTNESS` | Sets `nondeterminism_strictness`: `quiet`, `warn` or `error`. |
 
    An empty variable is ignored; any other malformed value is an error,
    raised when the `Settings` value is created. The variables do not
@@ -328,5 +329,6 @@ run first.
 | `HEGEL_SEED` | profile resolution | Sets `seed` over the resolved profile. |
 | `HEGEL_DERANDOMIZE` | profile resolution | Sets `derandomize` over the resolved profile. |
 | `HEGEL_PRINT_BLOB` | profile resolution | Sets `print_blob` over the resolved profile. |
+| `HEGEL_NONDETERMINISM_STRICTNESS` | profile resolution | Sets `nondeterminism_strictness` over the resolved profile. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
