@@ -1442,9 +1442,6 @@ impl<'a> Engine<'a> {
                 items
             })
             .collect();
-        if multi.is_empty() {
-            return Ok(());
-        }
 
         let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
 
