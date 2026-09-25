@@ -9,3 +9,5 @@ This patch also trims the shrinker's cost per attempt. Each attempt built the ca
 This patch also makes the nondeterminism detector's per-choice fingerprint cheaper to compute — two 64-bit hash lanes in place of one 128-bit multiply per byte — and stops it copying each choice's constraint just to compare it. Every executed test case pays this cost once per choice, so tests drawing many values and shrinking runs both gain about 2–3%.
 
 This patch also removes one allocation from every test case: the family's pretty-printer document now lives inside the family's own allocation, and printer handles fetched from a test case reach it through the family. Tests drawing a single value run about 1% fewer instructions per test case.
+
+This patch also hands each shrink attempt's candidate sequence to the test case that replays it instead of copying it, and slims the state the shrinker allocates per attempt so it fits the allocator's fast path again. Shrinking a vector of booleans runs about 8% fewer instructions per attempt; other shrinking runs about 1% fewer; generation about 0.3% fewer.

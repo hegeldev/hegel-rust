@@ -43,7 +43,7 @@ fn lower_common_node_offset_noop_when_fewer_than_two_changes() {
     drive_no_yield(shrinker.lower_common_node_offset()).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 
-    drive_no_yield(shrinker.consider(&[int_node(3, 0), int_node(5, 0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(3, 0), int_node(5, 0)])).unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 1);
     drive_no_yield(shrinker.lower_common_node_offset()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 3);
@@ -75,7 +75,7 @@ fn lower_common_node_offset_collapses_zig_zag_pair() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[int_node(50, 0), int_node(51, 0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(50, 0), int_node(51, 0)])).unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 2);
     drive_no_yield(shrinker.lower_common_node_offset()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
@@ -104,7 +104,7 @@ fn full_shrink_breaks_a_far_away_zig_zag_within_a_few_improvements() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let interesting = match nodes {
+                let interesting = match &nodes[..] {
                     [m, n] => {
                         let (m, n) = (int_value(m), int_value(n));
                         m.abs_diff(n) <= 1 && m <= -10 && n <= -10
@@ -144,7 +144,7 @@ fn lower_common_node_offset_handles_negative_shrink_target() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[int_node(-9, -10), int_node(-11, -10)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(-9, -10), int_node(-11, -10)])).unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 2);
     drive_no_yield(shrinker.lower_common_node_offset()).unwrap();
     let (a, b) = (
@@ -180,7 +180,7 @@ fn lower_common_node_offset_skips_non_integer_nodes() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[
+    drive_no_yield(shrinker.consider(vec![
         int_node(3, 0),
         ChoiceNode::boolean(BooleanChoice { p: 0.5 }, false, false),
         ChoiceNode::float(

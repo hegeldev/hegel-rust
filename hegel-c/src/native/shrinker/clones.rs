@@ -22,9 +22,9 @@ use super::{ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker};
 /// `template` with the clone node at `i` carrying `child` as its stream.
 /// The spliced record has no span info — replay recreates spans — and
 /// carries the candidate's nodes so replay puns against the child kinds.
-fn splice_child(template: &[ChoiceNode], i: usize, child: &[ChoiceNode]) -> Vec<ChoiceNode> {
+fn splice_child(template: &[ChoiceNode], i: usize, child: Vec<ChoiceNode>) -> Vec<ChoiceNode> {
     let mut candidate = template.to_vec();
-    let stream = Arc::new(RealizedStream::new(child.to_vec(), Vec::new()));
+    let stream = Arc::new(RealizedStream::new(child, Vec::new()));
     candidate[i] = ChoiceNode::clone_stream(stream, candidate[i].was_forced);
     candidate
 }
@@ -43,8 +43,7 @@ impl ShrinkProbe for NestedCloneProbe<'_, '_> {
             let (matched, actual) = match req {
                 ShrinkRun::Full(child) => {
                     let candidate = splice_child(self.template, i, child);
-                    let (matched, actual, _) =
-                        self.test_fn.run(ShrinkRun::Full(&candidate)).await?;
+                    let (matched, actual, _) = self.test_fn.run(ShrinkRun::Full(candidate)).await?;
                     (matched, actual)
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
@@ -120,8 +119,8 @@ impl<'a> Shrinker<'a> {
         };
         self.timed_out |= nested_timed_out;
 
-        let spliced = splice_child(&self.current_nodes, i, &final_child);
-        self.consider(&spliced).await?;
+        let spliced = splice_child(&self.current_nodes, i, final_child);
+        self.consider(spliced).await?;
         Ok(())
     }
 }

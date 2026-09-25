@@ -40,7 +40,7 @@ impl PermutationJudge for ReorderJudge<'_, '_> {
                     attempt.extend_from_slice(&self.snapshot_nodes[target_end..]);
                 }
             }
-            self.shrinker.consider(&attempt).await
+            self.shrinker.consider(attempt).await
         })
     }
 }
@@ -110,7 +110,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut attempt = self.current_nodes[..start].to_vec();
                 attempt.extend_from_slice(&self.current_nodes[end..]);
-                if self.consider(&attempt).await? {
+                if self.consider(attempt.clone()).await? {
                     break;
                 }
                 let Some(follower) = self.node_after_enclosing_span(i - 1, end) else {
@@ -169,7 +169,7 @@ impl<'a> Shrinker<'a> {
         for data in nudged {
             let mut modified = attempt.to_vec();
             modified[idx] = ChoiceNode::new(data, node.was_forced);
-            if self.consider(&modified).await? {
+            if self.consider(modified).await? {
                 return Ok(true);
             }
         }
@@ -208,7 +208,7 @@ impl<'a> Shrinker<'a> {
                 attempt.drain(u..v);
             }
 
-            if !self.consider(&attempt).await? {
+            if !self.consider(attempt).await? {
                 return Ok(false);
             }
         }
@@ -250,7 +250,7 @@ impl<'a> Shrinker<'a> {
             }
 
             let (is_interesting, actual_nodes, actual_spans) =
-                self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
+                self.run_test_fn(ShrinkRun::Full(attempt)).await?;
             self.calls += 1;
             if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
                 self.accept_improvement(actual_nodes, actual_spans);
@@ -264,7 +264,7 @@ impl<'a> Shrinker<'a> {
                         let mut spliced = self.current_nodes[..span.start].to_vec();
                         spliced.extend_from_slice(&actual_nodes[new_span.start..new_span.end]);
                         spliced.extend_from_slice(&self.current_nodes[span.end..]);
-                        self.consider(&spliced).await?;
+                        self.consider(spliced).await?;
                     }
                 }
             }
@@ -323,7 +323,7 @@ impl<'a> Shrinker<'a> {
                     let mut attempt = self.current_nodes[..a_start].to_vec();
                     attempt.extend_from_slice(&self.current_nodes[d_start..d_end]);
                     attempt.extend_from_slice(&self.current_nodes[a_end..]);
-                    self.consider(&attempt).await?;
+                    self.consider(attempt).await?;
                 }
             }
         }

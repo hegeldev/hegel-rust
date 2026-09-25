@@ -148,7 +148,7 @@ fn mutate_observing_replay_is_a_no_op_when_stalled() {
         vec![ranged_int_node(0, 7, 5)],
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[ranged_int_node(0, 7, 3)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![ranged_int_node(0, 7, 3)])).unwrap();
     shrinker.max_stall = 0;
     drive_no_yield(shrinker.mutate_and_shrink()).unwrap();
     assert_eq!(shrinker.calls, 1, "only the initial consider may have run");

@@ -135,7 +135,7 @@ impl<'a> Shrinker<'a> {
                         let mut attempt: Vec<ChoiceNode> = self.current_nodes.clone();
                         attempt[i] = ChoiceNode::float(fc.clone(), f64::NAN, attempt[i].was_forced);
                         let (is_interesting, actual_nodes, actual_spans) =
-                            self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
+                            self.run_test_fn(ShrinkRun::Full(attempt)).await?;
                         self.calls += 1;
                         if is_interesting
                             && sort_key(&actual_nodes) <= sort_key(&self.current_nodes)

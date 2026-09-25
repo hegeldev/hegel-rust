@@ -70,7 +70,7 @@ fn nested_shrink_minimizes_values_inside_clone_nodes() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
-                int_at_path_at_least(nodes, &[0, 0], 10),
+                int_at_path_at_least(&nodes, &[0, 0], 10),
                 nodes.to_vec(),
                 Spans::new(),
             ),
@@ -95,7 +95,7 @@ fn nested_shrink_recurses_into_clones_inside_clones() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
-                int_at_path_at_least(nodes, &[0, 1, 0], 5),
+                int_at_path_at_least(&nodes, &[0, 1, 0], 5),
                 nodes.to_vec(),
                 Spans::new(),
             ),
@@ -123,7 +123,7 @@ fn unconstrained_clone_nodes_are_deleted_outright() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => (
-                int_at_path_at_least(nodes, &[0], 3),
+                int_at_path_at_least(&nodes, &[0], 3),
                 nodes.to_vec(),
                 Spans::new(),
             ),
@@ -143,7 +143,7 @@ fn nested_shrink_tolerates_runs_that_drop_the_clone_node() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                if int_at_path_at_least(nodes, &[0, 0], 10) {
+                if int_at_path_at_least(&nodes, &[0, 0], 10) {
                     (true, nodes.to_vec(), Spans::new())
                 } else {
                     (false, Vec::new(), Spans::new())

@@ -73,7 +73,7 @@ fn chunk_shrinker(initial: Vec<ChoiceNode>, width: usize) -> Shrinker<'static> {
     Shrinker::with_probe(
         Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let interesting = parse_chunks(nodes, width)
+                let interesting = parse_chunks(&nodes, width)
                     .is_some_and(|chunks| chunks.iter().any(|c| c[width - 1] == 7));
                 (interesting, nodes.to_vec(), Spans::new())
             }

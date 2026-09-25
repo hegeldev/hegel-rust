@@ -1594,19 +1594,19 @@ impl NativeTestCase {
     ) -> Self {
         Self::for_owned_choices_and_template(
             choices.to_vec(),
-            prefix_nodes,
+            prefix_nodes.map(<[ChoiceNode]>::to_vec),
             trailing,
             max_size,
             observer,
         )
     }
 
-    /// [`Self::for_choices_and_template`] taking ownership of `choices`, for
-    /// a caller that has already built the vector: the replay keeps it as its
-    /// prefix instead of copying it.
+    /// [`Self::for_choices_and_template`] taking ownership of `choices` and
+    /// `prefix_nodes`, for a caller that has already built the vectors: the
+    /// replay keeps them as its prefix instead of copying them.
     pub fn for_owned_choices_and_template(
         choices: Vec<ChoiceValue>,
-        prefix_nodes: Option<&[ChoiceNode]>,
+        prefix_nodes: Option<Vec<ChoiceNode>>,
         trailing: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
@@ -1619,7 +1619,7 @@ impl NativeTestCase {
         };
         Self::new_stream(
             choices,
-            prefix_nodes.map(|n| n.to_vec()),
+            prefix_nodes,
             None,
             trailing,
             max_size,
@@ -1683,13 +1683,17 @@ impl NativeTestCase {
         prefix_nodes: Option<&[ChoiceNode]>,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
-        Self::for_owned_choices(choices.to_vec(), prefix_nodes, observer)
+        Self::for_owned_choices(
+            choices.to_vec(),
+            prefix_nodes.map(<[ChoiceNode]>::to_vec),
+            observer,
+        )
     }
 
-    /// [`Self::for_choices`] taking ownership of `choices`.
+    /// [`Self::for_choices`] taking ownership of `choices` and `prefix_nodes`.
     pub fn for_owned_choices(
         choices: Vec<ChoiceValue>,
-        prefix_nodes: Option<&[ChoiceNode]>,
+        prefix_nodes: Option<Vec<ChoiceNode>>,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
         let len = choices.len();

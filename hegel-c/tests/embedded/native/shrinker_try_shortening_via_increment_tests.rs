@@ -92,7 +92,7 @@ fn one_of_shrinker(initial: Vec<ChoiceNode>, spans: Spans) -> Shrinker<'static> 
     Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| {
             let choices = match run {
-                ShrinkRun::Full(nodes) => values(nodes),
+                ShrinkRun::Full(nodes) => values(&nodes),
                 ShrinkRun::Probe { prefix, .. } => prefix.to_vec(),
             };
             let (interesting, nodes) = one_of_tuple_or_bool(&choices);
@@ -221,7 +221,8 @@ fn shrinker_after_one_improvement() -> Shrinker<'static> {
         vec![selector(0), bool_node(true), bool_node(true)],
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[selector(0), bool_node(false), bool_node(true)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![selector(0), bool_node(false), bool_node(true)]))
+        .unwrap();
     assert_eq!(shrinker.improvements, 1);
     shrinker
 }
@@ -292,7 +293,7 @@ fn gate_then_pick_shrinker() -> Shrinker<'static> {
     Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| {
             let choices = match run {
-                ShrinkRun::Full(nodes) => values(nodes),
+                ShrinkRun::Full(nodes) => values(&nodes),
                 ShrinkRun::Probe { prefix, .. } => prefix.to_vec(),
             };
             let (interesting, nodes) = gate_then_pick(&choices);

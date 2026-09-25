@@ -229,7 +229,7 @@ fn consider_accepts_length_reducing_candidate_past_forced_node() {
         int_node(2, false),
     ]);
     let interesting =
-        drive_no_yield(shrinker.consider(&[int_node(9, true), int_node(2, false)])).unwrap();
+        drive_no_yield(shrinker.consider(vec![int_node(9, true), int_node(2, false)])).unwrap();
     assert!(
         interesting,
         "length-reducing candidate must not be pre-rejected by the forced guard"
@@ -262,7 +262,7 @@ fn consider_free_rejects_shortlex_larger_candidate_without_running() {
         vec![int_node(5, false)],
         Spans::new(),
     );
-    let interesting = drive_no_yield(shrinker.consider(&[int_node(7, false)])).unwrap();
+    let interesting = drive_no_yield(shrinker.consider(vec![int_node(7, false)])).unwrap();
     assert!(!interesting, "shortlex-larger candidate must be rejected");
     assert!(
         !ran.load(Ordering::Relaxed),

@@ -30,22 +30,25 @@ impl<'a> Shrinker<'a> {
                 attempt.extend_from_slice(&self.current_nodes[end..]);
                 hegel_internal_assert!(attempt.len() < self.current_nodes.len());
 
-                if !self.consider(&attempt).await? && i > 0 {
-                    let prev = &attempt[i - 1];
-                    let decremented: Option<ChoiceData> = match &prev.data {
-                        ChoiceData::Integer(ic, v) if *v != ic.simplest() => ic
+                let decremented: Option<ChoiceData> =
+                    match i.checked_sub(1).map(|prev| &attempt[prev].data) {
+                        Some(ChoiceData::Integer(ic, v)) if *v != ic.simplest() => ic
                             .value_from_bigint(&(v.clone() - 1))
                             .map(|nv| ChoiceData::Integer(alloc::sync::Arc::clone(ic), nv)),
-                        ChoiceData::Boolean(bc, true) => {
+                        Some(ChoiceData::Boolean(bc, true)) => {
                             Some(ChoiceData::Boolean(bc.clone(), false))
                         }
                         _ => None,
                     };
-                    if let Some(new_data) = decremented {
-                        let mut modified = attempt.clone();
-                        modified[i - 1] = ChoiceNode::new(new_data, modified[i - 1].was_forced);
-                        self.consider(&modified).await?;
-                    }
+                let modified = decremented.map(|new_data| {
+                    let mut modified = attempt.clone();
+                    modified[i - 1] = ChoiceNode::new(new_data, modified[i - 1].was_forced);
+                    modified
+                });
+                if !self.consider(attempt).await?
+                    && let Some(modified) = modified
+                {
+                    self.consider(modified).await?;
                 }
                 if i == 0 {
                     break;
@@ -123,7 +126,9 @@ impl<'a> Shrinker<'a> {
         };
         attempt[idx] = replaced;
 
-        let (_, actual_nodes, _) = self.run_test_fn(super::ShrinkRun::Full(&attempt)).await?;
+        let (_, actual_nodes, _) = self
+            .run_test_fn(super::ShrinkRun::Full(attempt.clone()))
+            .await?;
         if actual_nodes.len() >= expected_len {
             return Ok(false);
         }
@@ -136,7 +141,7 @@ impl<'a> Shrinker<'a> {
         for j in (idx + 1..=start).rev() {
             let mut candidate = attempt[..j].to_vec();
             candidate.extend_from_slice(&attempt[j + deficit..]);
-            if self.consider(&candidate).await? {
+            if self.consider(candidate).await? {
                 return Ok(true);
             }
         }
@@ -198,8 +203,9 @@ impl<'a> Shrinker<'a> {
                 lowered[i].was_forced,
             );
 
-            let (_, actual_nodes, actual_spans) =
-                self.run_test_fn(super::ShrinkRun::Full(&lowered)).await?;
+            let (_, actual_nodes, actual_spans) = self
+                .run_test_fn(super::ShrinkRun::Full(lowered.clone()))
+                .await?;
 
             let mut misalignment_handled = false;
             for k in (i + 1)..lowered.len().min(actual_nodes.len()) {
@@ -216,7 +222,7 @@ impl<'a> Shrinker<'a> {
                 if let Some(rd) = retry_data {
                     let mut candidate = lowered.clone();
                     candidate[k] = ChoiceNode::new(rd, candidate[k].was_forced);
-                    if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
+                    if self.consider(candidate).await? && self.improvements > epoch_phase1 {
                         misalignment_handled = true;
                         break;
                     }
@@ -240,7 +246,7 @@ impl<'a> Shrinker<'a> {
                 }
                 let mut candidate: Vec<_> = actual_nodes[..span.start].to_vec();
                 candidate.extend_from_slice(&actual_nodes[span.end..]);
-                if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
+                if self.consider(candidate).await? && self.improvements > epoch_phase1 {
                     shrank = true;
                     break;
                 }
@@ -250,7 +256,7 @@ impl<'a> Shrinker<'a> {
                 for j in i + 1..actual_nodes.len() {
                     let mut candidate: Vec<_> = actual_nodes[..j].to_vec();
                     candidate.extend_from_slice(&actual_nodes[j + 1..]);
-                    if self.consider(&candidate).await? && self.improvements > epoch_phase1 {
+                    if self.consider(candidate).await? && self.improvements > epoch_phase1 {
                         break;
                     }
                 }
@@ -352,7 +358,7 @@ impl<'a> Shrinker<'a> {
         let mut attempt = original[..i].to_vec();
         attempt.extend_from_slice(&original[i + total_delete..]);
         let epoch = self.improvements;
-        Ok(self.consider(&attempt).await? && self.improvements > epoch)
+        Ok(self.consider(attempt).await? && self.improvements > epoch)
     }
 
     /// Try deleting the region from the start of one occurrence of a
@@ -401,7 +407,7 @@ impl<'a> Shrinker<'a> {
             }
             let mut attempt = self.current_nodes[..start].to_vec();
             attempt.extend_from_slice(&self.current_nodes[end..]);
-            self.consider(&attempt).await?;
+            self.consider(attempt).await?;
         }
         Ok(())
     }

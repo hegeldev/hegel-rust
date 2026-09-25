@@ -25,6 +25,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use core::future::Future;
 use hashbrown::hash_map::Entry;
 
 use rand::RngExt;
@@ -1140,29 +1141,38 @@ impl<'a> Engine<'a> {
     /// earlier execution (kind drift or a verdict change — see
     /// [`Self::record_execution`]). `Err` means the driver violated the run
     /// contract (see [`NativeDataSource::take_outcome`]).
-    pub(crate) async fn test_function(
+    ///
+    /// Hand-desugared rather than an `async fn`: the test case is handed to
+    /// [`Self::execute`] before the future is built, so the future holds
+    /// only what lives across the suspension. An `async fn` keeps every
+    /// argument for the whole future, and this one sits inside the future
+    /// the shrinker boxes once per attempt.
+    pub(crate) fn test_function(
         &mut self,
         mut ntc: NativeTestCase,
-    ) -> Result<(RunResult, Option<RunError>), RunError> {
+    ) -> impl Future<Output = Result<(RunResult, Option<RunError>), RunError>> {
         if self.nondeterministic {
             ntc.set_nondeterministic();
         }
         let family = alloc::sync::Arc::clone(ntc.family());
         family.set_reject_concurrent_machine(!self.nondeterministic);
         let tc_start = crate::sys::Instant::now();
-        let run = self.execute(ntc).await?;
-        let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
-        if !self.nondeterministic && family.concurrent_machine() {
-            self.nondeterministic = true;
-            self.exec_cache.clear();
-            self.kind_ledger.clear();
-            self.consecutive_duplicates = 0;
-            if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
-                self.settings.output.line(concurrent_machine_notice());
+        let execution = self.execute(ntc);
+        async move {
+            let run = execution.await?;
+            let elapsed = tc_start.map_or(core::time::Duration::ZERO, |start| start.elapsed());
+            if !self.nondeterministic && family.concurrent_machine() {
+                self.nondeterministic = true;
+                self.exec_cache.clear();
+                self.kind_ledger.clear();
+                self.consecutive_duplicates = 0;
+                if self.settings.verbosity != Verbosity::Quiet && !self.settings.in_antithesis {
+                    self.settings.output.line(concurrent_machine_notice());
+                }
             }
+            let mismatch = self.record_run(&run, elapsed)?;
+            Ok((run, mismatch))
         }
-        let mismatch = self.record_run(&run, elapsed)?;
-        Ok((run, mismatch))
     }
 
     /// Record one executed test case: the execution cache and kind ledger
@@ -1266,32 +1276,42 @@ impl<'a> Engine<'a> {
     /// execution. `Err` means the driver violated the run contract by
     /// resuming the engine without concluding the offered case (see
     /// [`NativeDataSource::take_outcome`]).
-    async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
+    ///
+    /// Wraps the test case into its data source before building the future,
+    /// which then carries only the offer and the handle (see
+    /// [`Self::test_function`]); the future borrows the exchange, not the
+    /// engine, so the engine is free again while it runs.
+    fn execute(
+        &mut self,
+        ntc: NativeTestCase,
+    ) -> impl Future<Output = Result<RunResult, RunError>> + use<'a> {
+        let exchange: &'a CaseExchange = self.exchange;
         let (data_source, handle) = NativeDataSource::new(ntc);
-        self.exchange
-            .offer(alloc::sync::Arc::new(data_source))
-            .await;
-        let nodes = NativeDataSource::take_nodes(&handle);
-        let spans = NativeDataSource::take_spans(&handle);
-        let target_observations = NativeDataSource::take_target_observations(&handle);
-        let events = NativeDataSource::take_events(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle)?;
+        let offer = exchange.offer(alloc::sync::Arc::new(data_source));
+        async move {
+            offer.await;
+            let nodes = NativeDataSource::take_nodes(&handle);
+            let spans = NativeDataSource::take_spans(&handle);
+            let target_observations = NativeDataSource::take_target_observations(&handle);
+            let events = NativeDataSource::take_events(&handle);
+            let tc_result = NativeDataSource::take_outcome(&handle)?;
 
-        let (status, origin) = match tc_result {
-            TestCaseResult::Valid => (Status::Valid, None),
-            TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => (Status::EarlyStop, None),
-            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
-        };
+            let (status, origin) = match tc_result {
+                TestCaseResult::Valid => (Status::Valid, None),
+                TestCaseResult::Invalid => (Status::Invalid, None),
+                TestCaseResult::Overrun => (Status::EarlyStop, None),
+                TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
+            };
 
-        Ok(RunResult {
-            status,
-            nodes,
-            spans,
-            origin,
-            target_observations,
-            events,
-        })
+            Ok(RunResult {
+                status,
+                nodes,
+                spans,
+                origin,
+                target_observations,
+                events,
+            })
+        }
     }
 
     /// The single replay chokepoint — Hypothesis's `cached_test_function` —
@@ -1316,12 +1336,12 @@ impl<'a> Engine<'a> {
     /// nondeterministic nothing is served: identical choices need not
     /// produce identical outcomes, so every replay executes the body. While
     /// the cache holds no full entry (the whole generation phase) the key is
-    /// not even built. `choices` is taken by value: an executed replay keeps
-    /// it as the test case's prefix rather than copying it.
+    /// not even built. `choices` and `nodes` are taken by value: an executed
+    /// replay keeps them as the test case's prefix rather than copying them.
     async fn cached_test_function(
         &mut self,
         choices: Vec<ChoiceValue>,
-        nodes: Option<&[ChoiceNode]>,
+        nodes: Option<Vec<ChoiceNode>>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
         let ntc = match self.replay_of(choices, nodes, extend)? {
@@ -1343,7 +1363,7 @@ impl<'a> Engine<'a> {
     fn replay_of(
         &mut self,
         choices: Vec<ChoiceValue>,
-        nodes: Option<&[ChoiceNode]>,
+        nodes: Option<Vec<ChoiceNode>>,
         extend: usize,
     ) -> Result<Replay, RunError> {
         if !self.nondeterministic && self.exec_cache.serves_anything() {

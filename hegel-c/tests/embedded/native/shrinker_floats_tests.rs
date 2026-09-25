@@ -225,7 +225,7 @@ fn scaling_shrinker(
 ) -> Shrinker<'static> {
     Shrinker::with_probe(
         Box::new(move |run: ShrinkRun<'_>| match run {
-            ShrinkRun::Full(nodes) => (fails(nodes), nodes.to_vec(), Spans::new()),
+            ShrinkRun::Full(nodes) => (fails(&nodes), nodes.to_vec(), Spans::new()),
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),
         initial,

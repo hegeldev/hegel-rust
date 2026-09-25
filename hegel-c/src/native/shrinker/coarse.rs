@@ -53,7 +53,7 @@ impl<'a> Shrinker<'a> {
                 ChoiceData::Integer(alloc::sync::Arc::clone(&ic), BigInt::from(0)),
                 zeroed[i].was_forced,
             );
-            let (_, zero_actual, _) = self.run_test_fn(ShrinkRun::Full(&zeroed)).await?;
+            let (_, zero_actual, _) = self.run_test_fn(ShrinkRun::Full(zeroed)).await?;
             let shape_changed = zero_actual.len() != self.current_nodes.len()
                 || (i + 1..self.current_nodes.len()).any(|j| {
                     j >= zero_actual.len()

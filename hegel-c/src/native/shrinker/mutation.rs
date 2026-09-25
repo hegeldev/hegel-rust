@@ -159,7 +159,7 @@ impl<'a> Shrinker<'a> {
         attempt[i] = replaced;
         let expected: Vec<ChoiceKind> = snapshot.iter().map(|n| n.data.kind()).collect();
         let (is_interesting, actual_nodes, actual_spans) =
-            self.run_test_fn(ShrinkRun::Full(&attempt)).await?;
+            self.run_test_fn(ShrinkRun::Full(attempt)).await?;
         self.calls += 1;
         let diverged = actual_nodes.len() == expected.len()
             && actual_nodes

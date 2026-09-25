@@ -67,7 +67,7 @@ fn consider_replaces_current_spans_on_improvement() {
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, 1);
 
     let smaller = vec![int_node(0), int_node(0)];
-    assert!(drive_no_yield(shrinker.consider(&smaller)).unwrap());
+    assert!(drive_no_yield(shrinker.consider(smaller.clone())).unwrap());
     assert_eq!(shrinker.current_spans.len(), 1);
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, 2);
 }
@@ -91,11 +91,11 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
         initial_spans,
     );
 
-    assert!(drive_no_yield(shrinker.consider(&initial)).unwrap());
+    assert!(drive_no_yield(shrinker.consider(initial.clone())).unwrap());
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, 3);
 
     let larger = vec![int_node(7)];
-    drive_no_yield(shrinker.consider(&larger)).unwrap();
+    drive_no_yield(shrinker.consider(larger.clone())).unwrap();
     assert_eq!(shrinker.current_spans.get(0).unwrap().label, 3);
 }
 
@@ -112,11 +112,11 @@ fn changed_nodes_accumulates_diff_against_checkpoint() {
     );
     assert!(shrinker.changed_nodes().is_empty());
 
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10), int_node(10)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(10), int_node(10)])).unwrap();
     assert_eq!(shrinker.changed_nodes().len(), 1);
     assert!(shrinker.changed_nodes().contains(&0));
 
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10), int_node(0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(10), int_node(0)])).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&0));
     assert!(changed.contains(&2));
@@ -135,10 +135,10 @@ fn changed_nodes_clears_on_shape_change() {
         Spans::new(),
     );
 
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(5), int_node(5)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(5), int_node(5)])).unwrap();
     assert!(!shrinker.changed_nodes().is_empty());
 
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(0)])).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
@@ -156,7 +156,7 @@ fn changed_nodes_clears_on_kind_change_in_place() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(0)])).unwrap();
     assert!(shrinker.changed_nodes().is_empty());
 }
 
@@ -216,13 +216,13 @@ fn clear_change_tracking_rebaselines_and_empties_set() {
         initial,
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(10)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(10)])).unwrap();
     assert!(shrinker.changed_nodes().contains(&0));
 
     shrinker.clear_change_tracking();
     assert!(shrinker.changed_nodes().is_empty());
 
-    drive_no_yield(shrinker.consider(&[int_node(0), int_node(0)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(0), int_node(0)])).unwrap();
     let changed = shrinker.changed_nodes();
     assert!(changed.contains(&1));
     assert!(!changed.contains(&0));

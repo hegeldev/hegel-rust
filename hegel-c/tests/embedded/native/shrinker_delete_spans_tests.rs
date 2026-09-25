@@ -83,7 +83,7 @@ fn widened_deletion_removes_a_span_with_its_trailing_choices() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let vals = values(nodes);
+                let vals = values(&nodes);
                 let interesting = !vals.is_empty()
                     && vals.len() % 4 == 0
                     && vals[vals.len() - 4..].iter().all(|&v| v == 2);
@@ -153,7 +153,7 @@ fn attempted_extents_reset_after_an_improvement() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let vals = values(nodes);
+                let vals = values(&nodes);
                 let interesting = vals.last() == Some(&3);
                 let mut spans = Spans::new();
                 if nodes.len() >= 2 {
@@ -269,9 +269,9 @@ fn list_shrinker(
     Shrinker::with_probe(
         Box::new(move |run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let is_interesting = decode_list(nodes)
+                let is_interesting = decode_list(&nodes)
                     .is_some_and(|(elements, follower)| interesting(&elements, follower));
-                (is_interesting, nodes.to_vec(), list_spans(nodes))
+                (is_interesting, nodes.to_vec(), list_spans(&nodes))
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
         }),

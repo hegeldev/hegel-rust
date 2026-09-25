@@ -96,12 +96,12 @@ fn consider_short_circuits_when_stalled() {
         vec![int_node(5)],
         Spans::new(),
     );
-    drive_no_yield(shrinker.consider(&[int_node(3)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(3)])).unwrap();
     let baseline = counter.load(Ordering::Relaxed);
     shrinker.max_stall = 10;
     shrinker.calls_at_last_shrink = shrinker.calls;
     for v in 10..60 {
-        drive_no_yield(shrinker.consider(&[int_node(v)])).unwrap();
+        drive_no_yield(shrinker.consider(vec![int_node(v)])).unwrap();
     }
     assert!(
         counter.load(Ordering::Relaxed) - baseline <= 10,
@@ -127,13 +127,13 @@ fn max_stall_grows_after_shrink() {
         Spans::new(),
     );
     shrinker.max_stall = 5;
-    let accepted_first = drive_no_yield(shrinker.consider(&[int_node(9)])).unwrap();
+    let accepted_first = drive_no_yield(shrinker.consider(vec![int_node(9)])).unwrap();
     assert!(accepted_first);
     let stall_after_first = shrinker.max_stall;
     for v in [8, 7, 6] {
-        drive_no_yield(shrinker.consider(&[int_node(v)])).unwrap();
+        drive_no_yield(shrinker.consider(vec![int_node(v)])).unwrap();
     }
-    drive_no_yield(shrinker.consider(&[int_node(1)])).unwrap();
+    drive_no_yield(shrinker.consider(vec![int_node(1)])).unwrap();
     assert!(
         shrinker.max_stall > stall_after_first,
         "max_stall failed to grow: {} -> {}",
@@ -159,7 +159,7 @@ fn consider_adopts_early_exit_nodes_from_a_longer_candidate() {
         vec![int_node(5)],
         Spans::new(),
     );
-    let adopted = drive_no_yield(shrinker.consider(&[int_node(3), int_node(9)])).unwrap();
+    let adopted = drive_no_yield(shrinker.consider(vec![int_node(3), int_node(9)])).unwrap();
     assert!(adopted);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     assert_eq!(shrinker.current_nodes.len(), 1);
@@ -186,7 +186,7 @@ fn consider_rejects_a_longer_candidate_whose_prefix_is_larger_without_running() 
         vec![int_node(2)],
         Spans::new(),
     );
-    let adopted = drive_no_yield(shrinker.consider(&[int_node(7), int_node(0)])).unwrap();
+    let adopted = drive_no_yield(shrinker.consider(vec![int_node(7), int_node(0)])).unwrap();
     assert!(!adopted);
     assert_eq!(calls.load(Ordering::Relaxed), 0);
     assert_eq!(shrinker.current_nodes.len(), 1);
@@ -279,7 +279,7 @@ fn fixate_steps_a_failing_pass_only_once_per_outer_iteration() {
         "always_fails",
         Box::new(|sh| {
             Box::pin(async move {
-                sh.consider(&[int_node(4)]).await?;
+                sh.consider(vec![int_node(4)]).await?;
                 Ok(())
             })
         }),
@@ -317,7 +317,7 @@ fn fixate_re_steps_a_failing_stochastic_pass_up_to_its_retry_budget() {
             "always_fails",
             Box::new(|sh| {
                 Box::pin(async move {
-                    sh.consider(&[int_node(4)]).await?;
+                    sh.consider(vec![int_node(4)]).await?;
                     Ok(())
                 })
             }),
@@ -583,7 +583,7 @@ fn consider_and_probe_stop_when_improvement_cap_reached() {
         Spans::new(),
     );
     shrinker.max_improvements = 0;
-    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
+    assert!(drive_no_yield(shrinker.consider(vec![int_node(0)])).is_err());
     assert!(drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).is_err());
     assert_eq!(shrinker.calls, 0, "the cap stops before any execution");
 }
@@ -645,9 +645,9 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
         Spans::new(),
     );
     shrinker.deadline = Some(Instant::now().unwrap() - Duration::from_secs(1));
-    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
+    assert!(drive_no_yield(shrinker.consider(vec![int_node(0)])).is_err());
     assert!(shrinker.timed_out);
-    assert!(drive_no_yield(shrinker.consider(&[int_node(0)])).is_err());
+    assert!(drive_no_yield(shrinker.consider(vec![int_node(0)])).is_err());
     assert!(drive_no_yield(shrinker.probe(&[ChoiceValue::Integer(BigInt::from(0))], 8)).is_err());
     assert_eq!(shrinker.calls, 0, "nothing should have been executed");
 }

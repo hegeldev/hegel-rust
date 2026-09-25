@@ -83,7 +83,7 @@ fn node_program_left_extension_accumulates_across_accepted_steps() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
-                let vals = values(nodes);
+                let vals = values(&nodes);
                 let ok = vals.last() == Some(&42)
                     && vals[..vals.len() - 1] == [1, 2, 3, 4][..vals.len() - 1];
                 (ok, nodes.to_vec(), Spans::new())

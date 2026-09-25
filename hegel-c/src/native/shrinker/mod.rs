@@ -32,13 +32,14 @@ use crate::native::core::{ChoiceNode, ChoiceValue, MAX_SHRINKS, Spans, sort_key}
 /// Request passed to the shrinker's test function.
 ///
 /// [`ShrinkRun::Full`] replays a full node sequence with punning (the shape used by
-/// most shrink passes). [`ShrinkRun::Probe`] replays a prefix of choice values and
+/// most shrink passes); it owns the sequence, which the replaying test case keeps
+/// as its prefix instead of copying. [`ShrinkRun::Probe`] replays a prefix of choice values and
 /// then draws randomly beyond it — the `extend` behaviour used by `mutate_and_shrink`
 /// and the coarse `try_lower_node_as_alternative` pass. The random continuation is
 /// drawn from the engine's RNG (mirroring Hypothesis's `cached_test_function(..., extend=N)`
 /// drawing from `self.random`), so there is no per-probe seed.
 pub enum ShrinkRun<'a> {
-    Full(&'a [ChoiceNode]),
+    Full(Vec<ChoiceNode>),
     Probe {
         prefix: &'a [ChoiceValue],
         max_size: usize,
@@ -309,8 +310,8 @@ impl<'a> Shrinker<'a> {
     /// exits early (actual is shorter than candidate) or when value
     /// punning replaces values that no longer fit the kind at that
     /// position after a one_of branch switch.
-    pub async fn consider(&mut self, nodes: &[ChoiceNode]) -> ShrinkResult<bool> {
-        let against_current = sort_key(nodes).cmp(&sort_key(&self.current_nodes));
+    pub async fn consider(&mut self, nodes: Vec<ChoiceNode>) -> ShrinkResult<bool> {
+        let against_current = sort_key(&nodes).cmp(&sort_key(&self.current_nodes));
         if against_current == core::cmp::Ordering::Equal {
             return Ok(true);
         }
@@ -511,7 +512,7 @@ impl<'a> Shrinker<'a> {
             };
             attempt[i] = replaced;
         }
-        self.consider(&attempt).await
+        self.consider(attempt).await
     }
 
     /// Format an end-of-shrink profile report and feed it line-by-line to

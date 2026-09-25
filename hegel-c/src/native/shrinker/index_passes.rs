@@ -91,7 +91,7 @@ impl<'a> Shrinker<'a> {
                         let mut attempt = self.current_nodes.clone();
                         if let Some(lowered) = attempt[i].with_value(new_val) {
                             attempt[i] = lowered;
-                            if self.consider(&attempt).await? {
+                            if self.consider(attempt.clone()).await? {
                                 self.descend_index(i).await?;
                             }
 
@@ -99,7 +99,7 @@ impl<'a> Shrinker<'a> {
                             for node in &mut zeroed[i + 1..] {
                                 *node = node.with_simplest()?;
                             }
-                            self.consider(&zeroed).await?;
+                            self.consider(zeroed).await?;
                         }
                     }
 
@@ -170,7 +170,7 @@ impl<'a> Shrinker<'a> {
                 Some(node) => {
                     let mut attempt = self.current_nodes.clone();
                     attempt[i] = node;
-                    self.consider(&attempt).await?
+                    self.consider(attempt).await?
                 }
                 None => false,
             };
@@ -298,7 +298,7 @@ impl<'a> Shrinker<'a> {
             }
             let mut candidate = raised[..start].to_vec();
             candidate.extend_from_slice(&raised[end..]);
-            let outcome = self.consider_reshaped(ShrinkRun::Full(&candidate)).await?;
+            let outcome = self.consider_reshaped(ShrinkRun::Full(candidate)).await?;
             if outcome.is_none() || self.improvements > epoch {
                 return Ok(());
             }
