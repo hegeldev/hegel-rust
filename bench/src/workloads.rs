@@ -1,5 +1,5 @@
 use hegel::generators::{self as gs, Generator};
-use hegel::stateful::machine;
+use hegel::stateful::{Pool, machine, pool};
 use hegel::{DefaultGenerator, TestCase};
 
 use crate::{Kind, Workload};
@@ -314,6 +314,68 @@ fn machine_counter(tc: TestCase) {
     machine(Counter { value: 0 }).run(tc);
 }
 
+/// A resource manager checked against a model set, the way a test of a
+/// connection or file-handle pool would use [`Pool`]: `open` adds a handle,
+/// `touch` draws one without consuming it, `close` consumes one.
+struct HandleMachine {
+    handles: Pool<u32>,
+    open: std::collections::BTreeSet<u32>,
+    next: u32,
+    limit: Option<usize>,
+}
+
+impl HandleMachine {
+    fn new(tc: &TestCase, limit: Option<usize>) -> Self {
+        HandleMachine {
+            handles: pool(tc),
+            open: std::collections::BTreeSet::new(),
+            next: 0,
+            limit,
+        }
+    }
+}
+
+#[hegel::state_machine]
+impl HandleMachine {
+    #[rule]
+    fn open(&mut self, tc: TestCase) {
+        let stride = tc.draw(gs::integers::<u32>().min_value(1).max_value(4));
+        self.next += stride;
+        self.handles.add(self.next);
+        self.open.insert(self.next);
+        if let Some(limit) = self.limit {
+            assert!(self.open.len() < limit);
+        }
+    }
+
+    #[rule]
+    fn touch(&mut self, tc: TestCase) {
+        let h = *tc.draw(self.handles.values_reusable());
+        assert!(self.open.contains(&h));
+    }
+
+    #[rule]
+    fn close(&mut self, tc: TestCase) {
+        let h = tc.draw(self.handles.values_consumed());
+        assert!(self.open.remove(&h));
+    }
+
+    #[invariant]
+    fn counts_agree(&mut self, _: TestCase) {
+        assert_eq!(self.handles.len(), self.open.len());
+    }
+}
+
+fn machine_pool(tc: TestCase) {
+    let model = HandleMachine::new(&tc, None);
+    machine(model).run(tc);
+}
+
+fn shrink_machine_pool(tc: TestCase) {
+    let model = HandleMachine::new(&tc, Some(3));
+    machine(model).run(tc);
+}
+
 pub fn all() -> Vec<Workload> {
     let generate = |name, body| Workload {
         name,
@@ -349,6 +411,7 @@ pub fn all() -> Vec<Workload> {
         generate("regex_word_digits", regex_word_digits),
         generate("machine_counter", machine_counter),
         generate("machine_map", machine_map),
+        generate("machine_pool", machine_pool),
         shrink("shrink_int_above_1000", shrink_int_above_1000),
         shrink("shrink_vec_sum", shrink_vec_sum),
         shrink("shrink_text_contains", shrink_text_contains),
@@ -356,5 +419,6 @@ pub fn all() -> Vec<Workload> {
         shrink("shrink_version", shrink_version),
         shrink("shrink_tree_depth", shrink_tree_depth),
         shrink("shrink_machine_map", shrink_machine_map),
+        shrink("shrink_machine_pool", shrink_machine_pool),
     ]
 }
