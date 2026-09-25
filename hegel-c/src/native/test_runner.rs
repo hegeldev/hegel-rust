@@ -34,7 +34,8 @@ use crate::backend::{Failure, RunError, TestCaseResult, TestRunResult};
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::exchange::CaseExchange;
 use crate::native::core::{
-    ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Span, Spans, Status, sort_key,
+    ChoiceNode, ChoiceValue, MAX_SHRINKING_SECONDS, NativeTestCase, Prefix, Span, Spans, Status,
+    sort_key,
 };
 use crate::native::data_source::NativeDataSource;
 #[cfg(not(target_family = "wasm"))]
@@ -509,7 +510,7 @@ impl<'a> Engine<'a> {
                         break;
                     }
                     if let Some(stored_choices) = deserialize_choices(&raw) {
-                        let ntc = NativeTestCase::for_choices(&stored_choices, None, None);
+                        let ntc = NativeTestCase::for_choices(&stored_choices, None);
                         self.test_function(ntc).await?;
                     }
                     if let Some(db) = self.db() {
@@ -536,8 +537,7 @@ impl<'a> Engine<'a> {
                 let origin = pending.remove(0);
                 let initial = self.interesting.get(&origin).cloned().unwrap_or_default();
 
-                let choices: Vec<ChoiceValue> = initial.iter().map(|n| n.value()).collect();
-                let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
+                let verify_ntc = NativeTestCase::for_prefix(Prefix::Nodes(initial.clone()), None);
                 let (verify, mismatch) = self.test_function(verify_ntc).await?;
                 if let Some(err) = mismatch {
                     return Err(err);
@@ -1342,15 +1342,14 @@ impl<'a> Engine<'a> {
     /// nondeterministic nothing is served: identical choices need not
     /// produce identical outcomes, so every replay executes the body. While
     /// the cache holds no full entry (the whole generation phase) the key is
-    /// not even built. `choices` and `nodes` are taken by value: an executed
-    /// replay keeps them as the test case's prefix rather than copying them.
+    /// not even built. The `prefix` is taken by value: an executed replay
+    /// keeps it as the test case's prefix rather than copying it.
     async fn cached_test_function(
         &mut self,
-        choices: Vec<ChoiceValue>,
-        nodes: Option<Vec<ChoiceNode>>,
+        prefix: Prefix,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        let ntc = match self.replay_of(choices, nodes, extend)? {
+        let ntc = match self.replay_of(prefix, extend)? {
             Replay::Served(run) => return Ok(run),
             Replay::Execute(ntc) => ntc,
         };
@@ -1362,19 +1361,17 @@ impl<'a> Engine<'a> {
     }
 
     /// The synchronous half of [`Self::cached_test_function`]: the served
-    /// conclusion when the cache holds an exact repeat of `choices`, else
-    /// the test case that will replay them. Kept out of the async function
+    /// conclusion when the cache holds an exact repeat of `prefix`, else
+    /// the test case that will replay it. Kept out of the async function
     /// so its temporaries take no room in the future, which the shrinker
     /// boxes once per attempt.
-    fn replay_of(
-        &mut self,
-        choices: Vec<ChoiceValue>,
-        nodes: Option<Vec<ChoiceNode>>,
-        extend: usize,
-    ) -> Result<Replay, RunError> {
+    fn replay_of(&mut self, prefix: Prefix, extend: usize) -> Result<Replay, RunError> {
         if !self.nondeterministic && self.exec_cache.serves_anything() {
             let key = hegel_internal_unwrap!(
-                serialize_choices(&choices),
+                match &prefix {
+                    Prefix::Values(values) => serialize_choices(values),
+                    Prefix::Nodes(nodes) => serialize_nodes(nodes),
+                },
                 "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"
             );
             if let Some(hit) = self.exec_cache.serve(&key) {
@@ -1389,10 +1386,10 @@ impl<'a> Engine<'a> {
             }
         }
         Ok(Replay::Execute(if extend == 0 {
-            NativeTestCase::for_owned_choices(choices, nodes, None)
+            NativeTestCase::for_prefix(prefix, None)
         } else {
-            let budget = crate::native::core::flattened_values_len(&choices).saturating_add(extend);
-            NativeTestCase::for_owned_probe(choices, self.rng_spawn(), budget)
+            let budget = prefix.flattened_len().saturating_add(extend);
+            NativeTestCase::for_owned_probe(prefix, self.rng_spawn(), budget)
         }))
     }
 }
@@ -1424,16 +1421,14 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
             }
             let run = match req {
                 ShrinkRun::Full(nodes) => {
-                    let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
                     self.engine
-                        .cached_test_function(choices, Some(nodes), 0)
+                        .cached_test_function(Prefix::Nodes(nodes), 0)
                         .await?
                 }
                 ShrinkRun::Probe { prefix, max_size } => {
                     self.engine
                         .cached_test_function(
-                            prefix.to_vec(),
-                            None,
+                            Prefix::Values(prefix.to_vec()),
                             max_size.saturating_sub(prefix.len()),
                         )
                         .await?
@@ -1556,7 +1551,9 @@ impl<'a> Engine<'a> {
             let extend = self
                 .choice_bound()
                 .saturating_sub(crate::native::core::flattened_values_len(&attempt));
-            let run = self.cached_test_function(attempt, None, extend).await?;
+            let run = self
+                .cached_test_function(Prefix::Values(attempt), extend)
+                .await?;
             if run.status == Status::Interesting {
                 return Ok(());
             }

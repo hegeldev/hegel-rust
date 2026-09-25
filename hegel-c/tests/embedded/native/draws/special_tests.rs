@@ -256,8 +256,7 @@ fn generate_date_shrinks_toward_2000_01_01_clamped() {
         (date(2005, 3, 2), date(2010, 12, 31), date(2005, 3, 2)),
         (date(1980, 1, 1), date(1990, 6, 6), date(1990, 6, 6)),
     ] {
-        let mut ntc =
-            NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+        let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None);
         let d = generate_date(&mut ntc, min, max).unwrap();
         assert_eq!(d, expect);
     }
@@ -309,7 +308,7 @@ fn generate_time_respects_bounds_and_shrinks_to_min() {
         let ns = time_to_ns(&t);
         assert!((time_to_ns(&min)..=time_to_ns(&max)).contains(&ns), "{t:?}");
     }
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None);
     assert_eq!(generate_time(&mut ntc, min, max).unwrap(), min);
 }
 

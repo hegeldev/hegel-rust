@@ -10,7 +10,7 @@ pub use choices::{
 pub use float_index::{float_to_index, index_to_float};
 pub(crate) use state::float_restrict_and_redraw;
 pub use state::{
-    GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables,
+    GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Prefix,
     RecursionState, Span, Spans,
 };
 pub use state_machine::NativeStateMachine;

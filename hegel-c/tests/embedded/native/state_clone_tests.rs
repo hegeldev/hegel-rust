@@ -117,7 +117,7 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
     parent.reassemble();
     let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
-    let mut replay = NativeTestCase::for_choices(&choices, None, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None);
     assert_eq!(draw(&mut replay), p0);
     let replay_child = replay.clone_stream().unwrap();
     {
@@ -133,6 +133,65 @@ fn replaying_a_reassembled_sequence_reproduces_every_stream() {
 }
 
 #[test]
+fn replaying_from_the_nodes_reproduces_every_stream_and_puns_a_moved_clone() {
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(17));
+    let p0 = draw(&mut parent);
+    let child = parent.clone_stream().unwrap();
+    let (c0, c1) = {
+        let mut c = child.lock();
+        (draw(&mut c), draw(&mut c))
+    };
+    let p1 = draw(&mut parent);
+    parent.conclude(Status::Valid, None);
+    parent.reassemble();
+    let nodes = parent.nodes.clone();
+
+    let mut replay = NativeTestCase::for_prefix(Prefix::Nodes(nodes.clone()), None);
+    assert_eq!(draw(&mut replay), p0);
+    let replay_child = replay.clone_stream().unwrap();
+    {
+        let mut c = replay_child.lock();
+        assert_eq!(draw(&mut c), c0);
+        assert_eq!(draw(&mut c), c1);
+    }
+    assert_eq!(draw(&mut replay), p1);
+    replay.conclude(Status::Valid, None);
+    replay.reassemble();
+    assert_eq!(replay.nodes, nodes);
+
+    let mut moved = NativeTestCase::for_prefix(Prefix::Nodes(nodes), None);
+    let punned = moved.clone_stream().unwrap();
+    assert!(matches!(
+        punned.lock().draw_integer::<i128>(0, 10),
+        Err(EngineError::Overrun)
+    ));
+    assert_eq!(moved.status(), Some(Status::EarlyStop));
+}
+
+#[test]
+fn prefix_flattened_len_counts_clone_children_for_values_and_nodes() {
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(17));
+    draw(&mut parent);
+    let child = parent.clone_stream().unwrap();
+    {
+        let mut c = child.lock();
+        draw(&mut c);
+        draw(&mut c);
+    }
+    draw(&mut parent);
+    parent.conclude(Status::Valid, None);
+    parent.reassemble();
+    let values: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value()).collect();
+
+    let nodes = Prefix::Nodes(parent.nodes);
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes.flattened_len(), 5);
+    let values = Prefix::Values(values);
+    assert_eq!(values.len(), 3);
+    assert_eq!(values.flattened_len(), 5);
+}
+
+#[test]
 fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
     let mut parent = NativeTestCase::new_random(EngineRng::seeded(29));
     let child = parent.clone_stream().unwrap();
@@ -141,7 +200,7 @@ fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
     parent.reassemble();
     let choices: Vec<ChoiceValue> = parent.nodes.iter().map(|n| n.value().clone()).collect();
 
-    let mut replay = NativeTestCase::for_choices(&choices, None, None);
+    let mut replay = NativeTestCase::for_choices(&choices, None);
     let replay_child = replay.clone_stream().unwrap();
     let mut c = replay_child.lock();
     draw(&mut c);
@@ -154,8 +213,7 @@ fn replay_child_overruns_when_it_draws_past_its_recorded_stream() {
 
 #[test]
 fn clone_at_a_non_clone_prefix_position_puns_to_an_empty_child() {
-    let mut replay =
-        NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(5))], None, None);
+    let mut replay = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(5))], None);
     let child = replay.clone_stream().unwrap();
     let result = child.lock().draw_integer::<i128>(0, 10);
     assert!(matches!(result, Err(EngineError::Overrun)));

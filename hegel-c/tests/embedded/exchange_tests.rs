@@ -8,7 +8,7 @@ use crate::native::core::NativeTestCase;
 use crate::native::data_source::NativeDataSource;
 
 fn fresh_source() -> SharedDataSource {
-    let ntc = NativeTestCase::for_choices(&[], None, None);
+    let ntc = NativeTestCase::for_choices(&[], None);
     let (data_source, _handle) = NativeDataSource::new(ntc);
     Arc::new(data_source)
 }

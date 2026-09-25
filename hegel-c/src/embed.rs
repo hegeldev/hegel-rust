@@ -85,7 +85,7 @@ pub fn data_source_for_blob(
             choices.len()
         ));
     }
-    let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
+    let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
     Some(Arc::new(data_source))
 }

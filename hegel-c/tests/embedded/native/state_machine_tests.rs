@@ -56,13 +56,12 @@ fn grouped_machine(ntc: &mut NativeTestCase, rule_groups: &[i64]) -> NativeState
 }
 
 fn replay(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
-    NativeTestCase::for_choices_and_template(prefix, None, None, max_size, None)
+    NativeTestCase::for_choices_and_template(prefix, None, max_size, None)
 }
 
 fn simplest_after(prefix: &[ChoiceValue], max_size: usize) -> NativeTestCase {
     NativeTestCase::for_choices_and_template(
         prefix,
-        None,
         Some(ChoiceTemplate::simplest(None).unwrap()),
         max_size,
         None,

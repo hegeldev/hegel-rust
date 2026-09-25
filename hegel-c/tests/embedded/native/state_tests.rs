@@ -128,7 +128,6 @@ fn draw_integer_forced_records_a_forced_node_without_consuming_the_prefix() {
     let prefix = vec![ChoiceValue::Integer(BigInt::from(9))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
-        None,
         Some(ChoiceTemplate::simplest(None).unwrap()),
         4,
         None,
@@ -157,7 +156,7 @@ fn draw_integer_forced_notifies_observer() {
     let obs = Box::new(ForcedIntObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs));
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, 4, Some(obs));
     tc.draw_integer_forced(0i64, 5i64, 3i64).ok().unwrap();
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((BigInt::from(3), true)));
@@ -165,7 +164,7 @@ fn draw_integer_forced_notifies_observer() {
 
 #[test]
 fn draw_integer_forced_errors_on_an_exhausted_test_case() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     assert!(matches!(
         tc.draw_integer_forced(0i64, 5i64, 3i64),
         Err(EngineError::Overrun)
@@ -174,7 +173,7 @@ fn draw_integer_forced_errors_on_an_exhausted_test_case() {
 
 #[test]
 fn draw_integer_forced_rejects_out_of_range_values() {
-    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, None);
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, 4, None);
     let msg = tc
         .draw_integer_forced(0i64, 5i64, 6i64)
         .unwrap_err()
@@ -228,7 +227,7 @@ impl DataObserver for NoopObserver {}
 
 #[test]
 fn stop_span_on_empty_stack_is_a_no_op() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     tc.stop_span(false);
     assert!(tc.spans.is_empty());
 }
@@ -286,7 +285,7 @@ fn weighted_with_explicit_forced_records_forced_node() {
 
 #[test]
 fn freeze_is_a_no_op_on_already_frozen_test_case() {
-    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
     tc.start_span(7);
     tc.stop_span(false);
     tc.freeze();
@@ -310,7 +309,7 @@ fn weighted_notifies_observer_on_boolean_draw() {
     let obs = Box::new(CaptureBoolObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], Some(obs));
     let v = tc.weighted(0.5, None).ok().unwrap();
     assert!(v);
     let recorded = captured.lock().unwrap().expect("observer wasn't called");
@@ -332,7 +331,7 @@ fn freeze_notifies_observer_on_conclude_test() {
     let obs = Box::new(FreezeObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&[], None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&[], Some(obs));
     tc.freeze();
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some(Status::Valid));
@@ -354,7 +353,7 @@ fn draw_integer_notifies_observer() {
     let obs = Box::new(IntObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&choices, Some(obs));
     let v = tc.draw_integer::<i128>(0, 100).ok().unwrap();
     assert_eq!(v, 99);
     let recorded = captured.lock().unwrap().take();
@@ -377,7 +376,7 @@ fn draw_float_notifies_observer() {
     let obs = Box::new(FloatObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&choices, Some(obs));
     let v = tc.draw_float(0.0, 10.0, false, false, 5e-324).ok().unwrap();
     assert_eq!(v, 2.5);
     let recorded = captured.lock().unwrap().take();
@@ -407,7 +406,7 @@ fn draw_bytes_notifies_observer() {
     let obs = Box::new(BytesObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&choices, Some(obs));
     let v = tc.draw_bytes(0, 10).ok().unwrap();
     assert_eq!(v, vec![1, 2, 3]);
     let recorded = captured.lock().unwrap().take();
@@ -441,7 +440,7 @@ fn draw_string_notifies_observer() {
     let obs = Box::new(StringObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices(&choices, None, Some(obs));
+    let mut tc = NativeTestCase::for_choices(&choices, Some(obs));
     let intervals =
         crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)])
             .unwrap();
@@ -453,7 +452,7 @@ fn draw_string_notifies_observer() {
 
 #[test]
 fn stop_span_closes_nested_spans_innermost_first() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     tc.start_span(1);
     tc.start_span(2);
     tc.stop_span(false);
@@ -555,7 +554,6 @@ fn for_simplest_records_choice_nodes() {
 fn template_simplest_infinite_resolves_every_draw_to_simplest() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
-        None,
         Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
@@ -570,7 +568,6 @@ fn template_simplest_infinite_resolves_every_draw_to_simplest() {
 fn template_simplest_finite_count_n_produces_exactly_n_values() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
-        None,
         Some(ChoiceTemplate::simplest(Some(3)).unwrap()),
         100,
         None,
@@ -587,7 +584,6 @@ fn template_concrete_prefix_then_template() {
     let prefix = vec![ChoiceValue::Integer(BigInt::from(42))];
     let mut tc = NativeTestCase::for_choices_and_template(
         &prefix,
-        None,
         Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
@@ -599,11 +595,9 @@ fn template_concrete_prefix_then_template() {
 
 #[test]
 fn template_concrete_prefix_with_punning_then_template() {
-    let prefix = vec![ChoiceValue::Boolean(true)];
     let prefix_nodes = vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)];
-    let mut tc = NativeTestCase::for_choices_and_template(
-        &prefix,
-        Some(&prefix_nodes),
+    let mut tc = NativeTestCase::for_prefix_and_template(
+        Prefix::Nodes(prefix_nodes),
         Some(ChoiceTemplate::simplest(None).unwrap()),
         10,
         None,
@@ -635,7 +629,6 @@ fn for_simplest_wrapper_matches_template_with_count_none() {
     let mut a = NativeTestCase::for_simplest(5).unwrap();
     let mut b = NativeTestCase::for_choices_and_template(
         &[],
-        None,
         Some(ChoiceTemplate::simplest(None).unwrap()),
         5,
         None,
@@ -652,7 +645,6 @@ fn for_simplest_wrapper_matches_template_with_count_none() {
 fn template_count_decrements_on_each_draw() {
     let mut tc = NativeTestCase::for_choices_and_template(
         &[],
-        None,
         Some(ChoiceTemplate::simplest(Some(3)).unwrap()),
         100,
         None,
@@ -1308,7 +1300,7 @@ fn float_restrict_and_redraw_with_infinite_bounds_stays_finite() {
 
 #[test]
 fn draw_string_with_inverted_sizes_is_an_internal_error() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![(0, 0xD7FF)]).unwrap();
     let msg = tc
         .draw_string(intervals.into(), 5, 4)
@@ -1321,7 +1313,7 @@ fn draw_string_with_inverted_sizes_is_an_internal_error() {
 #[test]
 fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
     let choices = vec![ChoiceValue::String(Vec::new())];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
     let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
     assert_eq!(s, "");
@@ -1330,7 +1322,7 @@ fn draw_string_empty_alphabet_zero_max_size_draws_empty_string() {
 #[test]
 fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
     let choices = vec![ChoiceValue::Integer(crate::native::bignum::BigInt::from(5))];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
     let s = tc.draw_string(intervals.into(), 0, 0).ok().unwrap();
     assert_eq!(s, "");
@@ -1338,7 +1330,7 @@ fn draw_string_empty_alphabet_zero_max_size_puns_invalid_prefix_to_empty() {
 
 #[test]
 fn draw_string_with_empty_alphabet_and_nonzero_max_is_an_internal_error() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     let intervals = crate::native::intervalsets::IntervalSet::new(vec![]).unwrap();
     let msg = tc
         .draw_string(intervals.into(), 0, 4)
@@ -1402,7 +1394,7 @@ fn draw_fresh_id_keeps_the_hole_when_the_first_addition_is_deleted() {
         ChoiceValue::Integer(BigInt::from(2)),
         ChoiceValue::Integer(BigInt::from(3)),
     ];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
     assert_eq!(tc.draw_fresh_id().unwrap(), 2);
     assert_eq!(tc.draw_fresh_id().unwrap(), 3);
@@ -1414,7 +1406,7 @@ fn draw_fresh_id_keeps_the_hole_when_a_middle_addition_is_deleted() {
         ChoiceValue::Integer(BigInt::from(0)),
         ChoiceValue::Integer(BigInt::from(2)),
     ];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert_eq!(tc.draw_fresh_id().unwrap(), 2);
 }
@@ -1431,7 +1423,7 @@ fn draw_fresh_id_does_not_cascade_after_a_single_deletion() {
         ChoiceValue::Integer(BigInt::from(3)),
         ChoiceValue::Integer(BigInt::from(4)),
     ];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     let ids: Vec<i64> = (0..4).map(|_| tc.draw_fresh_id().unwrap()).collect();
     assert_eq!(ids, vec![1, 2, 3, 4]);
 }
@@ -1445,7 +1437,7 @@ fn draw_fresh_id_repairs_a_gap_of_three_to_small_ids() {
         ChoiceValue::Integer(BigInt::from(2)),
         ChoiceValue::Integer(BigInt::from(3)),
     ];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
 }
@@ -1457,7 +1449,7 @@ fn draw_fresh_id_repairs_a_used_prefix_id_to_the_smallest_unused() {
         ChoiceValue::Integer(BigInt::from(0)),
         ChoiceValue::Integer(BigInt::from(1)),
     ];
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
     assert_eq!(tc.draw_fresh_id().unwrap(), 2);
@@ -1466,7 +1458,7 @@ fn draw_fresh_id_repairs_a_used_prefix_id_to_the_smallest_unused() {
 #[test]
 fn draw_fresh_id_fills_gaps_when_generating_past_the_prefix() {
     let choices = [ChoiceValue::Integer(BigInt::from(1))];
-    let mut tc = NativeTestCase::for_choices_and_template(&choices, None, None, BUFFER_SIZE, None)
+    let mut tc = NativeTestCase::for_choices_and_template(&choices, None, BUFFER_SIZE, None)
         .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
@@ -1493,7 +1485,7 @@ fn draw_fresh_id_continues_across_clone_streams_without_collisions() {
 
 #[test]
 fn draw_fresh_id_puns_a_mismatched_prefix_kind() {
-    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None, None);
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Boolean(true)], None);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
 }
 
@@ -1512,7 +1504,7 @@ fn draw_fresh_id_notifies_the_observer() {
     let obs = Box::new(IdObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, 4, Some(obs))
         .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     let recorded = captured.lock().unwrap().take();
@@ -1561,7 +1553,7 @@ fn tc_with_fresh_ids(count: i64, tail: &[i64]) -> NativeTestCase {
         .map(|i| ChoiceValue::Integer(BigInt::from(i)))
         .collect();
     choices.extend(tail.iter().map(|&v| ChoiceValue::Integer(BigInt::from(v))));
-    let mut tc = NativeTestCase::for_choices(&choices, None, None);
+    let mut tc = NativeTestCase::for_choices(&choices, None);
     for i in 0..count {
         assert_eq!(tc.draw_fresh_id().unwrap(), i);
     }
@@ -1619,7 +1611,7 @@ fn draw_from_set_notifies_the_observer() {
     let obs = Box::new(SetObserver {
         captured: captured.clone(),
     });
-    let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
+    let mut tc = NativeTestCase::for_choices_and_template(&[], None, 4, Some(obs))
         .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     let chosen = tc.draw_from_set(&[0]).unwrap();
@@ -1664,7 +1656,7 @@ fn native_variables_add_active_and_consume_round_trip() {
 
 #[test]
 fn spans_nested_to_max_depth_stay_valid() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     for _ in 0..MAX_DEPTH {
         tc.start_span(1);
     }
@@ -1673,7 +1665,7 @@ fn spans_nested_to_max_depth_stay_valid() {
 
 #[test]
 fn spans_nested_past_max_depth_conclude_invalid() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
+    let mut tc = NativeTestCase::for_choices(&[], None);
     for _ in 0..=MAX_DEPTH {
         tc.start_span(1);
     }
@@ -1725,7 +1717,7 @@ fn draw_index_weighted_records_an_ordinary_index_choice() {
 #[test]
 fn draw_index_weighted_forces_the_only_positive_entry() {
     // prefix that should be ignored
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None);
     assert_eq!(ntc.draw_index_weighted(&[0.0, 5.0, 0.0]).unwrap(), 1);
     let node = &ntc.nodes[0];
     assert!(node.was_forced);
@@ -1738,7 +1730,7 @@ fn draw_index_weighted_forces_the_only_positive_entry() {
 
 #[test]
 fn draw_index_weighted_replays_the_prefix_even_for_an_excluded_entry() {
-    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None);
     assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
 }
 
@@ -1805,7 +1797,7 @@ fn cloning_a_probe_stream_draws_the_swarm_parameters_before_spawning() {
 /// none rather than inventing some.
 #[test]
 fn replay_only_family_has_no_swarm_parameters() {
-    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(1))], None, None);
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(1))], None);
     assert_eq!(tc.draw_integer(0i64, 10).unwrap(), 1);
     assert!(tc.family().generation_parameters().is_none());
 }

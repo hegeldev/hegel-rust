@@ -12,7 +12,7 @@ fn random_source() -> (NativeDataSource, NativeTestCaseHandle) {
 }
 
 fn exhausted_source() -> (NativeDataSource, NativeTestCaseHandle) {
-    let ntc = NativeTestCase::for_choices(&[], None, None);
+    let ntc = NativeTestCase::for_choices(&[], None);
     NativeDataSource::new(ntc)
 }
 
@@ -93,7 +93,7 @@ fn pool_add_ids_survive_deletion_before_a_consuming_draw() {
         ChoiceValue::Integer(BigInt::from(0)),
         ChoiceValue::Integer(BigInt::from(2)),
     ];
-    let (ds, _handle) = NativeDataSource::new(NativeTestCase::for_choices(&choices, None, None));
+    let (ds, _handle) = NativeDataSource::new(NativeTestCase::for_choices(&choices, None));
     let mut pool = ds.new_pool().unwrap();
     assert_eq!(ds.pool_add(&mut pool).unwrap(), 0);
     assert_eq!(ds.pool_generate(&mut pool, true).unwrap(), 0);

@@ -35,7 +35,7 @@ impl<'a> Shrinker<'a> {
     /// For each indexed node not at simplest, try decrementing it (lowering
     /// the index) and bumping a later node (raising its index).
     ///
-    /// Value punning (via `for_choices` with `prefix_nodes`) handles the
+    /// Value punning (a replay from a node prefix) handles the
     /// case where decrementing changes the kind at position `j` (e.g. a
     /// `one_of` branch switch).
     ///

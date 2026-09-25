@@ -17,8 +17,8 @@ use crate::native::rng::EngineRng;
 use super::MAX_CLONE_DEPTH;
 use super::choices::{
     BooleanChoice, BytesChoice, ChoiceNode, ChoiceTemplate, ChoiceTemplateKind, ChoiceValue,
-    EngineError, FloatChoice, IntegerChoice, InterestingOrigin, RealizedStream, Status,
-    StringChoice,
+    ChoiceValueRef, CloneValues, EngineError, FloatChoice, IntegerChoice, InterestingOrigin,
+    RealizedStream, Status, StringChoice, flattened_len, flattened_values_len,
 };
 use super::float_index::index_to_float;
 use super::{
@@ -1514,10 +1514,86 @@ impl FamilyCore {
     }
 }
 
+/// The choices a stream replays before it draws afresh: bare values (a
+/// stored example, a span mutation or targeting proposal, a clone record
+/// read back from the database) or the nodes of a shrink candidate, which
+/// carry the constraint each value was drawn under. A replay reads the
+/// values straight out of either, so a shrink attempt hands over the
+/// candidate it built rather than a copy of its values; the constraints
+/// serve the pun rule in `NativeTestCase::resolve_choice`, which needs to
+/// know whether a value that no longer fits its draw was its own
+/// constraint's simplest.
+pub enum Prefix {
+    Values(Vec<ChoiceValue>),
+    Nodes(Vec<ChoiceNode>),
+}
+
+impl Prefix {
+    /// The prefix that replays nothing.
+    pub fn empty() -> Self {
+        Prefix::Values(Vec::new())
+    }
+
+    /// Number of top-level choices.
+    pub fn len(&self) -> usize {
+        match self {
+            Prefix::Values(values) => values.len(),
+            Prefix::Nodes(nodes) => nodes.len(),
+        }
+    }
+
+    /// Total number of choices counting nested clones' children, as
+    /// [`flattened_len`] counts them.
+    pub fn flattened_len(&self) -> usize {
+        match self {
+            Prefix::Values(values) => flattened_values_len(values),
+            Prefix::Nodes(nodes) => flattened_len(nodes),
+        }
+    }
+
+    /// The choice at `idx`, which must be below [`Self::len`].
+    fn at(&self, idx: usize) -> ChoiceValueRef<'_> {
+        match self {
+            Prefix::Values(values) => ChoiceValueRef::from(&values[idx]),
+            Prefix::Nodes(nodes) => nodes[idx].data.value_ref(),
+        }
+    }
+
+    /// Whether the choice at `idx` was the simplest value of the constraint
+    /// it was drawn under. A bare value carries no constraint and never is.
+    fn is_simplest_at(&self, idx: usize) -> Result<bool, InternalError> {
+        match self {
+            Prefix::Values(_) => Ok(false),
+            Prefix::Nodes(nodes) => nodes[idx].data.is_simplest(),
+        }
+    }
+
+    /// The prefix a clone stream opened at `idx` replays: the recorded
+    /// children of the clone at that position, as nodes when the record came
+    /// from an execution and as bare values when it was read back from the
+    /// database; empty when the position holds no clone or lies past the
+    /// end.
+    fn child_at(&self, idx: usize) -> Prefix {
+        if idx >= self.len() {
+            return Prefix::empty();
+        }
+        match self.at(idx) {
+            ChoiceValueRef::Clone(CloneValues::Record(record)) => match record.realized() {
+                Some(stream) => Prefix::Nodes(stream.nodes().to_vec()),
+                None => Prefix::Values(record.owned_values()),
+            },
+            ChoiceValueRef::Clone(CloneValues::Stream(stream)) => {
+                Prefix::Nodes(stream.nodes().to_vec())
+            }
+            _ => Prefix::empty(),
+        }
+    }
+}
+
 /// A test case backed by a sequence of typed choices.
 ///
 /// During random generation, choices are drawn from the RNG.
-/// During replay/shrinking, choices are drawn from a prefix.
+/// During replay/shrinking, choices are drawn from a [`Prefix`].
 ///
 /// One `NativeTestCase` is one *stream* of a test-case family: the root
 /// stream, or a cloned stream created by [`Self::clone_stream`]. Each stream
@@ -1525,8 +1601,7 @@ impl FamilyCore {
 /// from different threads generate independently; the conclusion, draw
 /// budget, and stateful bookkeeping are shared through [`FamilyCore`].
 pub struct NativeTestCase {
-    prefix: Vec<ChoiceValue>,
-    prefix_nodes: Option<Vec<ChoiceNode>>,
+    prefix: Prefix,
     rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
@@ -1579,7 +1654,8 @@ pub struct NativeTestCase {
 impl NativeTestCase {
     #[cfg(test)]
     pub fn new_random(rng: EngineRng) -> Self {
-        Self::for_choices_and_template(&[], None, None, super::BUFFER_SIZE, None).with_random(rng)
+        Self::for_prefix_and_template(Prefix::empty(), None, super::BUFFER_SIZE, None)
+            .with_random(rng)
     }
 
     /// Like [`Self::new_random`], but generating from the given swarm
@@ -1591,7 +1667,7 @@ impl NativeTestCase {
         params: GenerationParameters,
         max_size: usize,
     ) -> Self {
-        Self::for_choices_and_template(&[], None, None, max_size, None)
+        Self::for_prefix_and_template(Prefix::empty(), None, max_size, None)
             .with_random_and_params(rng, params)
     }
 
@@ -1601,41 +1677,38 @@ impl NativeTestCase {
     /// `max_size` is the upper bound on the total number of choices the test
     /// case will make.  It is floored to `choices.len()` so a too-tight value
     /// can never truncate the explicit prefix.
+    #[cfg(test)]
     pub fn for_choices_and_template(
         choices: &[ChoiceValue],
-        prefix_nodes: Option<&[ChoiceNode]>,
         trailing: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
-        Self::for_owned_choices_and_template(
-            choices.to_vec(),
-            prefix_nodes.map(<[ChoiceNode]>::to_vec),
+        Self::for_prefix_and_template(
+            Prefix::Values(choices.to_vec()),
             trailing,
             max_size,
             observer,
         )
     }
 
-    /// [`Self::for_choices_and_template`] taking ownership of `choices` and
-    /// `prefix_nodes`, for a caller that has already built the vectors: the
-    /// replay keeps them as its prefix instead of copying them.
-    pub fn for_owned_choices_and_template(
-        choices: Vec<ChoiceValue>,
-        prefix_nodes: Option<Vec<ChoiceNode>>,
+    /// [`Self::for_choices_and_template`] over a [`Prefix`] the caller has
+    /// already built — the values or the nodes — which the replay keeps as
+    /// its prefix instead of copying.
+    pub fn for_prefix_and_template(
+        prefix: Prefix,
         trailing: Option<ChoiceTemplate>,
         max_size: usize,
         observer: Option<Box<dyn DataObserver>>,
     ) -> Self {
-        let max_size = max_size.max(choices.len());
+        let max_size = max_size.max(prefix.len());
         let budget = if trailing.is_some() {
             max_size
         } else {
             usize::MAX
         };
         Self::new_stream(
-            choices,
-            prefix_nodes,
+            prefix,
             None,
             trailing,
             max_size,
@@ -1649,8 +1722,7 @@ impl NativeTestCase {
     /// Build one stream — the root (fresh family) or a clone (shared
     /// family). The only place a `NativeTestCase` is constructed.
     fn new_stream(
-        prefix: Vec<ChoiceValue>,
-        prefix_nodes: Option<Vec<ChoiceNode>>,
+        prefix: Prefix,
         rng: Option<EngineRng>,
         trailing_template: Option<ChoiceTemplate>,
         max_size: usize,
@@ -1661,7 +1733,6 @@ impl NativeTestCase {
     ) -> Self {
         NativeTestCase {
             prefix,
-            prefix_nodes,
             rng,
             max_size,
             nodes: Vec::new(),
@@ -1684,9 +1755,8 @@ impl NativeTestCase {
     /// `kind.simplest()` of the requested choice kind. A deterministic
     /// all-simplest probe before random sampling begins.
     pub fn for_simplest(max_size: usize) -> Result<Self, InternalError> {
-        Ok(Self::for_choices_and_template(
-            &[],
-            None,
+        Ok(Self::for_prefix_and_template(
+            Prefix::empty(),
             Some(ChoiceTemplate::simplest(None)?),
             max_size,
             None,
@@ -1695,26 +1765,15 @@ impl NativeTestCase {
 
     /// Construct a `NativeTestCase` that replays `choices` in order,
     /// notifying `observer` after each draw and on conclusion.
-    pub fn for_choices(
-        choices: &[ChoiceValue],
-        prefix_nodes: Option<&[ChoiceNode]>,
-        observer: Option<Box<dyn DataObserver>>,
-    ) -> Self {
-        Self::for_owned_choices(
-            choices.to_vec(),
-            prefix_nodes.map(<[ChoiceNode]>::to_vec),
-            observer,
-        )
+    pub fn for_choices(choices: &[ChoiceValue], observer: Option<Box<dyn DataObserver>>) -> Self {
+        Self::for_prefix(Prefix::Values(choices.to_vec()), observer)
     }
 
-    /// [`Self::for_choices`] taking ownership of `choices` and `prefix_nodes`.
-    pub fn for_owned_choices(
-        choices: Vec<ChoiceValue>,
-        prefix_nodes: Option<Vec<ChoiceNode>>,
-        observer: Option<Box<dyn DataObserver>>,
-    ) -> Self {
-        let len = choices.len();
-        Self::for_owned_choices_and_template(choices, prefix_nodes, None, len, observer)
+    /// [`Self::for_choices`] over a [`Prefix`] the caller has already built,
+    /// which the replay keeps instead of copying.
+    pub fn for_prefix(prefix: Prefix, observer: Option<Box<dyn DataObserver>>) -> Self {
+        let len = prefix.len();
+        Self::for_prefix_and_template(prefix, None, len, observer)
     }
 
     /// A test case that replays `prefix` for the first positions and then
@@ -1723,12 +1782,12 @@ impl NativeTestCase {
     ///
     /// Used by `mutate_and_shrink`.
     pub fn for_probe(prefix: &[ChoiceValue], rng: EngineRng, max_size: usize) -> Self {
-        Self::for_owned_probe(prefix.to_vec(), rng, max_size)
+        Self::for_owned_probe(Prefix::Values(prefix.to_vec()), rng, max_size)
     }
 
-    /// [`Self::for_probe`] taking ownership of `prefix`.
-    pub fn for_owned_probe(prefix: Vec<ChoiceValue>, rng: EngineRng, max_size: usize) -> Self {
-        Self::for_owned_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
+    /// [`Self::for_probe`] over a [`Prefix`] the caller has already built.
+    pub fn for_owned_probe(prefix: Prefix, rng: EngineRng, max_size: usize) -> Self {
+        Self::for_prefix_and_template(prefix, None, max_size, None).with_random(rng)
     }
 
     /// Attach an RNG for post-prefix random draws.  Internal builder used by
@@ -1806,13 +1865,7 @@ impl NativeTestCase {
             return Err(EngineError::InvalidTestCase);
         }
         let idx = self.nodes.len();
-        let (child_prefix, child_prefix_nodes) = match self.prefix.get(idx) {
-            Some(ChoiceValue::Clone(record)) => (
-                record.owned_values(),
-                record.realized_nodes().map(<[ChoiceNode]>::to_vec),
-            ),
-            _ => (Vec::new(), None),
-        };
+        let child_prefix = self.prefix.child_at(idx);
         let child_rng = self.rng()?.map(|(rng, _)| rng.spawn());
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
@@ -1829,7 +1882,6 @@ impl NativeTestCase {
 
         let child = Self::new_stream(
             child_prefix,
-            child_prefix_nodes,
             child_rng,
             child_template,
             child_max_size,
@@ -2076,7 +2128,7 @@ impl NativeTestCase {
             || Ok(kind.simplest()),
             || Ok(kind.unit()),
             |v| match v {
-                ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
+                ChoiceValueRef::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
             },
             |rng, params| sample(kind, rng, params),
@@ -2181,7 +2233,7 @@ impl NativeTestCase {
             || Ok(BigInt::from(fallback)),
             || Ok(BigInt::from(fallback)),
             |v| match v {
-                ChoiceValue::Integer(n)
+                ChoiceValueRef::Integer(n)
                     if n.to_i64()
                         .is_some_and(|id| (0..=window_hi).contains(&id) && !used.contains(id)) =>
                 {
@@ -2245,7 +2297,7 @@ impl NativeTestCase {
             || Ok(BigInt::from(smallest)),
             || Ok(BigInt::from(smallest)),
             |v| match v {
-                ChoiceValue::Integer(n)
+                ChoiceValueRef::Integer(n)
                     if n.to_i64().is_some_and(|id| (0..=window_hi).contains(&id)) =>
                 {
                     Some(n.clone())
@@ -2305,7 +2357,7 @@ impl NativeTestCase {
             || kind.simplest(),
             || kind.unit(),
             |v| match v {
-                ChoiceValue::Float(f) if kind.validate(*f) => Some(*f),
+                ChoiceValueRef::Float(f) if kind.validate(f) => Some(f),
                 _ => None,
             },
             |rng, _| biased_float_sample(&kind, rng),
@@ -2332,7 +2384,7 @@ impl NativeTestCase {
             || Ok(kind.simplest()),
             || Ok(kind.unit()),
             |v| match v {
-                ChoiceValue::Bytes(b) if kind.validate(b) => Some(b.clone()),
+                ChoiceValueRef::Bytes(b) if kind.validate(b) => Some(b.to_vec()),
                 _ => None,
             },
             |rng, _| biased_bytes_sample(&kind, rng),
@@ -2372,7 +2424,7 @@ impl NativeTestCase {
             || kind.simplest(),
             || kind.unit(),
             |v| match v {
-                ChoiceValue::String(s) if kind.validate(s) => Some(s.clone()),
+                ChoiceValueRef::String(s) if kind.validate(s) => Some(s.to_vec()),
                 _ => None,
             },
             |rng, _| biased_string_sample(&kind, rng),
@@ -2428,7 +2480,7 @@ impl NativeTestCase {
                 || Ok(kind.simplest()),
                 || Ok(kind.unit()),
                 |v| match v {
-                    ChoiceValue::Boolean(b) => Some(*b),
+                    ChoiceValueRef::Boolean(b) => Some(b),
                     _ => None,
                 },
                 |rng, _| Ok(sample(p, rng)),
@@ -2463,15 +2515,15 @@ impl NativeTestCase {
     /// draw's constraint and extracts the typed payload, so a successful
     /// replay hands back a value proven to fit the draw. A prefix value
     /// that doesn't fit puns exactly as before: to the draw's `simplest()`
-    /// when the stale value was its original kind's simplest, and to
-    /// `unit()` otherwise. `random` samples from the stream's RNG under the
-    /// family's swarm parameters, which reach it only here: a replayed draw
-    /// never needs them.
+    /// when the stale value was its original kind's simplest (known only
+    /// when the prefix holds nodes), and to `unit()` otherwise. `random`
+    /// samples from the stream's RNG under the family's swarm parameters,
+    /// which reach it only here: a replayed draw never needs them.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
         unit: impl FnOnce() -> Result<V, InternalError>,
-        from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
+        from_prefix: impl FnOnce(ChoiceValueRef<'_>) -> Option<V>,
         random: impl FnOnce(&mut EngineRng, &GenerationParameters) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
@@ -2479,14 +2531,10 @@ impl NativeTestCase {
         let idx = self.nodes.len();
 
         if idx < self.prefix.len() {
-            let prefix_value = &self.prefix[idx];
-            if let Some(v) = from_prefix(prefix_value) {
+            if let Some(v) = from_prefix(self.prefix.at(idx)) {
                 return Ok((v, false));
             }
-            let is_simplest = match self.prefix_nodes.as_ref().and_then(|pn| pn.get(idx)) {
-                Some(pn) => *prefix_value == pn.data.simplest_value()?,
-                None => false,
-            };
+            let is_simplest = self.prefix.is_simplest_at(idx)?;
             return Ok((if is_simplest { simplest()? } else { unit()? }, false));
         }
 
