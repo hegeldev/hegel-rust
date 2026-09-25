@@ -5,8 +5,12 @@ use rand::SeedableRng;
 use rand::rand_core::TryRng;
 use rand::rngs::StdRng;
 
-use crate::generators::{Generator, PrintableGenerator, TestCase, binary, integers};
+use crate::generators::{
+    Generator, PrintableGenerator, TestCase, binary, integers, label_from_name,
+};
 use crate::pretty::PrettyPrinter;
+
+const RANDOMS_LABEL: u64 = label_from_name("hegel.rand.randoms");
 
 /// Generator for random number generators. Created by [`randoms()`].
 ///
@@ -28,6 +32,10 @@ impl RandomsGenerator {
 }
 
 impl Generator<HegelRandom> for RandomsGenerator {
+    fn label(&self) -> u64 {
+        RANDOMS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> HegelRandom {
         if self.use_true_random {
             let seed: u64 = integers().do_draw(tc);

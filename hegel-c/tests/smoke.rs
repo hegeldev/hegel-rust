@@ -99,7 +99,6 @@ enum CRunStatus {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[allow(dead_code)]
 enum CBackend {
-    Auto = 0,
     Default = 1,
     Urandom = 2,
 }
@@ -133,10 +132,12 @@ type FnNewStateMachine = unsafe extern "C" fn(
     *mut u8,
     *const *const c_char,
     *const i64,
+    *const f64,
     usize,
     *const *const c_char,
     *const bool,
     usize,
+    i64,
     i64,
     i64,
     *mut *mut u8,
@@ -1057,12 +1058,14 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 tc,
                 ptr::null(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 0,
                 invariant_ptrs.as_ptr(),
                 ptr::null(),
                 invariant_ptrs.len(),
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut concurrency,
             );
@@ -1078,12 +1081,14 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 tc,
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
+                ptr::null(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 ptr::null(),
                 invariant_ptrs.len(),
                 1,
                 1,
+                50,
                 &mut machine,
                 &mut concurrency,
             );

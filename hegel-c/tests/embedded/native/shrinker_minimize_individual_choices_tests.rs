@@ -6,7 +6,6 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -83,7 +82,7 @@ fn minimize_individual_choices_invokes_span_delete_fallback() {
                     spans.push(Span {
                         start: 1,
                         end: actual_len,
-                        label: "list".to_string(),
+                        label: 1,
                         depth: 0,
                         parent: None,
                         discarded: false,
@@ -205,7 +204,7 @@ fn minimize_individual_choices_size_dep_span_delete_succeeds() {
                     spans.push(Span {
                         start: 1,
                         end: actual.len(),
-                        label: "list".to_string(),
+                        label: 1,
                         depth: 0,
                         parent: None,
                         discarded: false,

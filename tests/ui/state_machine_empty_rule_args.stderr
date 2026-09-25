@@ -1,0 +1,5 @@
+error: #[rule()] has no arguments; write #[rule] instead
+ --> tests/ui/state_machine_empty_rule_args.rs:8:5
+  |
+8 |     #[rule()]
+  |     ^^^^^^^^^

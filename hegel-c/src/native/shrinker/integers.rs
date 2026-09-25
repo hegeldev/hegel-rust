@@ -1,7 +1,7 @@
 use crate::native::HashMap;
 use alloc::vec::Vec;
 
-use crate::native::bignum::{BigInt, Sign, Signed};
+use crate::native::bignum::{BigInt, BigUint, Sign, Signed};
 use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceData, ChoiceValue};
 
@@ -9,9 +9,28 @@ use super::search::{BinSearchDownBig, FindInteger};
 use super::{PassExit, ShrinkResult, Shrinker, absorb_node_gone};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_unwrap};
 
+/// The largest stalled duplicate group `shrink_duplicates` retries with
+/// each member left out in turn; a group of `n` costs `n` more attempts.
+const MAX_LEAVE_ONE_OUT_GROUP: usize = 8;
+
 /// The low `keep` bits of the non-negative `v`, i.e. `v mod 2^keep`.
 fn low_bits(v: &BigInt, keep: usize) -> BigInt {
     v - &BigInt::from((v >> keep).magnitude() << keep)
+}
+
+/// `radix^k` for the largest `k` such that `radix^k` divides the positive
+/// `v`: the trailing zeros of `v` written in base `radix`, as a number.
+/// `1` when `v` is not a positive multiple of `radix`.
+fn trailing_zeros_power(v: &BigInt, radix: u32) -> BigInt {
+    let radix = BigUint::from(radix);
+    let zero = BigUint::from(0u32);
+    let mut power = BigUint::from(1u32);
+    let mut rest = v.magnitude();
+    while rest != zero && &rest % &radix == zero {
+        rest = &rest / &radix;
+        power = &power * &radix;
+    }
+    BigInt::from(power)
 }
 
 impl<'a> Shrinker<'a> {
@@ -27,12 +46,25 @@ impl<'a> Shrinker<'a> {
     /// [`Shrinker::replace`], which range-checks it against the node's
     /// constraint (rejecting out-of-range candidates), so this stays correct
     /// for any node width.
+    ///
+    /// An accepted replacement is followed by
+    /// [`Shrinker::lower_common_node_offset`], as in Hypothesis's
+    /// `try_shrinking_nodes`: two integers pinned together by the predicate
+    /// (`|m - n| <= 1`) can each move only one step at a time, and the
+    /// scheduler re-steps an improving pass indefinitely, so left to a
+    /// standalone pass the offset lowering would only get its turn after
+    /// the improvement cap had been spent one step at a time.
     pub(super) async fn replace_int(&mut self, i: usize, candidate: &BigInt) -> ShrinkResult<bool> {
-        self.replace(&HashMap::from_iter([(
-            i,
-            ChoiceValue::Integer(candidate.clone()),
-        )]))
-        .await
+        let accepted = self
+            .replace(&HashMap::from_iter([(
+                i,
+                ChoiceValue::Integer(candidate.clone()),
+            )]))
+            .await?;
+        if accepted {
+            self.lower_common_node_offset().await?;
+        }
+        Ok(accepted)
     }
 
     /// Attempt to replace two integer nodes simultaneously; `replace`
@@ -105,7 +137,15 @@ impl<'a> Shrinker<'a> {
     /// 1, `d - 1` and `d - 2`, plus `mask_high_bits` (drop the top bits of
     /// the distance — predicates like `x & 0xff == 0x77` stall without it),
     /// the squeeze-into-one-byte probes, the shift-right descent, and
-    /// multiple-subtraction, iterated to a fixpoint.
+    /// multiple-subtraction, iterated to a fixpoint. Two moves of Hegel's
+    /// own sit between the descent and the subtractions: dividing the
+    /// distance by 3, 5, 7 and 10, and dropping every digit but the
+    /// trailing zeros, in decimal and in binary. Halving stays inside a
+    /// failing set of multiples of 1000 only until the power of two runs
+    /// out (from 10^9 it stops at 15_625_000); the odd divisors carry it
+    /// the rest of the way to 1000, unless the remaining factor is a prime
+    /// none of them divides (976_000_000 bottoms out at 61_000), which the
+    /// trailing zeros move drops in one step.
     pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -161,6 +201,20 @@ impl<'a> Shrinker<'a> {
                 let candidate = &before >> k.min(max_shift);
                 let ok = self.try_at_distance(i, &ic, &target, &candidate).await?;
                 search.record(ok);
+            }
+            for divisor in [3i32, 5, 7, 10] {
+                let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
+                let quotient = &base / divisor;
+                if quotient.sign() == Sign::Plus {
+                    self.try_at_distance(i, &ic, &target, &quotient).await?;
+                }
+            }
+            for radix in [10u32, 2] {
+                let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
+                let power = trailing_zeros_power(&base, radix);
+                if power > BigInt::from(1) && power < base {
+                    self.try_at_distance(i, &ic, &target, &power).await?;
+                }
             }
             for step in [2u64, 1] {
                 let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
@@ -383,6 +437,20 @@ impl<'a> Shrinker<'a> {
             if let ChoiceData::Integer(ic, value) = &self.current_nodes[valid[0]].data {
                 let (ic, value) = (alloc::sync::Arc::clone(ic), value.clone());
                 absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
+                if self.int_value_bigint(valid[0]).as_ref() != Some(&value) {
+                    continue;
+                }
+                let members: Vec<(usize, alloc::sync::Arc<IntegerChoice>)> = valid
+                    .iter()
+                    .filter_map(|&i| match self.current_nodes.get(i).map(|n| &n.data) {
+                        Some(ChoiceData::Integer(ic, v)) if *v == value => {
+                            Some((i, alloc::sync::Arc::clone(ic)))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                self.shrink_stalled_duplicate_subgroups(&value, &members)
+                    .await?;
                 continue;
             }
             let simplest = self.current_nodes[valid[0]].data.simplest_value()?;
@@ -390,6 +458,53 @@ impl<'a> Shrinker<'a> {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();
                 self.replace(&replacements).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A duplicate group that would not move as a whole may be two groups
+    /// sharing a value by coincidence: a pair of labels that must stay equal
+    /// and an unrelated node — a tag, a payload — that happens to hold the
+    /// same number. Retry the group split by the members' constraints, and a
+    /// stalled same-constraints group with each member left out in turn.
+    async fn shrink_stalled_duplicate_subgroups(
+        &mut self,
+        value: &BigInt,
+        members: &[(usize, alloc::sync::Arc<IntegerChoice>)],
+    ) -> ShrinkResult<()> {
+        let mut partitions: Vec<(alloc::sync::Arc<IntegerChoice>, Vec<usize>)> = Vec::new();
+        for (i, ic) in members {
+            match partitions.iter_mut().find(|(p_ic, _)| **p_ic == **ic) {
+                Some((_, indices)) => indices.push(*i),
+                None => partitions.push((alloc::sync::Arc::clone(ic), alloc::vec![*i])),
+            }
+        }
+        for (ic, mut indices) in partitions {
+            indices.retain(|&i| self.int_value_bigint(i).as_ref() == Some(value));
+            if indices.len() < 2 {
+                continue;
+            }
+            if indices.len() < members.len() {
+                absorb_node_gone(self.shrink_int_duplicate_group(value, &indices, &ic).await)?;
+                if self.int_value_bigint(indices[0]).as_ref() != Some(value) {
+                    continue;
+                }
+            }
+            if indices.len() < 3 || indices.len() > MAX_LEAVE_ONE_OUT_GROUP {
+                continue;
+            }
+            for left_out in 0..indices.len() {
+                let subset: Vec<usize> = indices
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| k != left_out)
+                    .map(|(_, &i)| i)
+                    .collect();
+                absorb_node_gone(self.shrink_int_duplicate_group(value, &subset, &ic).await)?;
+                if self.int_value_bigint(subset[0]).as_ref() != Some(value) {
+                    break;
+                }
             }
         }
         Ok(())

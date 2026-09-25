@@ -30,6 +30,7 @@ struct MethodInfo {
     name: syn::Ident,
     attrs: Vec<Attribute>,
     always_run: bool,
+    weight: Option<f64>,
 }
 
 fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> {
@@ -53,6 +54,12 @@ fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> 
                 (true, false) => quote! { ::hegel::stateful::Invariant::new },
                 (true, true) => quote! { ::hegel::stateful::Invariant::new_always_run },
             };
+            let weight = if invariants {
+                TokenStream::new()
+            } else {
+                let weight = m.weight.unwrap_or(1.0);
+                quote! { #weight, }
+            };
             // Register through a non-capturing closure rather than
             // `Self::#name` directly: `Rule.apply` is `fn(&mut M, TestCase)`,
             // and the method-call syntax inside the closure lets methods take
@@ -62,6 +69,7 @@ fn method_entries(methods: &[MethodInfo], invariants: bool) -> Vec<TokenStream> 
                 #(#attrs)*
                 #constructor(
                     #name_str,
+                    #weight
                     |__hegel_machine: &mut Self, __hegel_tc: ::hegel::TestCase| {
                         __hegel_machine.#name(__hegel_tc)
                     },
@@ -79,28 +87,71 @@ enum RuleGroup {
     Named(String),
 }
 
-/// Extract the `group = "..."` argument of a `#[rule]` attribute, if any.
-fn rule_group(attr: &Attribute) -> syn::Result<RuleGroup> {
-    if matches!(attr.meta, syn::Meta::Path(_)) {
-        return Ok(RuleGroup::Anonymous);
+/// The arguments of one `#[rule]` attribute.
+struct RuleArgs {
+    group: RuleGroup,
+    weight: Option<f64>,
+}
+
+/// Parse the `weight = <number>` value of a `#[rule]` attribute: an integer
+/// or float literal that is finite and strictly positive.
+fn rule_weight(meta: &syn::meta::ParseNestedMeta) -> syn::Result<f64> {
+    let value: syn::Lit = meta.value()?.parse()?;
+    let weight = match &value {
+        syn::Lit::Float(lit) => lit.base10_parse::<f64>()?,
+        syn::Lit::Int(lit) => lit.base10_parse::<f64>()?,
+        other => {
+            return Err(syn::Error::new_spanned(
+                other,
+                "#[rule] weight must be a number literal, like `weight = 2.0`",
+            ));
+        }
+    };
+    if !(weight.is_finite() && weight > 0.0) {
+        return Err(syn::Error::new_spanned(
+            &value,
+            "#[rule] weight must be finite and positive",
+        ));
     }
-    let mut group = None;
+    Ok(weight)
+}
+
+/// Extract the arguments of a `#[rule]` attribute. `group = "..."` is
+/// accepted only when `concurrent`. `weight = ...` is accepted in both
+/// kinds of machine.
+fn rule_args(attr: &Attribute, concurrent: bool) -> syn::Result<RuleArgs> {
+    let mut args = RuleArgs {
+        group: RuleGroup::Anonymous,
+        weight: None,
+    };
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(args);
+    }
+    let mut any = false;
     attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("group") {
+        any = true;
+        if concurrent && meta.path.is_ident("group") {
             let value: syn::LitStr = meta.value()?.parse()?;
-            group = Some(value.value());
+            args.group = RuleGroup::Named(value.value());
             Ok(())
-        } else {
+        } else if meta.path.is_ident("weight") {
+            args.weight = Some(rule_weight(&meta)?);
+            Ok(())
+        } else if concurrent {
             Err(meta.error("unsupported #[rule] argument; expected `group = \"...\"`"))
+        } else {
+            Err(meta.error("unsupported #[rule] argument"))
         }
     })?;
-    match group {
-        Some(group) => Ok(RuleGroup::Named(group)),
-        None => Err(syn::Error::new_spanned(
-            attr,
-            "#[rule(...)] requires `group = \"...\"`",
-        )),
+    if !any {
+        let message = if concurrent {
+            "#[rule(...)] requires `group = \"...\"`"
+        } else {
+            "#[rule()] has no arguments; write #[rule] instead"
+        };
+        return Err(syn::Error::new_spanned(attr, message));
     }
+    Ok(args)
 }
 
 /// Extract the `always_run` argument of an `#[invariant]` attribute, if any.
@@ -130,6 +181,7 @@ fn invariant_always_run(attr: &Attribute) -> syn::Result<bool> {
 struct ConcurrentMethodInfo {
     name: syn::Ident,
     group: Option<RuleGroup>,
+    weight: Option<f64>,
     attrs: Vec<Attribute>,
     always_run: bool,
 }
@@ -151,11 +203,13 @@ fn concurrent_method_entries(methods: &[ConcurrentMethodInfo]) -> Vec<TokenStrea
                         RuleGroup::Anonymous => quote! { ::hegel::stateful::ANONYMOUS_GROUP },
                         RuleGroup::Named(name) => quote! { #name },
                     };
+                    let weight = m.weight.unwrap_or(1.0);
                     quote! {
                         #(#attrs)*
                         ::hegel::stateful::ConcurrentRule::new(
                             #name_str,
                             #group,
+                            #weight,
                             |__hegel_machine: &Self, __hegel_tc: ::hegel::TestCase| {
                                 __hegel_machine.#name(__hegel_tc)
                             },
@@ -213,13 +267,14 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
             }
 
             if let Some(attr) = rule_attr {
-                let group = match rule_group(&attr) {
-                    Ok(group) => group,
+                let args = match rule_args(&attr, true) {
+                    Ok(args) => args,
                     Err(e) => return e.to_compile_error(),
                 };
                 rules.push(ConcurrentMethodInfo {
                     name: method.sig.ident.clone(),
-                    group: Some(group),
+                    group: Some(args.group),
+                    weight: args.weight,
                     attrs: method.attrs.clone(),
                     always_run: false,
                 });
@@ -232,6 +287,7 @@ pub fn expand_concurrent_state_machine(mut block: ItemImpl) -> TokenStream {
                 invariants.push(ConcurrentMethodInfo {
                     name: method.sig.ident.clone(),
                     group: None,
+                    weight: None,
                     attrs: method.attrs.clone(),
                     always_run,
                 });
@@ -263,7 +319,8 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
 
     for item in &mut block.items {
         if let ImplItem::Fn(method) = item {
-            let has_rule = method.attrs.iter().any(&is_rule);
+            let rule_attr = method.attrs.iter().find(|a| is_rule(a)).cloned();
+            let has_rule = rule_attr.is_some();
             let invariant_attr = method.attrs.iter().find(|a| is_invariant(a)).cloned();
             let has_invariant = invariant_attr.is_some();
             method.attrs.retain(|a| !is_rule(a) && !is_invariant(a));
@@ -291,20 +348,25 @@ pub fn expand_state_machine(mut block: ItemImpl) -> TokenStream {
                 rewrite_method_draws(method);
             }
 
-            let info = |always_run| MethodInfo {
+            let info = |always_run, weight| MethodInfo {
                 name: method.sig.ident.clone(),
                 attrs: method.attrs.clone(),
                 always_run,
+                weight,
             };
-            if has_rule {
-                rules.push(info(false));
+            if let Some(attr) = rule_attr {
+                let args = match rule_args(&attr, false) {
+                    Ok(args) => args,
+                    Err(e) => return e.to_compile_error(),
+                };
+                rules.push(info(false, args.weight));
             }
             if let Some(attr) = invariant_attr {
                 let always_run = match invariant_always_run(&attr) {
                     Ok(always_run) => always_run,
                     Err(e) => return e.to_compile_error(),
                 };
-                invariants.push(info(always_run));
+                invariants.push(info(always_run, None));
             }
         }
     }

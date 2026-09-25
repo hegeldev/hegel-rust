@@ -7,23 +7,22 @@
 //!
 //! The engine lives behind libhegel's C ABI; `drive` owns everything around
 //! it — installing the panic hook, wrapping each test body with
-//! `catch_unwind` plus `mark_complete`, the antithesis integration, the final
-//! replay of each discovered counterexample (with its report printed around
-//! it), and the closing re-raise of the failing test's own panic.
+//! `catch_unwind` plus `mark_complete`, the final replay of each discovered
+//! counterexample (with its report printed around it), and the closing
+//! re-raise of the failing test's own panic.
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Once};
 
-use crate::antithesis::TestLocation;
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
     AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
     hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
-use crate::runner::{Settings, Verbosity};
+use crate::runner::{Settings, TestLocation, Verbosity};
 use crate::test_case::{RunOutput, TestCase};
 
 static PANIC_HOOK_INIT: Once = Once::new();
@@ -55,7 +54,7 @@ pub(crate) fn take_panic_info() -> Option<PanicInfo> {
 }
 
 /// Install `info` into this thread's panic-info slot, as if the panic hook
-/// had captured it here. Used by `stateful::run_concurrent` to re-install a
+/// had captured it here. Used by `stateful::Machine::run_concurrent` to re-install a
 /// worker thread's capture on the main thread before `resume_unwind`ing the
 /// ferried payload — the re-raise skips the panic hook, so without this the
 /// lifecycle would fall back to [`unknown_panic_info`] and every concurrent
@@ -65,14 +64,14 @@ pub(crate) fn install_panic_info(info: PanicInfo) {
 }
 
 /// Whether the panic hook captures backtraces on this thread right now.
-/// `run_test_case` decides this per case; `stateful::run_concurrent` reads
+/// `run_test_case` decides this per case; `stateful::Machine::run_concurrent` reads
 /// it on the main thread to mirror the setting onto its worker threads.
 pub(crate) fn backtrace_capture_enabled() -> bool {
     CAPTURE_BACKTRACE.get()
 }
 
 /// Set whether the panic hook captures backtraces on this thread. Called by
-/// `stateful::run_concurrent` on each worker thread (see
+/// `stateful::Machine::run_concurrent` on each worker thread (see
 /// [`backtrace_capture_enabled`]).
 pub(crate) fn set_backtrace_capture(enabled: bool) {
     CAPTURE_BACKTRACE.set(enabled);
@@ -266,10 +265,10 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// start ([`CTestCase::is_nondeterministic`]): the engine stamps every case
 /// of a run it already knows to be nondeterministic before the case starts.
 /// The case that *makes* a run nondeterministic — the first to ask
-/// `stateful::run_concurrent` for real concurrency — is discarded (the
+/// `stateful::Machine::run_concurrent` for real concurrency — is discarded (the
 /// engine rejects its machine creation like a failed assumption), so every
 /// case that can fail was stamped up front and captures its whole trace,
-/// draws and notes made before `run_concurrent` included.
+/// draws and notes made before `Machine::run_concurrent` included.
 ///
 /// Also returns the caught panic payload for an `Interesting` result, so a
 /// final replay's caller can re-raise the test's *own* panic as the run's
@@ -302,7 +301,7 @@ pub(crate) fn run_test_case(
         should_emit,
         case_sink.or_else(|| output.sink().cloned()),
     );
-    let reporter = tc.child(0);
+    let reporter = tc.reporter();
     let result = with_test_context(|| catch_unwind(AssertUnwindSafe(|| test_fn(tc))));
     reporter.emit_rendered_output();
 
@@ -315,11 +314,11 @@ pub(crate) fn run_test_case(
         Err(e) if e.downcast_ref::<LoopDone>().is_some() => (TestCaseResult::Valid, None, None),
         Err(e) => {
             let e = match e.downcast::<InvalidArgument>() {
-                Ok(invalid) => std::panic::resume_unwind(Box::new(invalid.0)),
+                Ok(invalid) => panic!("{}", invalid.0),
                 Err(e) => e,
             };
             let e = match e.downcast::<InternalError>() {
-                Ok(internal) => std::panic::resume_unwind(Box::new(internal.0)),
+                Ok(internal) => panic!("{}", internal.0),
                 Err(e) => e,
             };
             let (thread_name, thread_id, location, backtrace) =
@@ -495,6 +494,9 @@ const FLAKY_DIAGNOSTIC: &str = "Flaky test detected: Your test produced differen
 /// non-final. The client owns the final replays: once the loop drains, it reads
 /// each discovered counterexample's reproduce blob from `hegel_run_result` and
 /// replays it via [`drive`]'s own `from_blob` path, marking it final itself.
+/// Those replays are part of the run, whose verdict libhegel has already
+/// reported to Antithesis, so they are built from settings without the test
+/// location and report nothing themselves.
 ///
 /// Because the failures (and their count) are known up front once the loop
 /// drains, the "N distinct failures" headline is printed before replaying, and
@@ -518,7 +520,7 @@ pub(crate) fn drive<F>(
     let quiet = verbosity == Verbosity::Quiet;
     let output = RunOutput::resolve();
 
-    let c_settings = SettingsHandle::build(settings, database_key);
+    let c_settings = SettingsHandle::build(settings, database_key, test_location);
     let run = match RunHandle::start(&c_settings, output.sink()) {
         Ok(run) => run,
         Err(message) => panic!("{message}"), // nocov
@@ -557,10 +559,7 @@ pub(crate) fn drive<F>(
 
     let result = run.result();
     use crate::ffi::sys::hegel_run_status_t as RunStatus;
-    let status = result.status();
-    emit_antithesis_assertion(status != RunStatus::HEGEL_RUN_STATUS_PASSED, test_location);
-
-    match status {
+    match result.status() {
         RunStatus::HEGEL_RUN_STATUS_PASSED => {}
         RunStatus::HEGEL_RUN_STATUS_ERROR => {
             let message = result
@@ -586,23 +585,27 @@ pub(crate) fn drive<F>(
                     "Property-based test failed with {count} distinct failures."
                 ));
             }
+            let replay_settings = SettingsHandle::build(settings, database_key, None);
             let mut last_payload: Option<Box<dyn std::any::Any + Send>> = None;
             for index in 0..count {
                 if multiple && !quiet {
                     output.line("");
                 }
-                let blob = result
-                    .failure(index)
+                let failure = result.failure(index);
+                let blob = failure
                     .reproduce_blob
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no blob"));
-                let c_tc = match CTestCase::from_blob(&c_settings, &blob, output.sink()) {
+                let c_tc = match CTestCase::from_blob(&replay_settings, &blob, output.sink()) {
                     Ok(c_tc) => c_tc,
                     Err(message) => panic!("{message}"), // nocov
                 };
                 let (tc_result, payload, diagnostic) =
                     run_test_case(c_tc, &mut test_fn, true, verbosity, &output, None);
                 if !matches!(tc_result, TestCaseResult::Interesting(_)) {
-                    panic!("{FLAKY_DIAGNOSTIC}");
+                    panic!(
+                        "{FLAKY_DIAGNOSTIC}\nThe failure that did not reproduce was: {}",
+                        failure.origin
+                    );
                 }
                 if let Some(diagnostic) = diagnostic {
                     output.block(&diagnostic);
@@ -645,7 +648,7 @@ pub(crate) fn drive_blob_replay<F>(
     init_panic_hook();
     let mut test_fn = test_fn;
     let output = RunOutput::resolve();
-    let c_settings = SettingsHandle::build(settings, database_key);
+    let c_settings = SettingsHandle::build(settings, database_key, test_location);
     let c_tc = match CTestCase::from_blob(&c_settings, blob, output.sink()) {
         Ok(c_tc) => c_tc,
         Err(message) => panic!("{message}"),
@@ -656,32 +659,15 @@ pub(crate) fn drive_blob_replay<F>(
         output.block(&diagnostic);
     }
     match result {
-        TestCaseResult::Interesting(_) => {
-            emit_antithesis_assertion(true, test_location);
-            match payload {
-                Some(payload) => std::panic::resume_unwind(payload),
-                None => unreachable!(), // nocov
-            }
-        }
-        _ => {
-            emit_antithesis_assertion(false, test_location);
-            panic!(
-                "reproduce_failure: the supplied failure blob no longer reproduces a \
-                 failure. The failure may have been fixed, or the blob is stale."
-            );
-        }
+        TestCaseResult::Interesting(_) => match payload {
+            Some(payload) => std::panic::resume_unwind(payload),
+            None => unreachable!(), // nocov
+        },
+        _ => panic!(
+            "reproduce_failure: the supplied failure blob no longer reproduces a \
+             failure. The failure may have been fixed, or the blob is stale."
+        ),
     }
-}
-
-/// Report the run's verdict to Antithesis (when running under it).
-fn emit_antithesis_assertion(test_failed: bool, test_location: Option<&TestLocation>) {
-    // nocov start
-    if crate::antithesis::is_running_in_antithesis() {
-        if let Some(loc) = test_location {
-            crate::antithesis::emit_assertion(loc, !test_failed);
-        }
-    }
-    // nocov end
 }
 
 #[cfg(test)]

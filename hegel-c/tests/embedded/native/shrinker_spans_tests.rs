@@ -16,7 +16,6 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -36,11 +35,11 @@ fn bool_node(value: bool) -> ChoiceNode {
     ChoiceNode::boolean(BooleanChoice { p: 0.5 }, value, false)
 }
 
-fn span(start: usize, end: usize, label: &str) -> Span {
+fn span(start: usize, end: usize, label: u64) -> Span {
     Span {
         start,
         end,
-        label: label.to_string(),
+        label,
         depth: 0,
         parent: None,
         discarded: false,
@@ -51,13 +50,13 @@ fn span(start: usize, end: usize, label: &str) -> Span {
 fn consider_replaces_current_spans_on_improvement() {
     let initial = vec![int_node(5), int_node(5)];
     let mut initial_spans = Spans::new();
-    initial_spans.push(span(0, 2, "initial"));
+    initial_spans.push(span(0, 2, 1));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut spans = Spans::new();
-                spans.push(span(0, nodes.len(), "updated"));
+                spans.push(span(0, nodes.len(), 2));
                 (true, nodes.to_vec(), spans)
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -65,25 +64,25 @@ fn consider_replaces_current_spans_on_improvement() {
         initial,
         initial_spans,
     );
-    assert_eq!(shrinker.current_spans.get(0).unwrap().label, "initial");
+    assert_eq!(shrinker.current_spans.get(0).unwrap().label, 1);
 
     let smaller = vec![int_node(0), int_node(0)];
     assert!(drive_no_yield(shrinker.consider(&smaller)).unwrap());
     assert_eq!(shrinker.current_spans.len(), 1);
-    assert_eq!(shrinker.current_spans.get(0).unwrap().label, "updated");
+    assert_eq!(shrinker.current_spans.get(0).unwrap().label, 2);
 }
 
 #[test]
 fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
     let initial = vec![int_node(0)];
     let mut initial_spans = Spans::new();
-    initial_spans.push(span(0, 1, "kept"));
+    initial_spans.push(span(0, 1, 3));
 
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {
             ShrinkRun::Full(nodes) => {
                 let mut spans = Spans::new();
-                spans.push(span(0, nodes.len(), "would_be_replaced"));
+                spans.push(span(0, nodes.len(), 4));
                 (true, nodes.to_vec(), spans)
             }
             ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
@@ -93,11 +92,11 @@ fn consider_leaves_current_spans_alone_when_candidate_not_smaller() {
     );
 
     assert!(drive_no_yield(shrinker.consider(&initial)).unwrap());
-    assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
+    assert_eq!(shrinker.current_spans.get(0).unwrap().label, 3);
 
     let larger = vec![int_node(7)];
     drive_no_yield(shrinker.consider(&larger)).unwrap();
-    assert_eq!(shrinker.current_spans.get(0).unwrap().label, "kept");
+    assert_eq!(shrinker.current_spans.get(0).unwrap().label, 3);
 }
 
 #[test]

@@ -30,7 +30,7 @@ use alloc::format;
 /// with the test case's outcome. The callback **must** call `mark_complete`
 /// on its data source before returning; the engine reads the outcome back
 /// through the data source rather than from the callback's return value.
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 pub(crate) fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
@@ -86,12 +86,10 @@ pub fn data_source_for_blob(
         ));
     }
     let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
-    ntc.family()
-        .set_stateful_step_count(settings.stateful_step_count);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
     Some(Box::new(data_source))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../tests/embedded/embed_tests.rs"]
 mod tests;

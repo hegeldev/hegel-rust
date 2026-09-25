@@ -780,6 +780,19 @@ fn nested_draw_inside_a_printed_draw_stays_silent() {
     assert!(lines[0].starts_with("let draw_1 = "), "{lines:?}");
 }
 
+/// A silent draw runs its generator inside a span too, so a named `tc.draw`
+/// made from inside `do_draw` belongs to the generator and is not reported
+/// as a top-level draw of its own.
+#[test]
+fn nested_draw_inside_a_silent_draw_stays_silent() {
+    let lines = failing_lines(|tc| {
+        tc.draw_silent(NestedDrawGenerator);
+        let _ = tc.draw(gs::booleans());
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = false;"]);
+}
+
 #[test]
 fn duplicate_set_elements_reject_cleanly_while_printing() {
     let lines = lines_at(Verbosity::Verbose, |tc| {

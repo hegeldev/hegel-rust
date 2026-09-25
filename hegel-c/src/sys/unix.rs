@@ -123,6 +123,18 @@ pub(super) fn write(path: &str, data: &[u8]) -> Result<(), Error> {
     write_all(data, |chunk| rustix::io::write(&fd, chunk))
 }
 
+/// Append `data` to the file at `path`, creating it if it does not exist.
+pub(super) fn append(path: &str, data: &[u8]) -> Result<(), Error> {
+    let fd = retry_intr(|| {
+        rustix::fs::open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::APPEND | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
+        )
+    })?;
+    write_all(data, |chunk| rustix::io::write(&fd, chunk))
+}
+
 /// Create a single directory level at `path`.
 pub(super) fn mkdir(path: &str) -> Result<(), Error> {
     rustix::fs::mkdir(path, Mode::from_bits_truncate(0o777))?;
@@ -229,6 +241,13 @@ pub(super) fn env_var(name: &str) -> Option<String> {
 /// The current process id.
 pub(super) fn pid() -> u32 {
     rustix::process::getpid().as_raw_nonzero().get() as u32
+}
+
+/// The current working directory, decoded lossily. `None` if the OS cannot
+/// report one.
+pub(super) fn cwd() -> Option<String> {
+    let dir = rustix::process::getcwd(Vec::new()).ok()?;
+    Some(String::from_utf8_lossy(dir.to_bytes()).into_owned())
 }
 
 /// Block until [`unpark`] is called on `word`, returning immediately (and

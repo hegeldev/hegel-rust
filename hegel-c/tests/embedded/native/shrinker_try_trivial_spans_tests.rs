@@ -6,7 +6,6 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -32,7 +31,7 @@ fn span(start: usize, end: usize) -> Span {
     Span {
         start,
         end,
-        label: "test".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,

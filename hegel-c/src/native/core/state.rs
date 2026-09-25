@@ -1,13 +1,12 @@
-use crate::native::{HashMap, HashSet};
+use crate::native::HashMap;
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use once_cell::race::OnceBox;
 
@@ -22,8 +21,8 @@ use super::choices::{
     StringChoice,
 };
 use super::{
-    BOUNDARY_PROBABILITY, BUFFER_SIZE, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE,
-    DIRICHLET_ALPHA_ENDPOINT, DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_DEFAULT,
+    BOUNDARY_PROBABILITY, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE, DIRICHLET_ALPHA_ENDPOINT,
+    DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_DEFAULT,
     DIRICHLET_ALPHA_FLOAT_ENDPOINT, DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
     DIRICHLET_ALPHA_FLOAT_INFINITY, DIRICHLET_ALPHA_FLOAT_INTEGER,
     DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER, DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
@@ -975,7 +974,7 @@ pub(crate) fn biased_float_sample(
 /// into `[min_value, max_value]`, using its mantissa bits as a fraction of
 /// the range so that distinct raw draws keep producing distinct in-range
 /// values, and re-routing around the `smallest_nonzero_magnitude` band.
-pub(crate) fn float_clamp(fc: &FloatChoice, raw: f64) -> f64 {
+pub(crate) fn float_restrict_and_redraw(fc: &FloatChoice, raw: f64) -> f64 {
     let (min_value, max_value) = (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX));
     let range_size = (max_value - min_value).min(f64::MAX);
     let mant = raw.abs().to_bits() & FLOAT_MANTISSA_MASK;
@@ -1059,6 +1058,25 @@ pub(crate) fn weighted_boolean_sample(p: f64, rng: &mut EngineRng) -> bool {
 /// `[0, 1]`).
 pub(crate) fn weighted_boolean_sample_precise(p: f64, rng: &mut EngineRng) -> bool {
     rng.random_bool(p)
+}
+
+/// Sample an index in `[0, weights.len())` with probability proportional to
+/// `weights[i]`.
+pub(crate) fn weighted_index_sample(weights: &[f64], rng: &mut EngineRng) -> usize {
+    let total: f64 = weights.iter().sum();
+    let mut target = rng.random::<f64>() * total;
+    let mut chosen = 0;
+    for (i, &w) in weights.iter().enumerate() {
+        if w <= 0.0 {
+            continue;
+        }
+        chosen = i;
+        if target < w {
+            break;
+        }
+        target -= w;
+    }
+    chosen
 }
 
 /// Interesting string constants: logic keywords, numeric edge cases,
@@ -1254,18 +1272,43 @@ pub(crate) fn codepoints_to_string(cps: &[u32]) -> String {
     cps.iter().filter_map(|&cp| char::from_u32(cp)).collect()
 }
 
-/// The smallest nonnegative integer not in `used`.
-fn smallest_unused_id(used: &BTreeSet<i64>) -> i64 {
-    let mut candidate = 0;
-    for &id in used {
-        if id > candidate {
-            break;
-        }
-        if id == candidate {
-            candidate += 1;
+/// The identifiers a test case has handed out through
+/// [`NativeTestCase::draw_fresh_id`], with the smallest unused one tracked
+/// incrementally. Identifiers are only ever added, so the smallest unused
+/// one never moves down and each insertion advances it past at most the
+/// identifiers it newly covers: amortised constant time per draw, where a
+/// scan from zero would make a long-running test case's pool additions
+/// quadratic.
+#[derive(Default)]
+pub(crate) struct FreshIds {
+    used: BTreeSet<i64>,
+    smallest_unused: i64,
+}
+
+impl FreshIds {
+    /// Record `id` as handed out.
+    pub(crate) fn insert(&mut self, id: i64) {
+        if self.used.insert(id) {
+            while self.used.contains(&self.smallest_unused) {
+                self.smallest_unused += 1;
+            }
         }
     }
-    candidate
+
+    /// Whether `id` has been handed out.
+    pub(crate) fn contains(&self, id: i64) -> bool {
+        self.used.contains(&id)
+    }
+
+    /// The smallest nonnegative identifier not yet handed out.
+    pub(crate) fn smallest_unused(&self) -> i64 {
+        self.smallest_unused
+    }
+
+    /// The largest identifier handed out, or `-1` if none has been.
+    pub(crate) fn max_used(&self) -> i64 {
+        self.used.iter().next_back().copied().unwrap_or(-1)
+    }
 }
 
 /// A pool of variable IDs for stateful testing.
@@ -1311,7 +1354,7 @@ impl NativeVariables {
 }
 
 /// A span within the choice sequence, labelled by draw kind or by the
-/// numeric label of an enclosing `start_span` call.
+/// label of an enclosing `start_span` call.
 ///
 /// Recorded to enable span-mutation exploration (see `try_span_mutation`)
 /// and to expose the structure of a test case to the shrinker, mutator,
@@ -1320,7 +1363,7 @@ impl NativeVariables {
 pub struct Span {
     pub start: usize,
     pub end: usize,
-    pub label: String,
+    pub label: u64,
     /// Depth of this span in the span tree. The top-level span has depth 0.
     pub depth: u32,
     /// Index of the directly-enclosing span, or `None` for the top-level span.
@@ -1341,30 +1384,6 @@ pub struct Span {
 /// deep, several times anything a plausible `max_depth` produces, yet
 /// usually below the depth where the frontend's drawing stack overflows.
 pub const MAX_DEPTH: u32 = 1000;
-
-/// A tag identifying a structural-coverage class for a span label.
-///
-/// Two tags compare equal iff they were produced from the same label, and
-/// [`structural_coverage`] interns them so that callers also get
-/// pointer-equal results for equal labels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CoverageTag {
-    pub label: u64,
-}
-
-static STRUCTURAL_COVERAGE_CACHE: Lazy<Mutex<HashMap<u64, &'static CoverageTag>>> =
-    Lazy::new(|| Mutex::new(HashMap::default()));
-
-/// Look up (or insert) the [`CoverageTag`] for `label`.
-///
-/// Repeated calls with the same `label` return the same `&'static`
-/// reference.
-pub fn structural_coverage(label: u64) -> &'static CoverageTag {
-    let mut cache = STRUCTURAL_COVERAGE_CACHE.lock();
-    cache
-        .entry(label)
-        .or_insert_with(|| Box::leak(Box::new(CoverageTag { label })))
-}
 
 /// A collection of spans recorded during a single test case, with
 /// wrap-around signed indexing semantics on top of [`Vec<Span>`].
@@ -1520,11 +1539,6 @@ pub struct FamilyCore {
     /// the label plus the numeric observation for `event_value`. Family-wide
     /// so clone-stream events land on the same test case.
     pub(crate) events: Mutex<Vec<(String, Option<f64>)>>,
-    /// Target number of rounds a stateful test case runs. Bounds the
-    /// per-round stop decision in [`NativeStateMachine::next_group`].
-    /// Defaults to 50, overridden per run from the `stateful_step_count`
-    /// setting.
-    stateful_step_count: AtomicI64,
     /// Set when a state machine with `max_concurrency > 1` was requested on
     /// any stream of this family: the test asked for real concurrency, so
     /// its behaviour depends on thread scheduling and the run driving this
@@ -1546,7 +1560,7 @@ pub struct FamilyCore {
     reject_concurrent_machine: AtomicBool,
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
-    fresh_ids: Mutex<BTreeSet<i64>>,
+    fresh_ids: Mutex<FreshIds>,
     /// This test case's swarm [`GenerationParameters`], drawn once when the
     /// root stream's RNG is attached (see [`NativeTestCase::with_random`]) and
     /// shared by every clone-stream so the whole case has one consistent
@@ -1563,10 +1577,9 @@ impl FamilyCore {
             budget: AtomicUsize::new(budget),
             target_observations: Mutex::new(HashMap::default()),
             events: Mutex::new(Vec::new()),
-            stateful_step_count: AtomicI64::new(50),
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
-            fresh_ids: Mutex::new(BTreeSet::new()),
+            fresh_ids: Mutex::new(FreshIds::default()),
             generation_parameters: OnceBox::new(),
         }
     }
@@ -1611,16 +1624,6 @@ impl FamilyCore {
             .get()
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Set the target number of steps a stateful test case runs.
-    pub(crate) fn set_stateful_step_count(&self, count: i64) {
-        self.stateful_step_count.store(count, Ordering::Relaxed);
-    }
-
-    /// The target number of steps a stateful test case runs.
-    pub(crate) fn stateful_step_count(&self) -> i64 {
-        self.stateful_step_count.load(Ordering::Relaxed)
     }
 
     /// The family's concluded status, or `None` while still running.
@@ -1706,20 +1709,6 @@ pub struct NativeTestCase {
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
     pub has_discards: bool,
-    /// Structural-coverage tags accumulated by closing non-discarded
-    /// spans. When a span closes without `discard`, every label collected
-    /// by it (including its non-discarded descendants) is added here as a
-    /// [`structural_coverage`] tag. Discarded spans drop their labels
-    /// (and their descendants' labels) on the floor.
-    pub tags: HashSet<&'static CoverageTag>,
-    /// Per-open-span sets of labels awaiting promotion into [`Self::tags`].
-    ///
-    /// Each `start_span` pushes a fresh `{label}` frame; `stop_span`
-    /// pops it and either merges the frame into its parent (non-discard)
-    /// or discards it (discard). When the outermost frame closes
-    /// without discard, its labels are converted to [`CoverageTag`]s
-    /// and added to `tags`.
-    labels_for_structure_stack: Vec<HashSet<u64>>,
     /// Optional observer notified after each draw and on conclusion.
     /// Set by [`Self::for_choices`] and called by each draw method and
     /// by [`Self::freeze`].
@@ -1735,14 +1724,19 @@ pub struct NativeTestCase {
 impl NativeTestCase {
     #[cfg(test)]
     pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None).with_random(rng)
+        Self::for_choices_and_template(&[], None, None, super::BUFFER_SIZE, None).with_random(rng)
     }
 
     /// Like [`Self::new_random`], but generating from the given swarm
-    /// parameters rather than drawing fresh ones — used by the exploration
-    /// loop, which draws each case's parameters itself.
-    pub fn new_random_with_params(rng: EngineRng, params: GenerationParameters) -> Self {
-        Self::for_choices_and_template(&[], None, None, BUFFER_SIZE, None)
+    /// parameters rather than drawing fresh ones, up to `max_size` choices —
+    /// used by the exploration loop, which draws each case's parameters
+    /// itself.
+    pub fn new_random_with_params(
+        rng: EngineRng,
+        params: GenerationParameters,
+        max_size: usize,
+    ) -> Self {
+        Self::for_choices_and_template(&[], None, None, max_size, None)
             .with_random_and_params(rng, params)
     }
 
@@ -1806,8 +1800,6 @@ impl NativeTestCase {
             spans: Spans::new(),
             span_stack: Vec::new(),
             has_discards: false,
-            tags: HashSet::default(),
-            labels_for_structure_stack: Vec::new(),
             observer,
             trailing_template,
         }
@@ -1990,15 +1982,12 @@ impl NativeTestCase {
         self.spans.push(Span {
             start,
             end: start,
-            label: label.to_string(),
+            label,
             depth,
             parent,
             discarded: false,
         });
         self.span_stack.push(idx);
-        let mut frame = HashSet::default();
-        frame.insert(label);
-        self.labels_for_structure_stack.push(frame);
         if depth + 1 > MAX_DEPTH {
             self.conclude(Status::Invalid, None);
             self.freeze();
@@ -2026,15 +2015,6 @@ impl NativeTestCase {
         }
         if discard {
             self.has_discards = true;
-        }
-        let labels = self.labels_for_structure_stack.pop().unwrap_or_default();
-        if !discard {
-            if let Some(parent) = self.labels_for_structure_stack.last_mut() {
-                parent.extend(labels);
-            } else {
-                self.tags
-                    .extend(labels.into_iter().map(structural_coverage));
-            }
         }
     }
 
@@ -2148,6 +2128,33 @@ impl NativeTestCase {
         ))
     }
 
+    /// Draw an index in `[0, weights.len())` with probability proportional
+    /// to `weights[i]`. The choice is recorded as an integer over that range.
+    /// When only one weight is positive the draw is forced to that index.
+    pub fn draw_index_weighted(&mut self, weights: &[f64]) -> Result<usize, EngineError> {
+        let max_index = weights.len() as u64 - 1;
+        if weights.iter().filter(|w| **w > 0.0).count() == 1 {
+            let only = weights.iter().position(|w| *w > 0.0).unwrap();
+            self.draw_integer_forced(BigInt::zero(), BigInt::from(max_index), BigInt::from(only))?;
+            return Ok(only);
+        }
+
+        let kind = IntegerChoice {
+            min_value: BigInt::zero(),
+            max_value: BigInt::from(max_index),
+            shrink_towards: BigInt::zero(),
+        };
+
+        let v = self.draw_integer_from(&kind, |_, rng| {
+            Ok(BigInt::from(weighted_index_sample(weights, rng) as u64))
+        })?;
+
+        Ok(hegel_internal_unwrap!(
+            usize::try_from(v).ok(),
+            "draw_index_weighted: validated value does not fit usize"
+        ))
+    }
+
     /// Shared body of the integer draws: resolve the choice against the
     /// prefix, falling back to `sample` for fresh generation, then record
     /// and observe it.
@@ -2240,15 +2247,15 @@ impl NativeTestCase {
     pub fn draw_fresh_id(&mut self) -> Result<i64, EngineError> {
         let family = Arc::clone(&self.family);
         let mut used = family.fresh_ids.lock();
-        let window_hi = used.iter().next_back().copied().unwrap_or(-1) + 2;
-        let fallback = smallest_unused_id(&used);
+        let window_hi = used.max_used() + 2;
+        let fallback = used.smallest_unused();
         let (v, was_forced) = self.resolve_choice(
             || Ok(BigInt::from(fallback)),
             || Ok(BigInt::from(fallback)),
             |v| match v {
                 ChoiceValue::Integer(n)
                     if n.to_i64()
-                        .is_some_and(|id| (0..=window_hi).contains(&id) && !used.contains(&id)) =>
+                        .is_some_and(|id| (0..=window_hi).contains(&id) && !used.contains(id)) =>
                 {
                     Some(n.clone())
                 }
@@ -2300,10 +2307,7 @@ impl NativeTestCase {
         sorted.sort_unstable();
         sorted.dedup();
         hegel_internal_assert!(sorted[0] >= 0, "draw_from_set requires nonnegative members");
-        let window_hi = {
-            let used = self.family.fresh_ids.lock();
-            used.iter().next_back().copied().unwrap_or(-1) + 1
-        };
+        let window_hi = { self.family.fresh_ids.lock().max_used() + 1 };
         hegel_internal_assert!(
             *sorted.last().unwrap() <= window_hi,
             "draw_from_set members must be identifiers from draw_fresh_id"

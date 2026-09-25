@@ -1,0 +1,5 @@
+error: #[rule] weight must be finite and positive
+ --> tests/ui/concurrent_state_machine_zero_weight.rs:7:35
+  |
+7 |     #[rule(group = "rw", weight = 0)]
+  |                                   ^

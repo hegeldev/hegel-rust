@@ -70,7 +70,7 @@ impl Generator<T> for FooGenerator {
 }
 ```
 
-Compose existing generators (`integers()`, `text()`, …) or, for a leaf that maps directly onto an engine draw, the `pub(crate)` typed draw methods on `TestCase` (`generate_integer_i64`, `generate_date`, `generate_string`, …). A generator that makes *several* draws should wrap them in a span (`tc.start_span(label)` / `tc.stop_span(false)`) with a label from `test_case::labels` so the shrinker treats the value as a unit. String-shaped generators that need a `ffi::StringGenerator` handle cache it in a `OnceLock` (see `TextGenerator`) so the alphabet/pattern construction happens once.
+Compose existing generators (`integers()`, `text()`, …) or, for a leaf that maps directly onto an engine draw, the `pub(crate)` typed draw methods on `TestCase` (`generate_integer_i64`, `generate_date`, `generate_string`, …). Do not open a span around the body: `TestCase` already runs every `do_draw` inside a span labelled with the generator's `label()`, so the shrinker treats the value as a unit. A generator holding *component* generators (a user-supplied element or field generator) draws them with `tc.draw_silent(&self.component)` (or `tc.draw_and_print` on the printing path) rather than `self.component.do_draw(tc)`, so each component's choices get a span of their own. String-shaped generators that need a `ffi::StringGenerator` handle cache it in a `OnceLock` (see `TextGenerator`) so the alphabet/pattern construction happens once.
 
 ### 5. Factory function + module export
 

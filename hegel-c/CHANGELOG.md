@@ -1,5 +1,171 @@
 # Changelog
 
+## 0.43.6 - 2026-09-25
+
+This patch improves the performance of text generators that are constructed inside the test body, which is how most tests write them. Building a text generator's alphabet from its codec, codepoint bounds, Unicode categories and included or excluded characters cost more than the draws made from it, and was repeated for every test case; the engine now shares the built alphabet between generators with the same constraints, so a test drawing one short string now runs in about half the instructions per test case.
+
+## 0.43.5 - 2026-09-25
+
+This patch updates the `dashu-int` dependency from 0.4.1 to 0.6.1, picking up correctness fixes and speedups in the arbitrary-precision integer backend behind the shortlex index arithmetic. The `IBig`/`UBig` API surface the engine uses is unchanged; the dependency also drops its `rustversion` build-time dependency.
+
+## 0.43.4 - 2026-09-24
+
+This patch moves the settings environment variables into libhegel, so every language binding reads them the same way rather than each reimplementing them. `hegel_settings_new` and `hegel_settings_new_for_profile` now apply `HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB` over the resolved profile (`base` included) before returning the handle: the variables win over every profile and `hegel.toml`, and the setters called on the handle afterwards win over them. An empty variable is ignored; a malformed one fails the constructor with `HEGEL_E_INVALID_ARG` and a message naming the variable, such as `HEGEL_TEST_CASES must be a positive integer, got "lots"`.
+
+## 0.43.3 - 2026-09-24
+
+This patch makes opening and closing a span cheaper. A span's label is now recorded as the 64-bit value `hegel_start_span` was given rather than as text, and the engine no longer builds a set of structural-coverage labels for every span, which nothing read. A frontend that opens a span around every draw does noticeably less work per draw as a result.
+
+## 0.43.2 - 2026-09-24
+
+This patch improves shrinking in four situations.
+
+Values that must stay equal to each other, such as an element's opening and closing tag, are lowered as a group. The shrinker previously gave up on the whole group when an unrelated draw happened to hold the same number, leaving the pair at `1` or `2` where `0` would do. It now retries the group split by the draws' constraints, and with each member left out in turn.
+
+A list element whose deletion has to be paid for by a draw *after* the list — an index into the list, its declared length, a parity flag, a string with one character per element — is now deleted. The shrinker previously only paired a deletion with a change to the draw before it, so such examples kept dead elements in front of the one that mattered, and different runs of the same test settled on different numbers of them.
+
+Two numbers bound by their product — a duration and a multiplier whose product must overflow, two floats whose difference must overflow — now shrink together. The shrinker raises the later draw to the end of its range, or by a factor of two or ten, while scaling the earlier draw down to keep the product, and then finishes the earlier draw on its own. It previously left such pairs wherever the first draw happened to stall, and could spend its whole improvement budget walking one of them down a step at a time.
+
+An integer whose failing values are sparse multiples, such as every thousandth value, now shrinks to the first multiple. The shrinker's divisions stalled on a prime factor (`61_000` for multiples of `1000`); it now also drops every digit but the trailing zeros, in decimal and in binary.
+
+## 0.43.1 - 2026-09-17
+
+Internal refactoring of the engine's float draw code.
+
+## 0.43.0 - 2026-09-16
+
+This release adds rule weights to state machines. `hegel_new_state_machine` takes a new `rule_weights` parallel to `rule_names`:
+
+```c
+// before
+hegel_new_state_machine(ctx, tc, rule_names, rule_groups, num_rules, ...);
+
+// after
+hegel_new_state_machine(ctx, tc, rule_names, rule_groups, rule_weights, num_rules, ...);
+```
+
+Pass `NULL` to keep every rule at the same weight, which is the previous behavior. Otherwise each weight must be finite and positive.
+
+A weight is a hint about how often the engine should hand out a rule relative to the other rules of its concurrency group. It applies only on enabled rules, so relative weight of a rule depends on which other rules are enabled. The weights are not a distributional guarantee.
+
+## 0.42.4 - 2026-09-15
+
+This patch improves shrinking in four situations found by running Hegel against real-world bugs:
+
+- A draw that hides later draws while it is below a threshold (for example `if n(0, 99) < 50 { draw the pick }`) can now be raised straight past the threshold, so a failing example no longer keeps an extra draw around because the draw controlling it would have to grow a long way.
+- The randomised final shrink pass now hands each improvement it finds straight back to the deterministic passes instead of continuing to walk the value one step at a time, so failures with many irrelevant draws no longer exhaust the shrink budget before reaching the minimal example.
+- A bounded float draw whose failing values exclude zero now shrinks to the simplest non-zero value in its range instead of stopping at an arbitrary tiny value.
+- Integer shrinking now also tries dividing the value by 3, 5, 7 and 10, and tries raising one draw to its maximum while lowering another, so failures that only occur at multiples of a round number, or that trade one draw off against another, shrink further.
+
+## 0.42.3 - 2026-09-15
+
+This patch improves shrinking in two situations where the shrinker previously stopped well short of the minimal example.
+
+Two integers that a test pins together (for example a pair that must differ by at most one) shrank one step at a time, alternating between the two, until the shrinker's improvement budget ran out. They are now lowered together, so such a pair reaches its minimum in a handful of steps regardless of how far away it started.
+
+A shorter failing example that requires making one choice *less* simple — switching a `one_of` to a later, shorter alternative whose value must stay non-trivial, or flipping a boolean that replaces a collection with a single draw — was previously unreachable: the pass meant to find it proposed candidates the shrinker rejected before running them. The shrinker now runs those candidates and, when raising a choice changes the shape of the test case, also tries dropping each of the following draws to complete the switch.
+
+## 0.42.2 - 2026-09-14
+
+This patch raises the limit on the number of choices a single test case may make from 8,192 to 2^20 (1,048,576), and adds `hegel_settings_set_unbounded_choices` to remove it. Suppressing the `TestCasesTooLarge` health check removes it too. An unbounded test case's draws never fail with `HEGEL_E_STOP_TEST` for running out of room. The `LargeInitialTestCase` health check now measures against the configured limit rather than the fixed buffer size.
+
+This patch also makes `hegel_pool_add` take constant amortised time. Handing out a fresh identifier used to scan every identifier the test case had already handed out, which made a test case that adds many thousands of values to pools quadratically slow.
+
+## 0.42.1 - 2026-09-14
+
+This patch changes how libhegel releases are tagged and named. A libhegel release is now tagged `libhegel-v<version>` and its GitHub release is titled `libhegel v<version>`, so the prebuilt binaries download from `https://github.com/hegeldev/hegel-rust/releases/download/libhegel-v<version>/<asset>`. The repository's plain `v<version>` tags now belong to the `hegeltest` crate, whose version differs from libhegel's. Earlier libhegel releases keep their `v<version>` tags and also carry `libhegel-v<version>` tags, so existing pins keep working and a binding can use one URL scheme for every version.
+
+## 0.42.0 - 2026-09-14
+
+This release changes the base value of `print_blob` from `false` to `true`, and removes `print_blob = true` from the `ci` profile. 
+`hegel_settings_get_print_blob` now returns `true` for a handle from `hegel_settings_new` under `development`, `base`, and `workload`. 
+The behavior of `ci` is unchanged.
+
+## 0.41.1 - 2026-09-14
+
+This patch moves the [Antithesis](https://antithesis.com/) integration into libhegel, so every language binding gets it rather than each reimplementing it.
+
+The new `hegel_settings_set_test_location` records where the test under a settings handle lives: its source file and line, the class, module or package enclosing it, and the function name.
+
+```c
+hegel_settings_set_test_location(ctx, settings, "tests/list_tests.c", 42, "list_tests", "reversal_is_involutive");
+```
+
+Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), libhegel then writes the verdict of every run started from those settings, and of every test case replayed from a blob with them, to `sdk.jsonl` in the output directory as an `always` assertion in the format Antithesis's SDKs use — identified as `<class_name>::<function> passes properties` — so the property is listed alongside the assertions in the system under test and flagged when it fails. A run that ends in a run-level error (a failed health check, say) is reported as a failure, since it is no verdict on the property. Outside Antithesis, and for settings without a location, nothing is written. Like the database key, the location is per-test identity rather than a setting, and `hegel_settings_register_profile` does not snapshot it.
+
+## 0.41.0 - 2026-09-11
+
+This release changes the numeric values of `hegel_verbosity_t` so that the default, `HEGEL_VERBOSITY_NORMAL`, is 0. A zero-initialized value now selects the default level
+([#357](https://github.com/hegeldev/hegel-rust/issues/357)):
+
+```c
+/* before */
+HEGEL_VERBOSITY_QUIET = 0, HEGEL_VERBOSITY_NORMAL = 1
+
+/* after */
+HEGEL_VERBOSITY_NORMAL = 0, HEGEL_VERBOSITY_QUIET = 1
+```
+RELEASE_TYPE: patch
+
+This patch fixes an engine panic during shrinking. When the span-reordering pass ran against a test case with several groups of same-label sibling spans, and reordering one group produced an improvement that shortened the recorded span list, the pass went on to index the remaining groups with positions from the old, longer list. The run then aborted with `Engine panic: index out of bounds` instead of reporting the shrunk counterexample (re-running the test recovered via the failure database, but the first run's result was lost). Span groups are now re-validated against the current spans after each improvement, and groups that no longer exist are skipped.
+
+## 0.40.0 - 2026-09-11
+
+This release moves settings defaults into named profiles resolved by the engine, so every language binding shares the same `hegel.toml` configuration and default-profile selection.
+
+Two profile names are reserved. `base` is the immutable base settings. `default` is the default profile, the one in effect when nothing names a profile: the strongest set of `hegel_set_default_profile`, `HEGEL_DEFAULT_PROFILE`, and the `default` entry in `hegel.toml`, else the detected environment (`workload` inside Antithesis, `ci` on CI servers), else `development`. Three ordinary profiles ship with the engine: `development` (empty), `ci` (derandomize, database disabled, `too_slow` health check suppressed, print reproduce blobs), and `workload` (database disabled, every health check suppressed). A custom profile without an explicit `extends` extends `default`, skipping candidates already in its chain, so it layers over the environment's profile. The shipped profiles themselves extend `base` and never layer over one another.
+
+- `hegel_settings_new` now resolves the `default` profile and can fail with `HEGEL_E_INVALID_ARG` when a default-profile setting names an unknown profile or a discovered `hegel.toml` is malformed. Callers must check its return code.
+- `HEGEL_CONFIG` names the `hegel.toml` to load directly, replacing the upward search from the working directory, for test processes that run outside the source tree. A set `HEGEL_CONFIG` that cannot be read is an error. The config is loaded once per process, and under debug verbosity each run logs which config file was loaded.
+- New functions: `hegel_settings_new_for_profile`, `hegel_settings_register_profile`, `hegel_set_default_profile`, `hegel_settings_set_print_blob`, and a `hegel_settings_get_*` getter for every settings field, so frontends can materialize a resolved profile.
+- `hegel_settings_set_database(ctx, settings, NULL)` now resets the database to unset, as its documentation already said, instead of leaving the previous value in place.
+- The default for `report_multiple_failures` is now `false`, matching the Rust frontend's documented default.
+- The shipped `ci` profile sets `print_blob`, so failing runs on CI print a reproduce blob by default.
+- Inside Antithesis, health checks are suppressed by the shipped `workload` profile rather than forced off by detection. A `[profiles.workload]` delta can set `suppress_health_check`, and resolving a profile that does not extend `workload` inside Antithesis runs the health checks.
+
+## 0.39.0 - 2026-09-11
+
+This release removes the `hegel_label_t` enum of predefined span labels from `hegel.h`, and with it the idea that a span label means anything. A label is now an opaque `uint64_t` identifying the generator that opened the span: libhegel treats two spans with the same label as coming from the same generator — candidates for swapping, duplicating and reordering when it shrinks and mutates test cases — and does nothing else with it. This is how Hypothesis has always treated labels, and it means a new kind of generator no longer needs a new ABI constant.
+
+Two functions derive labels, so every binding derives them the same way:
+
+```c
+uint64_t list_kind, element;
+hegel_label_from_name(ctx, "mylib.list", &list_kind);
+hegel_label_from_name(ctx, "mylib.integers", &element);
+uint64_t parts[2] = {list_kind, element};
+uint64_t list_of_integers;
+hegel_label_combine(ctx, parts, 2, &list_of_integers);
+```
+
+`hegel_label_from_name` is the 64-bit FNV-1a hash of the name's bytes, so a binding may equally compute labels ahead of time. `hegel_label_combine` hashes a sequence of labels into one; passing a generator's own label followed by its components' labels gives `lists(integers())` and `lists(text())` different labels while every `lists(integers())` gets the same one, which is what lets the engine tell them apart.
+
+Bindings that passed `HEGEL_LABEL_*` constants to `hegel_start_span` should replace each with a label derived from a name of their own choosing, prefixed with the binding's name to keep clear of libhegel's `hegel.<kind>` names, and should give each generator built from other generators a label combined from its components'. libhegel's own spans around its draws are now labelled the same way, from names such as `hegel.integer` and `hegel.feature_flag`; nothing about them was ever part of the ABI.
+
+## 0.38.1 - 2026-09-11
+
+This patch adds support for building the raw C ABI as `wasm32-unknown-unknown` for host integrations such as browser TypeScript and Swift. The Wasm build uses host-provided entropy and time, disables filesystem failure persistence and concurrent state machines, and is published as module and static archive release assets. The static archive uses stable C hook symbols.
+
+## 0.38.0 - 2026-09-10
+
+This release makes the stateful step count a per-machine parameter. `hegel_new_state_machine` takes a new `step_count` argument. `hegel_settings_set_stateful_step_count` is removed, and the engine no longer has a default step count. Frontends pass one explicitly (50 is the conventional choice). A `step_count` below 1 is rejected with `HEGEL_E_INVALID_ARG`.
+
+## 0.37.10 - 2026-09-10
+
+This patch adds two functions for shaping a test case's printed output without decorating every line by hand.
+
+`hegel_test_case_block` opens a handle onto the same choice stream as an existing handle whose print region is a block nested in the parent's: every line printed or noted through it — and through the clones and blocks derived from it — is indented a given number of columns further than the parent's lines, and the indentation ends exactly with the block. This is how a binding prints the body of a stateful rule under its `Step 3: add {` heading.
+
+`hegel_test_case_set_worker` attributes a handle's output to a concurrent worker: every line recorded through it from then on, notes and printer lines alike, is prefixed with `[worker N +X.XXXms] `, stamped with the time since the test case started at which the line was recorded. Blocks and clones derived from the handle inherit the attribution.
+
+To make block indentation possible, a line's indentation is now written when the line gets its first content rather than at the newline that started it. Documents without blocks render exactly as before, including the padding of blank lines and of a trailing hard break.
+
+This patch also changes when `hegel_note` appends its text. A note appended while a speculative region is open on the handle's print region — the client is mid-way through printing a drawn value, and the note comes from inside that value's generation — is now held back and appended once the outermost region closes, whether it is committed or aborted. Previously the note's lines were spliced into the value being printed. Notes appended outside a speculative region are unaffected.
+
+## 0.37.9 - 2026-09-10
+
+This patch fixes an encode/decode gap in the Hegel test case format where an encoder would allow a sequence that the decoder rejected ([#477](https://github.com/hegeldev/hegel-rust/issues/477)). This code path was unreachable in normal test execution so this is mostly an internal change.
+
 ## 0.37.8 - 2026-09-10
 
 This patch fixes a memory leak in string draws. The engine memoises, per alphabet, which of its built-in constant strings fit that alphabet, and that memo was kept in a process-global table that never dropped entries for freed generators. A caller that built and freed a string generator around every draw grew without bound; the memo now lives with the alphabet and is freed with it ([#434](https://github.com/hegeldev/hegel-rust/issues/434)).

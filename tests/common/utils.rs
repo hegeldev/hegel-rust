@@ -218,6 +218,17 @@ pub fn measure_failing_run<F>(seed: u64, test_cases: u64, body: F) -> FailingRun
 where
     F: Fn(&TestCase) -> Option<String> + Send + Sync + 'static,
 {
+    try_measure_failing_run(seed, test_cases, body)
+        .unwrap_or_else(|| panic!("expected the property to fail"))
+}
+
+/// Like [`measure_failing_run`], but returns `None` when the seeded run never
+/// hit the failure condition within its `test_cases` budget, for sweeps over
+/// seeds where the failure is rare.
+pub fn try_measure_failing_run<F>(seed: u64, test_cases: u64, body: F) -> Option<FailingRunStats>
+where
+    F: Fn(&TestCase) -> Option<String> + Send + Sync + 'static,
+{
     let calls = Arc::new(AtomicU64::new(0));
     let first_failure = Arc::new(AtomicU64::new(0));
     let minimal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -241,13 +252,16 @@ where
         )
         .run();
     }));
-    assert!(result.is_err(), "expected the property to fail");
-    let minimal_repr = minimal.lock().unwrap().clone().unwrap();
-    FailingRunStats {
+    let minimal_repr = match (result, minimal.lock().unwrap().take()) {
+        (Ok(()), _) => return None,
+        (Err(_), Some(repr)) => repr,
+        (Err(payload), None) => std::panic::resume_unwind(payload),
+    };
+    Some(FailingRunStats {
         total_calls: calls.load(Ordering::SeqCst),
         calls_at_first_failure: first_failure.load(Ordering::SeqCst),
         minimal_repr,
-    }
+    })
 }
 
 pub fn find_any<T, G, P>(generator: G, condition: P) -> T
@@ -506,7 +520,7 @@ where
                     .database(None)
                     .seed(seed)
                     .derandomize(true)
-                    .report_multiple_failures(true),
+                    .report_multiple_failures(false),
             )
             .run();
         }));

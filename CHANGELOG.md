@@ -1,5 +1,208 @@
 # Changelog
 
+## 0.47.3 - 2026-09-25
+
+This release updates the `hegeltest-c` dependency to 0.43.6.
+
+## 0.47.2 - 2026-09-25
+
+This release updates the `hegeltest-c` dependency to 0.43.5.
+
+## 0.47.1 - 2026-09-24
+
+Fix compilation with the `static-engine` feature by enabling the `std` feature, which provides the allocator and panic runtime required to build its library artifacts.
+
+## 0.47.0 - 2026-09-24
+
+This release moves the handling of the `HEGEL_TEST_CASES`, `HEGEL_DATABASE`, `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB` environment variables from the crate into libhegel, which now applies them when a `Settings` value is created rather than when a test runs. This changes where they sit among the settings layers: they still win over the profile and `hegel.toml`, but a setting written into the test — a `Settings` builder call, a `#[hegel::test]` attribute argument, or a `#[hegel::main]` command-line flag — now takes precedence over them, where previously the variable won. `HEGEL_TEST_CASES=10000 cargo test` still runs every test that does not set `test_cases` itself with 10000 cases; a test declared `#[hegel::test(test_cases = 5)]` now keeps its 5.
+
+A malformed variable is still an error naming the variable; it is now raised when the `Settings` value is created.
+
+## 0.46.4 - 2026-09-24
+
+This patch contains internal refactoring around how generators mark the boundary of their draws for Hegel's use. It should have no user-visible effect.
+
+## 0.46.3 - 2026-09-24
+
+This release updates the `hegeltest-c` dependency to 0.43.2.
+
+## 0.46.2 - 2026-09-21
+
+This patch fixes usage errors and internal errors raised inside a test body — a non-finite `tc.target()` score, a generator bound with `max < min`, an empty `sampled_from`, ... — aborting the run with no output at all. The run still fails as before, but the error message is now printed like any other panic, instead of the process (or `#[hegel::test]`) exiting with a bare failure and nothing explaining why ([#47](https://github.com/hegeldev/hegel-rust/issues/47)).
+
+## 0.46.1 - 2026-09-17
+
+This release updates the `hegeltest-c` dependency to 0.43.1.
+
+## 0.46.0 - 2026-09-16
+
+This release adds rule weights to stateful testing. `#[rule(weight = ...)]` hints that a rule should be executed more often than the machine's other rules. It is not a distributional guarantee. `#[rule]` has weight 1. Integer and float literals are both accepted, and the weight must be finite and positive:
+
+```rust
+#[hegel::state_machine]
+impl Cache {
+    #[rule(weight = 5)]
+    fn get(&mut self, tc: TestCase) { /* ... */ }
+
+    #[rule]
+    fn evict_everything(&mut self, _: TestCase) { /* ... */ }
+}
+```
+
+`Rule::new` and `ConcurrentRule::new` take the weight as an argument.
+
+Arguments to `#[rule]` on a sequential state machine are now checked, so `#[rule(bad_arg = "...")]` on a `#[hegel::state_machine]` is a compile error.
+
+## 0.45.6 - 2026-09-16
+
+This patch fixes a failing test being reported to Antithesis twice. Once the engine had found and shrunk a counterexample, the final replay that re-raises the failure was reported as its own verdict, so `sdk.jsonl` carried the test's assertion twice (three or more times when `report_multiple_failures` found several distinct failures). Inside Antithesis a run now writes its assertion exactly once, whatever its outcome. `#[hegel::reproduce_failure]` still reports the replay it runs, since that replay is the whole test.
+
+## 0.45.5 - 2026-09-15
+
+This release updates the `hegeltest-c` dependency to 0.42.4.
+
+## 0.45.4 - 2026-09-15
+
+This release updates the `hegeltest-c` dependency to 0.42.3.
+
+## 0.45.3 - 2026-09-14
+
+This patch adds three environment variables that override settings for a single run, so a `#[hegel::test]` can be re-run with a chosen seed or made to print its reproducer without editing the test (libtest owns the command line, so the `#[hegel::main]` flags were never available to ordinary test targets):
+
+- `HEGEL_SEED` overrides `seed`: an integer fixes the seed, and `none` clears a compiled-in one, the same vocabulary as the `--seed` flag.
+- `HEGEL_DERANDOMIZE` overrides `derandomize`, and `HEGEL_PRINT_BLOB` overrides `print_blob`, each taking `true`, `1` or `yes`, or `false`, `0` or `no`.
+
+Like the existing `HEGEL_TEST_CASES` and `HEGEL_DATABASE`, each wins over values configured in source, including explicit attribute settings; an empty variable is ignored and a malformed one fails the run with a message naming the variable. The overrides do not change how the settings combine: a fixed seed still takes precedence over `derandomize` wherever either came from. ([#492](https://github.com/hegeldev/hegel-rust/issues/492))
+
+## 0.45.2 - 2026-09-14
+
+This patch raises the limit on the number of choices a single test case may make from 8,192 to 2^20 (1,048,576), and ties it to the `TestCasesTooLarge` health check. A test case that reaches the limit is stopped and discarded, and enough such cases fail `TestCasesTooLarge` (or `LargeInitialTestCase`, when even the smallest natural input does). Suppressing `TestCasesTooLarge` now also removes the limit, so a test case can run indefinitely, which long-running concurrent state machines need. `#[hegel::main]` binaries already suppress that check, so their one test case has no limit.
+
+```rust
+#[hegel::test(test_cases = 1, suppress_health_check = [HealthCheck::TestCasesTooLarge])]
+fn soak(tc: TestCase) {
+    machine(Counter::new()).steps(5_000_000).run_concurrent(tc);
+}
+```
+
+Adding values to a stateful `Pool` or `ConcurrentPool` no longer slows down as the pool grows: a test case that adds many thousands of values used to take quadratic time in the number of additions.
+
+## 0.45.1 - 2026-09-14
+
+This patch changes how releases are tagged in the hegel-rust repository. Every `hegeltest` release is now tagged `v<version>`, and libhegel releases, which previously took the plain `v<version>` tags, are tagged `libhegel-v<version>` instead. Nothing about the crate itself changes.
+
+## 0.45.0 - 2026-09-14
+
+This release turns `print_blob` on by default.
+
+## 0.44.2 - 2026-09-14
+
+This patch moves the [Antithesis](https://antithesis.com/) integration into the engine: the test's location is now passed to libhegel, which writes the verdict to `sdk.jsonl` itself when running inside Antithesis. Nothing changes in what is reported.
+
+With no JSON left to write in the frontend, `serde_json` is now only a dependency when the `serde_json` feature is enabled, instead of always.
+
+## 0.44.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.41.0.
+
+## 0.44.0 - 2026-09-11
+
+This release adds named settings profiles. Three ship with Hegel: `development` (what local runs get), `ci` (selected automatically on CI servers), and `workload` (selected automatically inside Antithesis). Modify a shipped profile or define your own in a `hegel.toml` at your package or workspace root:
+
+```toml
+default = "nightly"   # optional: the default profile for this project
+
+[profiles.ci]
+test_cases = 1000
+
+[profiles.nightly]
+test_cases = 10000
+```
+
+A profile layers over whichever profile the environment selects, so on CI `nightly` resolves as `nightly` → `ci` and locally as `nightly` → `development`. To opt out, pin a parent with `extends`, where `extends = "base"` means the plain base settings. The shipped profiles are siblings rooted in the base settings, so a delta meant for every environment goes in a profile of its own that the others name with `extends`. Select a profile with `#[hegel::test(profile = "nightly")]` or `Settings::from_profile`, and set the suite-wide default — the reserved `default` profile — with the `default` entry in `hegel.toml`, the `HEGEL_DEFAULT_PROFILE` environment variable, or the new `--profile` flag on a `#[hegel::main]` binary. Profiles can also be registered programmatically with `Settings::register_profile`, and the default set with `Settings::set_default_profile`.
+
+The `hegel.toml` is found by searching upward from the test process's working directory; when tests run outside the source tree, set `HEGEL_CONFIG` to the file's path instead, and under debug verbosity each run logs which config file it loaded. The new `hegel::docs::settings` page in the crate documentation covers the whole settings system: every setting, where each can be set, how the layers combine, and profile resolution in full.
+
+Inside Antithesis, the `urandom` backend and health-check suppression are now selected by the shipped `workload` profile rather than forced by detection, so they can be changed under `[profiles.workload]`, and a test that selects a profile not extending `workload` runs the health checks on the default backend. The `backend` setting is therefore a plain choice between `default` and `urandom`: the automatic option is gone, `Settings::new()` reports `Backend::Default` outside Antithesis, and the C ABI's `HEGEL_BACKEND_AUTO` has been removed from `hegel_backend_t` (`hegel_settings_set_backend` rejects its old value, 0, as an invalid argument; `HEGEL_BACKEND_DEFAULT` and `HEGEL_BACKEND_URANDOM` keep their values).
+
+This changes one default: failing tests on CI now print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. The failure database is disabled on CI, so the printed blob is the only way to reproduce a CI failure locally. To restore the old behavior, set `print_blob = false` under `[profiles.ci]` in `hegel.toml`.
+
+## 0.43.1 - 2026-09-11
+
+This patch adds `Generator::label`, a provided method giving every generator a label of its own, and the functions `generators::label_from_name` and `generators::combine_labels` for deriving one. A label is an opaque `u64` identifying a generator to the engine, which treats two spans with the same label as coming from the same generator when it shrinks and mutates test cases; it has no other meaning. The default label is derived from the generator's type name, so hand-written generators get a stable label with no extra work; generators built from others should combine a label of their own with their components':
+
+```rust
+use hegel::generators::{self as gs, Generator};
+
+impl<T, G: Generator<T>> Generator<(T, T)> for Pairs<G> {
+    fn label(&self) -> u64 {
+        gs::combine_labels(&[gs::label_from_name("mycrate.pairs"), self.inner.label()])
+    }
+
+    fn do_draw(&self, tc: &hegel::TestCase) -> (T, T) {
+        (self.inner.do_draw(tc), self.inner.do_draw(tc))
+    }
+}
+```
+
+Previously every collection shared one label, every `map` another and so on, regardless of what they contained. The built-in combinators, `#[derive(DefaultGenerator)]` and `#[composite]` now label their spans this way, so `vecs(integers())` and `vecs(text())` have different labels, which should let the engine's span-swapping shrink passes and mutations line up spans that actually correspond. The hidden `generators::labels` constants and `generators::fnv1a_hash` are gone; the engine's `hegel_label_t` enum they mirrored no longer exists.
+
+## 0.43.0 - 2026-09-11
+
+This release deprecates the `exclude_min(bool)` and `exclude_max(bool)` builder methods on `gs::floats()` in favour of `min_value_exclusive` and `max_value_exclusive`, which take the bound directly:
+
+```rust
+// before
+gs::floats::<f64>().min_value(0.0).exclude_min(true).max_value(1.0).exclude_max(true)
+
+// after
+gs::floats::<f64>().min_value_exclusive(0.0).max_value_exclusive(1.0)
+```
+
+`min_value` and `min_value_exclusive` set the same bound, so whichever is called last wins (likewise for `max_value` / `max_value_exclusive`). An exclusive bound can no longer be set without a bound value, so that `InvalidArgument` no longer exists; the remaining validation (an exclusive `+inf` minimum, an exclusive `-inf` maximum, or exclusive bounds on a single-point range) is unchanged.
+
+`exclude_min` and `exclude_max` remain as deprecated methods so existing call sites get a deprecation warning naming the replacement, but calling either now panics immediately rather than configuring the generator.
+
+## 0.42.1 - 2026-09-11
+
+This release updates the `hegeltest-c` dependency to 0.38.1.
+
+## 0.42.0 - 2026-09-10
+
+This release replaces `hegel::stateful::run` and `hegel::stateful::run_concurrent` with a builder, `hegel::stateful::Machine`. `Settings::stateful_step_count` is removed. Each state machine chooses its own step count, instead of every stateful test in a run sharing one setting.
+
+```rust
+// before
+#[hegel::test(stateful_step_count = 200)]
+fn test_counter(tc: TestCase) {
+    hegel::stateful::run(Counter::new(), tc);
+}
+
+// after
+use hegel::stateful::machine;
+
+#[hegel::test]
+fn test_counter(tc: TestCase) {
+    machine(Counter::new()).steps(200).run(tc);
+}
+```
+
+For concurrent machines, `min_concurrency` and `max_concurrency` replace the concurrency parameters to `run_concurrent`. For example, `machine(m).max_concurrency(5).run_concurrent(tc)` replaces `run_concurrent(m, tc, 1, 5)`. `min_concurrency` and `max_concurrency` both default to 1. Giving a sequential machine concurrency bounds is a compile-time error.
+
+## 0.41.7 - 2026-09-10
+
+This patch improves the diagnostic for a flaky test. When a shrunk failure no longer fails on its final replay, the `Flaky test detected` message now also names the failure that did not reproduce, as the panic location the engine recorded for it.
+
+`PrettyPrinter::should_print` now also reports `false` for a printer whose region has died — a clone that outlived the document it was printing into — since its writes are discarded.
+
+In a concurrent state machine's failure report, every line of a multi-line `tc.note()` made from a worker thread now carries the `[worker N +X.XXXms]` attribution; previously only the note's first line did.
+
+Internally, the frontend now leaves the shape of its output to the engine: `TestCase::note` goes through the engine's own note primitive, the indentation of stateful rule bodies and `tc.repeat` iterations is the engine's block regions, and the worker attribution on concurrent workers' lines is stamped by the engine rather than assembled from lower-level printing calls.
+
+## 0.41.6 - 2026-09-10
+
+This release updates the `hegeltest-c` dependency to 0.37.9.
+
 ## 0.41.5 - 2026-09-10
 
 This release updates the `hegeltest-c` dependency to 0.37.8.

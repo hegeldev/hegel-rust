@@ -127,7 +127,7 @@ fn format_backtrace_short_strips_through_filter() {
 
 #[test]
 fn reproducer_line_none_when_print_blob_disabled() {
-    let settings = Settings::new();
+    let settings = Settings::from_profile("base").print_blob(false);
     assert!(!settings.print_blob);
     assert!(reproducer_line(&settings, Some("AAEC")).is_none());
 }
@@ -148,6 +148,7 @@ fn reproducer_line_emits_attribute_when_enabled_and_present() {
     );
 }
 
+/// Settings for the single-case runs below.
 fn test_settings() -> Settings {
     Settings::new()
         .database(None)
@@ -169,7 +170,7 @@ fn run_one_case(
     Option<String>,
 ) {
     init_panic_hook();
-    let c_settings = SettingsHandle::build(&test_settings(), None);
+    let c_settings = SettingsHandle::build(&test_settings(), None, None);
     let run = RunHandle::start(&c_settings, None).expect("the engine starts");
     let c_tc = run
         .next_test_case()
@@ -282,7 +283,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
     struct Hungry;
     impl StateMachine for Hungry {
         fn rules(&self) -> Vec<Rule<Self>> {
-            vec![Rule::new("chomp", |_m, tc| {
+            vec![Rule::new("chomp", 1.0, |_m, tc| {
                 loop {
                     let _: i64 = tc.draw(gs::integers());
                 }
@@ -293,7 +294,7 @@ fn stateful_overrun_mid_rule_is_reported_as_overrun() {
         }
     }
     let result = run_case_capturing(false, Verbosity::Normal, &mut |tc| {
-        crate::stateful::run(Hungry, tc);
+        crate::stateful::machine(Hungry).run(tc);
         panic!("unreachable: the endless rule must exhaust the choice budget");
     });
     assert!(

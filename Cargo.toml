@@ -6,7 +6,7 @@ too_many_arguments = "allow"
 
 [package]
 name = "hegeltest"
-version = "0.41.5"
+version = "0.47.3"
 edition = "2024"
 # if you bump this, also bump ci.yml, hegel-macros/Cargo.toml, and hegel-c/Cargo.toml
 rust-version = "1.86"
@@ -94,17 +94,25 @@ path = "tests/fixtures/payload_failing.rs"
 name = "fixture_threaded_rejects"
 path = "tests/fixtures/threaded_rejects.rs"
 
+[[bin]]
+name = "fixture_main_profile"
+path = "tests/fixtures/main_profile.rs"
+
+[[bin]]
+name = "fixture_target_nan"
+path = "tests/fixtures/target_nan.rs"
+
 [dependencies]
 parking_lot = "0.12"
-hegeltest-macros = { version = "=0.41.5", path = "hegel-macros" }
+hegeltest-macros = { version = "=0.47.3", path = "hegel-macros" }
 # The native engine + C ABI ("libhegel"). hegeltest drives it through the
 # C ABI (the hegel_* extern "C" functions), exactly like other language
 # bindings. Optional: by default build.rs builds it as a shared library the
 # frontend loads at runtime, and only the `static-engine` feature links this
 # crate (lib name `hegel_c`) into the dependency graph.
-hegeltest-c = { version = "=0.37.8", path = "hegel-c", default-features = false, optional = true }
-serde_json = "1.0.61"
+hegeltest-c = { version = "=0.43.6", path = "hegel-c", default-features = false, optional = true }
 # optional feature dependencies
+serde_json = { version = "1.0.61", optional = true }
 rand = { version = "0.10", optional = true }
 # opting out of the clock, now, and wasmbind features.
 # 0.4.41 is the minimum version that has WeekdaySet.
@@ -139,13 +147,13 @@ default = []
 rand = ["dep:rand"]
 chrono = ["dep:chrono"]
 jiff = ["dep:jiff"]
-serde_json = []
+serde_json = ["dep:serde_json"]
 # Enables the serde_json/raw_value feature. Enables generators for serde_json::value::RawValue.
 serde_json_raw_value = ["serde_json", "serde_json/raw_value"]
 # Links the engine into the binary as a normal Rust dependency instead of
 # loading the libhegel shared library at runtime. Self-contained binaries, at
 # the cost of exposing the engine's entire dependency tree to your build.
-static-engine = ["dep:hegeltest-c"]
+static-engine = ["dep:hegeltest-c", "hegeltest-c/std"]
 
 # Tune the dev/test profile for CI speed.
 #

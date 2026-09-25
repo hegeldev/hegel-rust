@@ -1,6 +1,8 @@
 use super::generators::draw_and_print_value;
-use super::{Generator, PrintableGenerator, TestCase};
+use super::{Generator, PrintableGenerator, TestCase, label_from_name};
 use crate::pretty::{PrettyPrintable, PrettyPrinter};
+
+const BOOLEAN_LABEL: u64 = label_from_name("hegel.booleans");
 
 /// Generate the unit value `()`.
 // nocov start
@@ -12,9 +14,14 @@ pub fn unit() -> JustGenerator<()> {
 /// Generator that always produces the same value. Created by [`just()`].
 pub struct JustGenerator<T> {
     value: T,
+    label: u64,
 }
 
 impl<T: Clone + Send + Sync> Generator<T> for JustGenerator<T> {
+    fn label(&self) -> u64 {
+        self.label
+    }
+
     fn do_draw(&self, _tc: &TestCase) -> T {
         self.value.clone()
     }
@@ -28,7 +35,10 @@ impl<T: Clone + Send + Sync + PrettyPrintable> PrintableGenerator<T> for JustGen
 
 /// Generate a constant value.
 pub fn just<T: Clone + Send + Sync>(value: T) -> JustGenerator<T> {
-    JustGenerator { value }
+    JustGenerator {
+        value,
+        label: label_from_name(std::any::type_name::<JustGenerator<T>>()),
+    }
 }
 
 /// Generator for boolean values. Created by [`booleans()`] and [`weighted_booleans()`].
@@ -37,6 +47,10 @@ pub struct BoolGenerator {
 }
 
 impl Generator<bool> for BoolGenerator {
+    fn label(&self) -> u64 {
+        BOOLEAN_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> bool {
         tc.generate_boolean(self.p)
     }

@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use super::generators::draw_and_print_value;
-use super::{Generator, PrintableGenerator, TestCase, labels};
+use super::{Generator, PrintableGenerator, TestCase, label_from_name};
 use crate::control::hegel_internal_assert;
 use crate::ffi;
 use crate::ffi::sys as hegel_c;
@@ -236,7 +236,13 @@ impl TextGenerator {
     }
 }
 
+const TEXT_LABEL: u64 = label_from_name("hegel.text");
+
 impl Generator<String> for TextGenerator {
+    fn label(&self) -> u64 {
+        TEXT_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         tc.generate_string(self.handle())
     }
@@ -346,7 +352,13 @@ impl CharactersGenerator {
     }
 }
 
+const CHARACTERS_LABEL: u64 = label_from_name("hegel.characters");
+
 impl Generator<char> for CharactersGenerator {
+    fn label(&self) -> u64 {
+        CHARACTERS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> char {
         let s = tc.generate_string(self.handle());
         let mut chars = s.chars();
@@ -408,7 +420,13 @@ impl RegexGenerator {
     }
 }
 
+const REGEX_LABEL: u64 = label_from_name("hegel.from_regex");
+
 impl Generator<String> for RegexGenerator {
+    fn label(&self) -> u64 {
+        REGEX_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         tc.generate_string(self.handle())
     }
@@ -446,7 +464,13 @@ impl BinaryGenerator {
     }
 }
 
+const BINARY_LABEL: u64 = label_from_name("hegel.binary");
+
 impl Generator<Vec<u8>> for BinaryGenerator {
+    fn label(&self) -> u64 {
+        BINARY_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> Vec<u8> {
         if let Some(max) = self.max_size {
             if self.min_size > max {
@@ -479,7 +503,13 @@ pub struct EmailGenerator {
     handle: OnceLock<ffi::StringGenerator>,
 }
 
+const EMAIL_LABEL: u64 = label_from_name("hegel.emails");
+
 impl Generator<String> for EmailGenerator {
+    fn label(&self) -> u64 {
+        EMAIL_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         let handle = self.handle.get_or_init(|| {
             ffi::StringGenerator::email().unwrap_or_else(|msg| invalid_argument!("{msg}"))
@@ -500,7 +530,13 @@ pub struct UrlGenerator {
     handle: OnceLock<ffi::StringGenerator>,
 }
 
+const URL_LABEL: u64 = label_from_name("hegel.urls");
+
 impl Generator<String> for UrlGenerator {
+    fn label(&self) -> u64 {
+        URL_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         let handle = self.handle.get_or_init(|| {
             ffi::StringGenerator::url().unwrap_or_else(|msg| invalid_argument!("{msg}"))
@@ -531,7 +567,13 @@ impl DomainGenerator {
     }
 }
 
+const DOMAIN_LABEL: u64 = label_from_name("hegel.domains");
+
 impl Generator<String> for DomainGenerator {
+    fn label(&self) -> u64 {
+        DOMAIN_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         let handle = self.handle.get_or_init(|| {
             if !(self.max_length >= 4 && self.max_length <= 255) {
@@ -571,16 +613,21 @@ impl IpAddressGenerator {
     }
 }
 
+const IP_ADDRESS_LABEL: u64 = label_from_name("hegel.ip_addresses");
+const IPV4_ADDRESS_LABEL: u64 = label_from_name("hegel.ip_addresses.v4");
+const IPV6_ADDRESS_LABEL: u64 = label_from_name("hegel.ip_addresses.v6");
+
 impl Generator<std::net::IpAddr> for IpAddressGenerator {
+    fn label(&self) -> u64 {
+        IP_ADDRESS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> std::net::IpAddr {
-        tc.start_span(labels::ONE_OF);
-        let addr = if tc.generate_integer_i64(0, 1) == 0 {
+        if tc.generate_integer_i64(0, 1) == 0 {
             std::net::IpAddr::V4(tc.generate_ipv4())
         } else {
             std::net::IpAddr::V6(tc.generate_ipv6())
-        };
-        tc.stop_span(false);
-        addr
+        }
     }
 }
 
@@ -588,6 +635,10 @@ impl Generator<std::net::IpAddr> for IpAddressGenerator {
 pub struct Ipv4AddressGenerator {}
 
 impl Generator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
+    fn label(&self) -> u64 {
+        IPV4_ADDRESS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> std::net::Ipv4Addr {
         tc.generate_ipv4()
     }
@@ -597,6 +648,10 @@ impl Generator<std::net::Ipv4Addr> for Ipv4AddressGenerator {
 pub struct Ipv6AddressGenerator {}
 
 impl Generator<std::net::Ipv6Addr> for Ipv6AddressGenerator {
+    fn label(&self) -> u64 {
+        IPV6_ADDRESS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> std::net::Ipv6Addr {
         tc.generate_ipv6()
     }
@@ -631,7 +686,13 @@ pub(crate) fn format_time(t: hegel_c::hegel_time_t) -> String {
 /// [`date_strings()`].
 pub struct DateStringGenerator;
 
+const DATE_STRING_LABEL: u64 = label_from_name("hegel.dates");
+
 impl Generator<String> for DateStringGenerator {
+    fn label(&self) -> u64 {
+        DATE_STRING_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         format_date(tc.generate_date(full_ranges::MIN_DATE, full_ranges::MAX_DATE))
     }
@@ -651,7 +712,13 @@ pub fn date_strings() -> DateStringGenerator {
 /// [`time_strings()`].
 pub struct TimeStringGenerator;
 
+const TIME_STRING_LABEL: u64 = label_from_name("hegel.times");
+
 impl Generator<String> for TimeStringGenerator {
+    fn label(&self) -> u64 {
+        TIME_STRING_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         format_time(tc.generate_time(full_ranges::MIDNIGHT, full_ranges::LAST_NANOSECOND))
     }
@@ -670,7 +737,13 @@ pub fn time_strings() -> TimeStringGenerator {
 /// Generator for ISO 8601 datetime strings. Created by [`datetime_strings()`].
 pub struct DateTimeStringGenerator;
 
+const DATETIME_STRING_LABEL: u64 = label_from_name("hegel.datetimes");
+
 impl Generator<String> for DateTimeStringGenerator {
+    fn label(&self) -> u64 {
+        DATETIME_STRING_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         let dt = tc.generate_datetime(full_ranges::MIN_DATETIME, full_ranges::MAX_DATETIME);
         format!("{}T{}", format_date(dt.date), format_time(dt.time))
@@ -704,7 +777,13 @@ impl UuidsGenerator {
     }
 }
 
+const UUIDS_LABEL: u64 = label_from_name("hegel.uuids");
+
 impl Generator<String> for UuidsGenerator {
+    fn label(&self) -> u64 {
+        UUIDS_LABEL
+    }
+
     fn do_draw(&self, tc: &TestCase) -> String {
         if let Some(v) = self.version {
             if !(1..=5).contains(&v) {

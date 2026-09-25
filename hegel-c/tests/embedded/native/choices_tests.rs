@@ -990,7 +990,7 @@ fn clone_value_equality_ignores_realized_info() {
         vec![Span {
             start: 0,
             end: 2,
-            label: "17".to_string(),
+            label: 17,
             depth: 0,
             parent: None,
             discarded: false,
@@ -1115,7 +1115,7 @@ fn clone_record_accessors_expose_children_and_realized_info() {
     let span = Span {
         start: 0,
         end: 1,
-        label: "42".to_string(),
+        label: 42,
         depth: 0,
         parent: None,
         discarded: false,

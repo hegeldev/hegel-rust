@@ -1,8 +1,11 @@
 use super::float_sample::*;
 use super::*;
+use crate::native::HashSet;
+use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
-use crate::native::core::choices::BooleanChoice;
+use crate::native::core::choices::{BooleanChoice, ChoiceKind};
 use crate::native::rng::EngineRng;
+use alloc::string::ToString;
 
 #[test]
 fn spans_get_mut_returns_mutable_reference() {
@@ -10,7 +13,7 @@ fn spans_get_mut_returns_mutable_reference() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "test".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -37,7 +40,7 @@ fn spans_trivial_handles_simplest_forced_and_oob() {
     spans.push(Span {
         start: 0,
         end: 2,
-        label: "outer".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -63,14 +66,14 @@ fn spans_into_vec_consumes_and_returns_inner() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "one".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let v = spans.into_vec();
     assert_eq!(v.len(), 1);
-    assert_eq!(v[0].label, "one");
+    assert_eq!(v[0].label, 1);
 }
 
 #[test]
@@ -78,14 +81,14 @@ fn spans_from_vec() {
     let v = vec![Span {
         start: 0,
         end: 3,
-        label: "x".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     }];
     let spans = Spans::from(v);
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0usize].label, "x");
+    assert_eq!(spans[0usize].label, 1);
 }
 
 #[test]
@@ -94,14 +97,14 @@ fn spans_deref_to_slice() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "deref".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let slice: &[Span] = &spans;
     assert_eq!(slice.len(), 1);
-    assert_eq!(slice[0].label, "deref");
+    assert_eq!(slice[0].label, 1);
 }
 
 #[test]
@@ -111,14 +114,14 @@ fn spans_into_iterator() {
         spans.push(Span {
             start: i,
             end: i + 1,
-            label: i.to_string(),
+            label: i as u64,
             depth: 0,
             parent: None,
             discarded: false,
         });
     }
-    let labels: Vec<&str> = (&spans).into_iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, vec!["0", "1", "2"]);
+    let labels: Vec<u64> = (&spans).into_iter().map(|s| s.label).collect();
+    assert_eq!(labels, vec![0, 1, 2]);
 }
 
 #[test]
@@ -187,7 +190,7 @@ fn spans_get_returns_span_by_index() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "first".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -195,13 +198,13 @@ fn spans_get_returns_span_by_index() {
     spans.push(Span {
         start: 1,
         end: 2,
-        label: "second".to_string(),
+        label: 2,
         depth: 0,
         parent: None,
         discarded: false,
     });
-    assert_eq!(spans.get(0).unwrap().label, "first");
-    assert_eq!(spans.get(1).unwrap().label, "second");
+    assert_eq!(spans.get(0).unwrap().label, 1);
+    assert_eq!(spans.get(1).unwrap().label, 2);
     assert!(spans.get(2).is_none());
 }
 
@@ -211,14 +214,14 @@ fn spans_as_slice_returns_slice() {
     spans.push(Span {
         start: 0,
         end: 1,
-        label: "a".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
     });
     let sl = spans.as_slice();
     assert_eq!(sl.len(), 1);
-    assert_eq!(sl[0].label, "a");
+    assert_eq!(sl[0].label, 1);
 }
 
 struct NoopObserver;
@@ -453,7 +456,7 @@ fn draw_string_notifies_observer() {
 }
 
 #[test]
-fn stop_span_extends_parent_label_stack() {
+fn stop_span_closes_nested_spans_innermost_first() {
     let mut tc = NativeTestCase::for_choices(&[], None, None);
     tc.start_span(1);
     tc.start_span(2);
@@ -1379,7 +1382,7 @@ fn weighted_boolean_sample_respects_probability() {
 }
 
 #[test]
-fn float_clamp_reroutes_excluded_magnitude_band() {
+fn float_restrict_and_redraw_reroutes_excluded_magnitude_band() {
     let fc = FloatChoice {
         min_value: -1e-307,
         max_value: 1e-307,
@@ -1388,7 +1391,7 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
     let raw = f64::from_bits(((1u64 << 52) - 1) / 2);
-    let clamped = float_clamp(&fc, raw);
+    let clamped = float_restrict_and_redraw(&fc, raw);
     assert_eq!(clamped, f64::MIN_POSITIVE);
 
     let fc_neg = FloatChoice {
@@ -1399,12 +1402,12 @@ fn float_clamp_reroutes_excluded_magnitude_band() {
         smallest_nonzero_magnitude: f64::MIN_POSITIVE,
     };
     let raw_neg = f64::from_bits((((1u64 << 52) - 1) / 10) * 9);
-    let clamped_neg = float_clamp(&fc_neg, raw_neg);
+    let clamped_neg = float_restrict_and_redraw(&fc_neg, raw_neg);
     assert_eq!(clamped_neg, -f64::MIN_POSITIVE);
 }
 
 #[test]
-fn float_clamp_with_infinite_bounds_stays_finite() {
+fn float_restrict_and_redraw_with_infinite_bounds_stays_finite() {
     let fc = FloatChoice {
         min_value: f64::NEG_INFINITY,
         max_value: f64::INFINITY,
@@ -1413,10 +1416,10 @@ fn float_clamp_with_infinite_bounds_stays_finite() {
         smallest_nonzero_magnitude: f64::from(f32::from_bits(1)),
     };
     for raw in [5e-324, 1e-100, -3e-320, f64::from_bits(12345)] {
-        let clamped = float_clamp(&fc, raw);
+        let clamped = float_restrict_and_redraw(&fc, raw);
         assert!(
             clamped.is_finite(),
-            "float_clamp({raw:e}) produced {clamped}"
+            "float_restrict_and_redraw({raw:e}) produced {clamped}"
         );
     }
 }
@@ -1479,7 +1482,7 @@ fn spans_trivial_returns_false_for_a_stale_out_of_range_span() {
     spans.push(Span {
         start: 5,
         end: 7,
-        label: "stale".to_string(),
+        label: 1,
         depth: 0,
         parent: None,
         discarded: false,
@@ -1637,16 +1640,22 @@ fn draw_fresh_id_notifies_the_observer() {
 }
 
 #[test]
-fn smallest_unused_id_skips_gaps() {
-    let mut used = BTreeSet::new();
-    assert_eq!(smallest_unused_id(&used), 0);
+fn fresh_ids_track_the_smallest_unused_id_across_gaps() {
+    let mut used = FreshIds::default();
+    assert_eq!(used.smallest_unused(), 0);
+    assert_eq!(used.max_used(), -1);
     used.insert(1);
-    assert_eq!(smallest_unused_id(&used), 0);
+    assert_eq!(used.smallest_unused(), 0);
+    assert!(used.contains(1));
+    assert!(!used.contains(0));
     used.insert(0);
     used.insert(3);
-    assert_eq!(smallest_unused_id(&used), 2);
+    assert_eq!(used.smallest_unused(), 2);
+    assert_eq!(used.max_used(), 3);
     used.insert(2);
-    assert_eq!(smallest_unused_id(&used), 4);
+    assert_eq!(used.smallest_unused(), 4);
+    used.insert(2);
+    assert_eq!(used.smallest_unused(), 4);
 }
 
 #[test]
@@ -3025,4 +3034,72 @@ mod float_categories {
             assert!((1000.0..=2000.0).contains(&v), "{v}");
         }
     }
+}
+
+#[test]
+fn weighted_index_sample_follows_the_weights_and_skips_excluded_entries() {
+    let mut rng = EngineRng::seeded(7);
+    let weights = [1.0, 3.0, 0.0, 0.0];
+    let mut counts = [0usize; 4];
+    for _ in 0..6000 {
+        counts[weighted_index_sample(&weights, &mut rng)] += 1;
+    }
+    assert_eq!(counts[2], 0);
+    assert_eq!(counts[3], 0);
+    assert!(
+        counts[1] > counts[0] * 2 && counts[1] < counts[0] * 4,
+        "expected roughly a 1:3 split, got {counts:?}"
+    );
+}
+
+#[test]
+fn weighted_index_sample_of_a_single_positive_entry_is_that_entry() {
+    let mut rng = EngineRng::seeded(7);
+    for _ in 0..100 {
+        assert_eq!(weighted_index_sample(&[0.0, 0.0, 2.0], &mut rng), 2);
+    }
+}
+
+#[test]
+fn draw_index_weighted_records_an_ordinary_index_choice() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut seen = [false; 3];
+    for _ in 0..50 {
+        let i = ntc.draw_index_weighted(&[0.0, 5.0, 5.0]).unwrap();
+        assert_ne!(i, 0);
+        seen[i] = true;
+    }
+    assert!(seen[1] && seen[2]);
+    let node = &ntc.nodes[0];
+    assert!(!node.was_forced);
+    assert!(matches!(
+        node.kind(),
+        ChoiceKind::Integer(k) if k.min_value == BigInt::zero() && k.max_value == BigInt::from(2)
+    ));
+}
+
+#[test]
+fn draw_index_weighted_forces_the_only_positive_entry() {
+    // prefix that should be ignored
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 5.0, 0.0]).unwrap(), 1);
+    let node = &ntc.nodes[0];
+    assert!(node.was_forced);
+    assert_eq!(node.value(), ChoiceValue::Integer(BigInt::from(1)));
+    assert!(matches!(
+        node.kind(),
+        ChoiceKind::Integer(k) if k.min_value == BigInt::zero() && k.max_value == BigInt::from(2)
+    ));
+}
+
+#[test]
+fn draw_index_weighted_replays_the_prefix_even_for_an_excluded_entry() {
+    let mut ntc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(0))], None, None);
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
+}
+
+#[test]
+fn draw_index_weighted_simplest_is_zero() {
+    let mut ntc = NativeTestCase::for_simplest(8).unwrap();
+    assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
 }

@@ -43,21 +43,25 @@ fn test_generates_named_struct_and_constructor() {
     );
 }
 
+/// `TestCase` opens the span around every draw itself, so the generated
+/// `do_draw` must call the body bare rather than open a second span with
+/// the same label.
 #[test]
-fn test_do_draw_wraps_body_call_in_span() {
+fn test_do_draw_calls_body_without_opening_a_span() {
     let out = expand(quote! {
         fn tree(tc: &TestCase) -> BinTree {
             tc.draw(gs::just(BinTree::Leaf()))
         }
     });
-    assert_contains_tokens(&out, quote! { tc.start_span(__HEGEL_COMPOSITE_LABEL) });
-    assert_contains_tokens(&out, quote! { tc.stop_span(false) });
-    let start = out.find("start_span").unwrap();
-    let call = out.find("Self :: __hegel_body").unwrap();
-    let stop = out.find("stop_span").unwrap();
-    assert!(
-        start < call && call < stop,
-        "body call must sit between start_span and stop_span: {out}"
+    assert_contains_tokens(
+        &out,
+        quote! { fn do_draw(&self, tc: &::hegel::TestCase) -> BinTree { Self::__hegel_body(tc,) } },
+    );
+    assert!(!out.contains("start_span"), "{out}");
+    assert!(!out.contains("stop_span"), "{out}");
+    assert_contains_tokens(
+        &out,
+        quote! { ::hegel::generators::label_from_name("{ tc . draw (gs :: just (BinTree :: Leaf ())) }") },
     );
 }
 

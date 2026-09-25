@@ -204,7 +204,7 @@ use std::marker::PhantomData;
 /// after the document was read, or into a region whose anchor was retracted
 /// — is a silent no-op, so a writer that outlives its document never brings
 /// the process down.
-fn tolerate(result: Result<(), PrinterCallError>) {
+pub(crate) fn tolerate(result: Result<(), PrinterCallError>) {
     match result {
         Ok(()) | Err(PrinterCallError::DeadRegion) => {}
         Err(PrinterCallError::Other(message)) => panic!("{message}"),
@@ -348,11 +348,12 @@ impl PrettyPrinter {
     }
 
     /// Whether printing to this printer produces output: `false` for the
-    /// discarding printer returned by [`noop`](PrettyPrinter::noop). Use it
-    /// to skip work — formatting a value, say — whose only purpose is to be
-    /// printed.
+    /// discarding printer returned by [`noop`](PrettyPrinter::noop), and for
+    /// a printer whose region has died (see [`Clone`](PrettyPrinter#impl-Clone-for-PrettyPrinter)),
+    /// whose writes are discarded. Use it to skip work — formatting a value,
+    /// say — whose only purpose is to be printed.
     pub fn should_print(&self) -> bool {
-        self.handle.is_some()
+        self.handle.as_ref().is_some_and(PrinterHandle::is_live)
     }
 
     /// Wrap an existing engine printer handle (e.g. a test case's shared

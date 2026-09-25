@@ -4,13 +4,24 @@
 //! type-generic shrinking.
 
 use crate::control::hegel_internal_unwrap;
-use crate::native::HashMap;
+use crate::native::{HashMap, HashSet};
 use alloc::vec::Vec;
 
-use crate::native::bignum::{BigInt, BigUint, Zero};
-use crate::native::core::{ChoiceData, ChoiceValue};
+use crate::native::bignum::{BigUint, Zero};
+use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, flattened_len};
 
+use super::search::FindInteger;
 use super::{ShrinkResult, ShrinkRun, Shrinker};
+
+/// How many choices after a raised node
+/// [`Shrinker::try_shortening_via_increment`] tries deleting to complete a
+/// path switch.
+const INCREMENT_DELETION_WINDOW: usize = 8;
+
+/// Extra choices a raised sequence's probe may draw past the current
+/// target's length, so a raise that leads to a longer path is seen as a
+/// path change rather than an overrun.
+const PROBE_EXTENSION: usize = 16;
 
 /// Nodes the index passes skip even though they carry a dense index:
 /// sequence kinds get their own dedicated passes. Clone nodes are skipped
@@ -27,6 +38,14 @@ impl<'a> Shrinker<'a> {
     /// Value punning (via `for_choices` with `prefix_nodes`) handles the
     /// case where decrementing changes the kind at position `j` (e.g. a
     /// `one_of` branch switch).
+    ///
+    /// The bumps tried on `j` are small relative offsets, then small
+    /// absolute indices, then the largest index: for a pair coupled through
+    /// a product or a threshold (`a × k ≥ 1000`), lowering `a` needs `k`
+    /// raised much further than a few units, and the largest value is the
+    /// one most likely to keep the predicate — once it does, the
+    /// value-lowering passes bring `k` down to the smallest value that
+    /// still does.
     pub(super) async fn lower_and_bump(&mut self) -> ShrinkResult<()> {
         let max_gap = core::cmp::min(self.current_nodes.len(), 4);
         for gap in 1..max_gap {
@@ -72,7 +91,9 @@ impl<'a> Shrinker<'a> {
                         let mut attempt = self.current_nodes.clone();
                         if let Some(lowered) = attempt[i].with_value(new_val) {
                             attempt[i] = lowered;
-                            self.consider(&attempt).await?;
+                            if self.consider(&attempt).await? {
+                                self.descend_index(i).await?;
+                            }
 
                             let mut zeroed = attempt;
                             for node in &mut zeroed[i + 1..] {
@@ -113,6 +134,9 @@ impl<'a> Shrinker<'a> {
                                 }
                                 p *= BigUint::from(2u32);
                             }
+                            if let Some(v) = data_j.from_index(max_j)? {
+                                try_bump_ij(self, i, new_val, j, &v).await?;
+                            }
                         }
                     }
                 }
@@ -122,102 +146,162 @@ impl<'a> Shrinker<'a> {
         Ok(())
     }
 
-    /// For each indexed node, try *incrementing* its index to see if the test
-    /// takes a shorter path (e.g. triggering an earlier exit).
+    /// Keep lowering node `i`'s index by geometrically growing amounts
+    /// after a step of one was accepted on its own. A predicate that
+    /// admits one step usually admits many — the value passes that ran
+    /// earlier in the iteration saw a target another pass has since
+    /// changed — and taking them one per pass step would spend the
+    /// improvement cap on unit moves before those passes run again. A
+    /// node the accepted run left without an index descends nowhere.
+    async fn descend_index(&mut self, i: usize) -> ShrinkResult<()> {
+        let base = self.current_nodes[i]
+            .data
+            .to_index()?
+            .unwrap_or_else(BigUint::zero);
+        let mut search = FindInteger::new();
+        while let Some(n) = search.probe() {
+            let step = BigUint::from(n as u64);
+            let lowered = if step > base || i >= self.current_nodes.len() {
+                None
+            } else {
+                self.current_nodes[i].data.from_index(&base - &step)?
+            };
+            let ok = match lowered.and_then(|value| self.current_nodes[i].with_value(&value)) {
+                Some(node) => {
+                    let mut attempt = self.current_nodes.clone();
+                    attempt[i] = node;
+                    self.consider(&attempt).await?
+                }
+                None => false,
+            };
+            search.record(ok);
+        }
+        Ok(())
+    }
+
+    /// For each indexed node, try *raising* its index — by one, then to its
+    /// largest — to see if the test then takes a shorter path.
     ///
     /// A value shrinker can only make values simpler; sometimes making a
-    /// value *less* simple (e.g. `false → true`) causes an earlier exit,
-    /// producing a shorter and thus overall simpler choice sequence.
+    /// value *less* simple (`false → true`, or a `one_of` selector moved to
+    /// a later alternative) leads to a shorter and thus overall simpler
+    /// choice sequence. Such a candidate is lexicographically above the
+    /// current target, so it goes through [`Shrinker::consider_reshaped`]
+    /// rather than the prefiltered `consider`. The largest index is tried
+    /// as well because a gate that hides draws while it is below a
+    /// threshold (`if n(0, 99) < 50 { draw the pick }`) has to jump past
+    /// the threshold rather than step: the largest value is the one surest
+    /// to be past it, and the value-lowering passes then bring it back down
+    /// to the threshold.
     ///
-    /// Each bumped sequence is first tried with the remainder replaced by its
-    /// simplest values, since the shorter path usually wants nothing more.
-    /// When that fails but the run did take a shorter path, the remainder is
-    /// kept less the first few draws the new path no longer makes, so a path
-    /// that needs a *later* value can take it: a `one_of` whose pair branch
-    /// `(false, true)` is interesting moves to its shorter lone-`true` branch
-    /// by bumping the branch index and dropping the `false`. Re-running the
-    /// zeroed candidate to learn its length is served by the execution cache.
+    /// The raised sequence is first replayed as a [`ShrinkRun::Probe`], so
+    /// the run may draw past its end: that both accepts a shorter
+    /// realisation outright and tells apart a raise that leaves the path
+    /// unchanged (the realised nodes equal the candidate) from one that
+    /// changes it — including the path that now needs *more* data, which a
+    /// fixed-length replay would report as an overrun with the same nodes.
+    ///
+    /// When the raise changes the path without being an improvement, the
+    /// shorter path usually also needs a stale node from the old path
+    /// removed — the mirror image of the size-dependency fixup in
+    /// [`Shrinker::minimize_individual_choices`]: switching a `one_of` to a
+    /// shorter branch whose value must stay non-simplest, or flipping a
+    /// boolean that replaces a collection with a single draw. So the raised
+    /// sequence is retried with each span, then each single node, starting
+    /// within [`INCREMENT_DELETION_WINDOW`] choices after the raised
+    /// position deleted. The window keeps the pass from spending the
+    /// scheduler's stall budget on far-away deletions; the stale node of a
+    /// switched path sits right after the switch.
     pub(super) async fn try_shortening_via_increment(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
-            let node = self.current_nodes[i].clone();
-            if node.was_forced || is_sequence(&node.data) {
-                i += 1;
-                continue;
-            }
-            let Some(current_idx) = node.data.to_index()? else {
-                i += 1;
-                continue;
-            };
-
-            let mut candidates: Vec<ChoiceValue> = Vec::new();
-            let node_value = node.value();
-            for d in [1u32, 2, 4, 8, 16] {
-                let t = &current_idx + BigUint::from(d);
-                if let Some(v) = node.data.from_index(t)? {
-                    if v != node_value && !candidates.contains(&v) {
-                        candidates.push(v);
-                    }
-                }
-            }
-            if let Some(mi) = node.data.max_index() {
-                if let Some(v) = node.data.from_index(mi)? {
-                    if v != node_value && !candidates.contains(&v) {
-                        candidates.push(v);
-                    }
-                }
-            }
-
-            let index_candidates = candidates.len();
-            if let ChoiceData::Integer(ic, _) = &node.data {
-                for e in 0u32..11 {
-                    let magnitude = BigInt::from(1u64 << e);
-                    for sign in [BigInt::from(1), BigInt::from(-1)] {
-                        let Some(av) = ic.value_from_bigint(&(sign * &magnitude)) else {
-                            continue;
-                        };
-                        let candidate_val = ChoiceValue::Integer(av);
-                        if candidate_val != node_value && !candidates.contains(&candidate_val) {
-                            candidates.push(candidate_val);
-                        }
-                    }
-                }
-            }
-
-            if candidates.is_empty() {
-                i += 1;
-                continue;
-            }
-
-            for (c, incremented) in candidates.iter().enumerate() {
-                if i >= self.current_nodes.len() {
-                    break;
-                }
-                let mut attempt = self.current_nodes.clone();
-                let Some(bumped) = attempt[i].with_value(incremented) else {
-                    continue;
-                };
-                attempt[i] = bumped;
-                let mut zeroed = attempt.clone();
-                for node in &mut zeroed[i + 1..] {
-                    *node = node.with_simplest()?;
-                }
-                if self.consider(&zeroed).await? || c >= index_candidates {
-                    continue;
-                }
-                let (_, shortened, _) = self.run_test_fn(ShrinkRun::Full(&zeroed)).await?;
-                if shortened.len() >= self.current_nodes.len() {
-                    continue;
-                }
-                for dropped in 0..=2.min(attempt.len() - i - 1) {
-                    let mut kept = attempt[..=i].to_vec();
-                    kept.extend_from_slice(&attempt[i + 1 + dropped..]);
-                    if self.consider(&kept).await? {
-                        break;
-                    }
-                }
-            }
+            self.shorten_via_increment_at(i).await?;
             i += 1;
+        }
+        Ok(())
+    }
+
+    async fn shorten_via_increment_at(&mut self, i: usize) -> ShrinkResult<()> {
+        let node = self.current_nodes[i].clone();
+        if node.was_forced || is_sequence(&node.data) {
+            return Ok(());
+        }
+        let Some(current_idx) = node.data.to_index()? else {
+            return Ok(());
+        };
+        let plus_one = &current_idx + BigUint::from(1u32);
+        let max = node.data.max_index().filter(|m| *m > plus_one);
+        let epoch = self.improvements;
+        for target in core::iter::once(plus_one).chain(max) {
+            let Some(raised_value) = node.data.from_index(target)? else {
+                return Ok(());
+            };
+            self.shorten_via_raise(i, &node, &raised_value).await?;
+            if self.improvements > epoch {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn shorten_via_raise(
+        &mut self,
+        i: usize,
+        node: &ChoiceNode,
+        raised_value: &ChoiceValue,
+    ) -> ShrinkResult<()> {
+        let raised_node = hegel_internal_unwrap!(
+            node.with_value(raised_value),
+            "try_shortening_via_increment: from_index produced a value of another kind"
+        );
+        let mut raised = self.current_nodes.clone();
+        raised[i] = raised_node;
+
+        let epoch = self.improvements;
+        let prefix: Vec<ChoiceValue> = raised.iter().map(|n| n.value()).collect();
+        let max_size = flattened_len(&self.current_nodes) + PROBE_EXTENSION;
+        let Some(realised) = self
+            .consider_reshaped(ShrinkRun::Probe {
+                prefix: &prefix,
+                max_size,
+            })
+            .await?
+        else {
+            return Ok(());
+        };
+        if self.improvements > epoch {
+            return Ok(());
+        }
+        let path_unchanged = realised.len() == raised.len()
+            && realised
+                .iter()
+                .zip(&raised)
+                .all(|(r, c)| r.value() == c.value());
+        if path_unchanged {
+            return Ok(());
+        }
+
+        let window_end = raised.len().min(i + 1 + INCREMENT_DELETION_WINDOW);
+        let spans: Vec<(usize, usize)> = self
+            .current_spans
+            .iter()
+            .filter(|s| {
+                s.start > i && s.start < window_end && s.end > s.start && s.end <= raised.len()
+            })
+            .map(|s| (s.start, s.end))
+            .collect();
+        let singles = (i + 1..window_end).map(|j| (j, j + 1));
+        let mut attempted: HashSet<(usize, usize)> = HashSet::default();
+        for (start, end) in spans.into_iter().chain(singles) {
+            if !attempted.insert((start, end)) {
+                continue;
+            }
+            let mut candidate = raised[..start].to_vec();
+            candidate.extend_from_slice(&raised[end..]);
+            let outcome = self.consider_reshaped(ShrinkRun::Full(&candidate)).await?;
+            if outcome.is_none() || self.improvements > epoch {
+                return Ok(());
+            }
         }
         Ok(())
     }
@@ -238,3 +322,11 @@ pub(super) async fn try_bump_ij(
         .collect();
     shrinker.replace(&replacements).await
 }
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_lower_and_bump_tests.rs"]
+mod lower_and_bump_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_try_shortening_via_increment_tests.rs"]
+mod try_shortening_via_increment_tests;

@@ -308,3 +308,37 @@ fn categories_union_of_no_categories_is_empty() {
     let iv = categories_union(&[]).unwrap();
     assert!(iv.is_empty());
 }
+
+#[test]
+fn build_intervals_shares_one_set_between_equal_alphabets() {
+    let alphabet = TextAlphabet {
+        codec: Some("ascii".to_string()),
+        max_codepoint: 4242,
+        ..Default::default()
+    };
+    let shared = (0..8).any(|_| {
+        let first = build_intervals(&alphabet).unwrap();
+        let second = build_intervals(&alphabet).unwrap();
+        Arc::ptr_eq(&first, &second)
+    });
+    assert!(shared);
+}
+
+#[test]
+fn build_intervals_cache_is_bounded() {
+    let alphabets: Vec<TextAlphabet> = (0..=ALPHABET_CACHE_LIMIT as u32)
+        .map(|i| TextAlphabet {
+            codec: Some("ascii".to_string()),
+            min_codepoint: i,
+            max_codepoint: 4343,
+            ..Default::default()
+        })
+        .collect();
+    let first = build_intervals(&alphabets[0]).unwrap();
+    for alphabet in &alphabets[1..] {
+        build_intervals(alphabet).unwrap();
+    }
+    let rebuilt = build_intervals(&alphabets[0]).unwrap();
+    assert!(!Arc::ptr_eq(&first, &rebuilt));
+    assert_eq!(first.intervals, rebuilt.intervals);
+}

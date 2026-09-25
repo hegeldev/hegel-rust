@@ -357,7 +357,7 @@ mod control {
     fn test_currently_in_stateful_test() {
         Hegel::new(|tc: TestCase| {
             let m = ContextMachine;
-            hegel::stateful::run(m, tc);
+            hegel::stateful::machine(m).run(tc);
         })
         .settings(Settings::new().test_cases(10).database(None))
         .run();

@@ -92,6 +92,12 @@ impl<'a> Shrinker<'a> {
     ///   continuations on every step, so it keeps a retry budget of
     ///   `STOCHASTIC_MAX_FAILURES` consecutive non-improving steps (the
     ///   budget every pass had before deterministic passes fixated early).
+    ///   A step of it that *does* improve ends its work for this iteration
+    ///   instead of being re-stepped: what it found is an arbitrary point
+    ///   of a new region — a branch flipped with a random continuation —
+    ///   and the deterministic passes finish that point in a few calls,
+    ///   where re-stepping the stochastic pass would walk it one index
+    ///   unit per accepted step and spend the improvement cap doing so.
     /// * Each outer iteration starts a fresh stall window
     ///   (`calls_at_last_shrink` is reset to `calls`), so quiet calls
     ///   burned in one iteration — chiefly by the stochastic passes —
@@ -159,6 +165,9 @@ impl<'a> Shrinker<'a> {
                         }
                         any_ran = true;
                         failures = 0;
+                        if passes[idx].stochastic {
+                            break;
+                        }
                     } else if initial_calls != self.calls {
                         max_calls_per_failing_step = max_calls_per_failing_step
                             .max(self.calls.saturating_sub(initial_calls));

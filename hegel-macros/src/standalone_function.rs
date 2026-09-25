@@ -13,6 +13,7 @@ pub fn expand_standalone_function(attr: TokenStream, item: TokenStream) -> Token
     let settings_args: SettingsAttrArgs = if attr.is_empty() {
         SettingsAttrArgs {
             settings: None,
+            profile: None,
             settings_args: Vec::new(),
         }
     } else {

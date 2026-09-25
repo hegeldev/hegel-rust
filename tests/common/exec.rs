@@ -76,6 +76,33 @@ impl Cmd {
         self
     }
 
+    /// Write a file (relative `path`, parent directories created) into the
+    /// scratch cwd before the process runs. Only `fixture` commands have a
+    /// scratch cwd; calling this on a `self_test` command panics.
+    pub fn with_file(self, path: &str, contents: &str) -> Self {
+        let scratch = self
+            .scratch_cwd
+            .as_ref()
+            .expect("with_file requires a fixture command with a scratch cwd");
+        let full = scratch.path().join(path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::write(full, contents).unwrap();
+        self
+    }
+
+    /// Run the process from `dir` (relative to the scratch cwd, created if
+    /// needed) instead of the scratch cwd itself.
+    pub fn in_subdir(mut self, dir: &str) -> Self {
+        let scratch = self
+            .scratch_cwd
+            .as_ref()
+            .expect("in_subdir requires a fixture command with a scratch cwd");
+        let full = scratch.path().join(dir);
+        std::fs::create_dir_all(&full).unwrap();
+        self.command.current_dir(full);
+        self
+    }
+
     /// Expect the process to exit unsuccessfully, with combined output
     /// matching `pattern` (a regex). Without this, the process must succeed.
     pub fn expect_failure(mut self, pattern: &str) -> Self {

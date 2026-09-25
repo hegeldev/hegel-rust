@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -13,7 +14,9 @@ pub enum HealthCheck {
     FilterTooMuch,
     /// Test execution is too slow.
     TooSlow,
-    /// Generated test cases are too large.
+    /// Generated test cases are too large. Suppressing this check also
+    /// removes the per-test-case choice limit (see
+    /// [`Settings::unbounded_choices`]).
     TestCasesTooLarge,
     /// The smallest natural input is very large.
     LargeInitialTestCase,
@@ -60,8 +63,8 @@ pub enum Backend {
     /// whose fuzzer controls the bytes returned by `/dev/urandom`. Sourcing
     /// every choice from the OS random device hands the fuzzer control over
     /// the entire test case (rather than just the PRNG seed), so it can steer
-    /// and reproduce generation directly. When running inside Antithesis this
-    /// backend is selected automatically unless you set one explicitly.
+    /// and reproduce generation directly. The shipped `workload` settings
+    /// profile selects this backend.
     ///
     /// The generation algorithm is otherwise unchanged — only the random
     /// source differs. On platforms without `/dev/urandom` (Windows) it falls
@@ -137,16 +140,15 @@ pub enum Verbosity {
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
 /// the `settings` parameter of `#[hegel::test]`.
 ///
-/// In CI environments (detected automatically), the database is disabled,
-/// tests are derandomized, and [`HealthCheck::TooSlow`] is suppressed by
-/// default. Inside Antithesis (detected via `ANTITHESIS_OUTPUT_DIR`), the
-/// database and all health checks are disabled by default: Antithesis owns
-/// reproduction, and its thread pausing makes wall-clock health checks like
-/// `TooSlow` meaningless.
+/// [`Settings::new`] returns the library's base defaults. Environment
+/// policy — the shipped `development`/`ci`/`workload` profiles,
+/// `hegel.toml`, and default-profile selection — lives in the profile
+/// system ([`crate::profiles`]); `hegel_settings_new` resolves the
+/// `default` alias, so C-ABI callers get profile-aware defaults
+/// automatically.
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub(crate) test_cases: u64,
-    pub(crate) stateful_step_count: i64,
     pub(crate) verbosity: Verbosity,
     pub(crate) output: Output,
     pub(crate) seed: Option<u64>,
@@ -159,38 +161,43 @@ pub struct Settings {
     /// Print event statistics (`tc.event()` / `tc.event_value()`
     /// observations from the generation phase) at the end of the run.
     pub(crate) show_statistics: bool,
-    /// The randomness backend, or `None` to let it be chosen automatically
-    /// (urandom under Antithesis, the default PRNG otherwise). An explicit
-    /// [`Settings::backend`] always wins over the automatic choice.
-    pub(crate) backend: Option<Backend>,
+    /// Whether a failure should print a copy-pasteable reproduction line.
+    /// The engine never reads this: the reproduce blob is always attached
+    /// to the failure and printing it is the frontend's decision. The field
+    /// exists so profiles can carry the choice and frontends can read it
+    /// back through the C ABI.
+    pub(crate) print_blob: bool,
+    pub(crate) backend: Backend,
+    /// The path of the `hegel.toml` these settings were resolved against,
+    /// `None` when no config file was loaded. A diagnostic stamped by
+    /// profile resolution and logged at run start under `Debug` verbosity,
+    /// not a setting: no profile or builder touches it.
+    pub(crate) config_path: Option<String>,
+    /// Whether test cases may make any number of choices. See
+    /// [`Settings::unbounded_choices`].
+    pub(crate) unbounded_choices: bool,
 }
 
 impl Settings {
+    /// The library's base defaults. Antithesis detection is the one
+    /// environment read: it stamps [`Settings::in_antithesis`], which only
+    /// silences the nondeterminism notice and is not settings policy. For
+    /// profile-aware construction use the profile system.
     pub fn new() -> Self {
-        Self::for_env(
-            is_in_ci(),
-            crate::antithesis_detect::antithesis_env_var_set(),
-        )
+        Self::base(crate::antithesis::antithesis_env_var_set())
     }
 
-    pub(crate) fn for_env(in_ci: bool, in_antithesis: bool) -> Self {
+    /// The base defaults every profile resolution starts from, with
+    /// `in_antithesis` stamped from the caller's detection.
+    pub(crate) fn base(in_antithesis: bool) -> Self {
         Self {
             test_cases: 100,
-            stateful_step_count: 50,
             verbosity: Verbosity::Normal,
             output: Output::stderr(),
             seed: None,
-            derandomize: in_ci,
-            database: if in_ci || in_antithesis {
-                Database::Disabled
-            } else {
-                Database::Unset
-            },
-            suppress_health_check: if in_ci {
-                vec![HealthCheck::TooSlow]
-            } else {
-                Vec::new()
-            },
+            derandomize: false,
+            database: BASE_DATABASE,
+            suppress_health_check: Vec::new(),
             in_antithesis,
             phases: vec![
                 Phase::Explicit,
@@ -199,52 +206,60 @@ impl Settings {
                 Phase::Target,
                 Phase::Shrink,
             ],
-            report_multiple_failures: true,
+            report_multiple_failures: false,
             show_statistics: false,
-            backend: None,
+            print_blob: true,
+            backend: Backend::Default,
+            config_path: None,
+            unbounded_choices: false,
         }
     }
 
-    /// Select the randomness backend.
+    /// Remove the limit on the number of choices a single test case may
+    /// make. By default a test case may make
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) (2^20) choices.
     ///
-    /// By default the backend is chosen automatically: [`Backend::Urandom`]
-    /// when running inside Antithesis, and [`Backend::Default`] otherwise.
-    /// Calling this pins the choice, overriding the automatic detection.
-    pub fn backend(mut self, backend: Backend) -> Self {
-        self.backend = Some(backend);
+    /// A test case that reaches the limit is concluded as an overrun: the
+    /// draw that would exceed it fails, the case is discarded, and enough
+    /// overruns trip the [`HealthCheck::TestCasesTooLarge`] and
+    /// [`HealthCheck::LargeInitialTestCase`] health checks. Suppressing
+    /// `TestCasesTooLarge` removes the limit too. Either way a long-running
+    /// test case — a concurrent state machine exercised for hours, say — can
+    /// keep drawing indefinitely, at the cost of the memory to record every
+    /// choice it makes.
+    pub fn unbounded_choices(mut self, unbounded: bool) -> Self {
+        self.unbounded_choices = unbounded;
         self
     }
 
-    /// Whether `check` should be skipped: either the user suppressed it
-    /// explicitly, or the run is inside Antithesis, where every health check
-    /// is off by default.
-    pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
-        self.in_antithesis || self.suppress_health_check.contains(&check)
+    /// The effective per-test-case choice bound: `usize::MAX` when
+    /// [`Settings::unbounded_choices`] is set or
+    /// [`HealthCheck::TestCasesTooLarge`] is suppressed, and
+    /// [`BUFFER_SIZE`](crate::native::core::BUFFER_SIZE) otherwise.
+    pub(crate) fn choice_bound(&self) -> usize {
+        if self.unbounded_choices || self.health_check_suppressed(HealthCheck::TestCasesTooLarge) {
+            usize::MAX
+        } else {
+            crate::native::core::BUFFER_SIZE
+        }
     }
 
-    /// Resolve the effective backend, given whether the process is running
-    /// inside Antithesis.
-    ///
-    /// An explicit [`Settings::backend`] always wins; otherwise urandom is
-    /// used under Antithesis and the default PRNG backend elsewhere.
-    pub(crate) fn resolved_backend(&self, in_antithesis: bool) -> Backend {
-        match self.backend {
-            Some(backend) => backend,
-            None if in_antithesis => Backend::Urandom,
-            None => Backend::Default,
-        }
+    /// Select the randomness backend (default: [`Backend::Default`]; the
+    /// shipped `workload` profile selects [`Backend::Urandom`]).
+    pub fn backend(mut self, backend: Backend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// Whether `check` should be skipped because the resolved settings
+    /// suppress it. The shipped `workload` profile suppresses every check.
+    pub(crate) fn health_check_suppressed(&self, check: HealthCheck) -> bool {
+        self.suppress_health_check.contains(&check)
     }
 
     /// Set the number of test cases to run (default: 100).
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
-        self
-    }
-
-    /// Set the target number of steps run per stateful test case (default:
-    /// 50). Each case runs at least one step and at most this many.
-    pub fn stateful_step_count(mut self, n: i64) -> Self {
-        self.stateful_step_count = n;
         self
     }
 
@@ -325,16 +340,24 @@ impl Settings {
     /// Control whether multi-bug runs report every distinct failing example
     /// or collapse to just the first one.
     ///
-    /// When `true` (the default), each distinct origin Hegel finds is surfaced
-    /// as its own diagnostic, and the final panic message reports the count of
-    /// distinct failures.  Setting this to `false` makes Hegel collapse a
-    /// multi-bug run to one example — useful when you have a flaky predicate
-    /// that triggers several superficially-distinct failures whose root cause
-    /// is the same, and the extra reports are just noise.
+    /// When `true`, each distinct origin Hegel finds is surfaced as its own
+    /// diagnostic, and the final report gives the count of distinct
+    /// failures. When `false` (the default), Hegel collapses a multi-bug run
+    /// to one example — several superficially-distinct failures often share
+    /// a root cause, and the extra reports are just noise.
     ///
     /// Maps to Hypothesis's `report_multiple_bugs` setting.
     pub fn report_multiple_failures(mut self, report_multiple_failures: bool) -> Self {
         self.report_multiple_failures = report_multiple_failures;
+        self
+    }
+
+    /// Whether a failure should print a copy-pasteable reproduction line for
+    /// its counterexample (default: `false`). The reproduce blob is always
+    /// attached to the failure; the engine never reads this field — it
+    /// carries the printing choice for profiles and frontends.
+    pub fn print_blob(mut self, print_blob: bool) -> Self {
+        self.print_blob = print_blob;
         self
     }
 
@@ -344,6 +367,92 @@ impl Settings {
     pub fn show_statistics(mut self, show_statistics: bool) -> Self {
         self.show_statistics = show_statistics;
         self
+    }
+
+    /// Apply the settings environment variables, read through `env`, over
+    /// these settings: `HEGEL_TEST_CASES`, `HEGEL_DATABASE`,
+    /// `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and
+    /// `HEGEL_PRINT_BLOB`. Profile resolution calls this last, so the
+    /// variables win over every profile and `hegel.toml`, while a setter
+    /// called on the resulting handle still wins over them. An unset or
+    /// empty variable leaves its setting alone; a malformed one is an
+    /// error whose message names the variable.
+    pub(crate) fn with_env_overrides_from(
+        mut self,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        if let Some(value) = env_value(&env, "HEGEL_TEST_CASES") {
+            match value.parse::<u64>() {
+                Ok(n) if n > 0 => self.test_cases = n,
+                _ => {
+                    return Err(format!(
+                        "HEGEL_TEST_CASES must be a positive integer, got {value:?}"
+                    ));
+                }
+            }
+        }
+        if let Some(value) = env_value(&env, "HEGEL_DATABASE") {
+            self.database = if value == "disabled" {
+                Database::Disabled
+            } else {
+                Database::Path(value)
+            };
+        }
+        if let Some(value) = env_value(&env, "HEGEL_STATISTICS") {
+            if value != "0" {
+                self.show_statistics = true;
+            }
+        }
+        if let Some(value) = env_value(&env, "HEGEL_SEED") {
+            self.seed = if value == "none" {
+                None
+            } else {
+                match value.parse::<u64>() {
+                    Ok(n) => Some(n),
+                    Err(_) => {
+                        return Err(format!(
+                            "HEGEL_SEED must be an integer or 'none', got {value:?}"
+                        ));
+                    }
+                }
+            };
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_DERANDOMIZE")? {
+            self.derandomize = b;
+        }
+        if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB")? {
+            self.print_blob = b;
+        }
+        Ok(self)
+    }
+}
+
+/// The value of `key` in `env`, unless it is unset or empty: an empty
+/// settings variable counts as unset.
+fn env_value(env: impl Fn(&str) -> Option<String>, key: &str) -> Option<String> {
+    env(key).filter(|value| !value.is_empty())
+}
+
+/// The boolean vocabulary of the settings environment variables and the
+/// `#[hegel::main]` flags: `true`, `1`, `yes` and `false`, `0`, `no`.
+pub(crate) fn parse_bool(s: &str) -> Option<bool> {
+    match s {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// The boolean settings variable `key`: `None` when unset or empty, an
+/// error naming the variable when it is outside [`parse_bool`]'s
+/// vocabulary.
+fn env_bool(env: impl Fn(&str) -> Option<String>, key: &str) -> Result<Option<bool>, String> {
+    match env_value(env, key) {
+        None => Ok(None),
+        Some(value) => match parse_bool(&value) {
+            Some(b) => Ok(Some(b)),
+            None => Err(format!("{key} must be true or false, got {value:?}")),
+        },
     }
 }
 
@@ -360,11 +469,15 @@ pub(crate) enum Database {
     Path(String),
 }
 
-fn is_in_ci() -> bool {
-    is_in_ci_from(crate::sys::env_var)
-}
+/// The database in the base settings: the default disk database, except on
+/// WebAssembly, which has no filesystem to keep one in.
+const BASE_DATABASE: Database = if cfg!(target_family = "wasm") {
+    Database::Disabled
+} else {
+    Database::Unset
+};
 
-fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
+pub(crate) fn is_in_ci_from(env: impl Fn(&str) -> Option<String>) -> bool {
     const CI_VARS: &[(&str, Option<&str>)] = &[
         ("CI", None),
         ("TF_BUILD", Some("true")),

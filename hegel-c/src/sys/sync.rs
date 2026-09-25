@@ -190,6 +190,6 @@ impl<T, F: Fn() -> T> Deref for Lazy<T, F> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/sys/sync_tests.rs"]
 mod tests;

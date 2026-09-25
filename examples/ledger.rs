@@ -88,7 +88,7 @@ fn test_ledger(tc: TestCase) {
         ledger: Ledger::new(),
         accounts: pool(&tc),
     };
-    hegel::stateful::run(test, tc);
+    hegel::stateful::machine(test).run(tc);
 }
 
 fn main() {}
