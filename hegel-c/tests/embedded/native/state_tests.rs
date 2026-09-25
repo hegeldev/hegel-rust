@@ -1,3 +1,4 @@
+use super::float_sample::*;
 use super::*;
 use crate::native::core::GenerationParameters;
 use crate::native::core::choices::BooleanChoice;
@@ -2224,19 +2225,22 @@ mod float_categories {
     fn overflow_and_underflow_bands_make_pairs_misbehave() {
         let adds = category_draws(&unbounded(), NEAR_MAX_FOR_ADD);
         for &v in &adds {
-            assert!(in_band(v, NEAR_MAX_FOR_ADD_BANDS[0]), "{v:e}");
+            assert!(in_band(v, (float_pow2(1023), f64::MAX)), "{v:e}");
             assert!((v + v).is_infinite());
         }
         assert!(adds.iter().any(|&v| v < 0.0) && adds.iter().any(|&v| v > 0.0));
         let adds = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_MAX_FOR_ADD);
         for &v in &adds {
-            assert!(in_band(v, NEAR_MAX_FOR_ADD_BANDS[1]), "{v:e}");
+            assert!(in_band(v, (float_pow2(127), f64::from(f32::MAX))), "{v:e}");
             assert!((v as f32 + v as f32).is_infinite());
             assert!((v + v).is_finite());
         }
 
         let muls = category_draws(&unbounded(), NEAR_MAX_FOR_MUL);
-        assert!(muls.iter().all(|&v| in_band(v, NEAR_MAX_FOR_MUL_BANDS[0])));
+        assert!(
+            muls.iter()
+                .all(|&v| in_band(v, (float_pow2(511), float_below(float_pow2(513)))))
+        );
         let overflowing = muls
             .windows(2)
             .filter(|w| (w[0] * w[1]).is_infinite())
@@ -2246,7 +2250,10 @@ mod float_categories {
             "{overflowing}"
         );
         let muls = category_draws_at(&unbounded(), FloatWidth::F32, NEAR_MAX_FOR_MUL);
-        assert!(muls.iter().all(|&v| in_band(v, NEAR_MAX_FOR_MUL_BANDS[1])));
+        assert!(
+            muls.iter()
+                .all(|&v| in_band(v, (float_pow2(63), float_below(float_pow2(65)))))
+        );
         let overflowing = muls
             .windows(2)
             .filter(|w| (w[0] as f32 * w[1] as f32).is_infinite())
@@ -2260,7 +2267,7 @@ mod float_categories {
         assert!(
             tinies
                 .iter()
-                .all(|&v| in_band(v, NEAR_SQRT_MIN_POSITIVE_BANDS[0]))
+                .all(|&v| in_band(v, (float_pow2(-513), float_below(float_pow2(-510)))))
         );
         let underflowing = tinies
             .windows(2)
@@ -2274,7 +2281,7 @@ mod float_categories {
         assert!(
             tinies
                 .iter()
-                .all(|&v| in_band(v, NEAR_SQRT_MIN_POSITIVE_BANDS[1]))
+                .all(|&v| in_band(v, (float_pow2(-65), float_below(float_pow2(-62)))))
         );
         let underflowing = tinies
             .windows(2)
@@ -2371,7 +2378,7 @@ mod float_categories {
         let (mut powers, mut predecessors, mut negative) = (0, 0, 0);
         let mut exponents = std::collections::HashSet::new();
         for &v in &vs {
-            let mantissa = float_mantissa(v);
+            let mantissa = v.to_bits() & FLOAT_MANTISSA_MASK;
             if mantissa == 0 {
                 assert!(v.is_normal(), "{v:e}");
                 powers += 1;
@@ -2382,7 +2389,7 @@ mod float_categories {
             if v < 0.0 {
                 negative += 1;
             }
-            exponents.insert(float_biased_exponent(v));
+            exponents.insert((v.to_bits() >> 52) & 0x7FF);
         }
         assert!(
             powers > 500 && predecessors > 500,
@@ -2650,7 +2657,7 @@ mod float_categories {
         for _ in 0..n {
             let v = log_uniform_magnitude(lo, hi, &mut rng);
             assert!((lo..=hi).contains(&v), "{v}");
-            counts[(float_biased_exponent(v) as i64 - 1013) as usize] += 1;
+            counts[(((v.to_bits() >> 52) & 0x7FF) as i64 - 1013) as usize] += 1;
         }
         for (i, &c) in counts.iter().enumerate() {
             let share = c as f64 / n as f64;
