@@ -317,7 +317,7 @@ impl OutputReporter {
             Err(message) => (self.sink)(&format!(
                 "Failed to render this test case's drawn values ({message}). This \
                  indicates a bug in printing code the test uses: check any \
-                 hand-written PrettyPrintable impl or print_with closure for \
+                 hand-written PrintableGenerator impl or print_with closure for \
                  unbalanced begin_group/end_group calls."
             )),
         }
@@ -491,8 +491,7 @@ impl TestCase {
     /// can be reported with a failing test case; to draw from a plain
     /// [`Generator`], use [`draw_silent`](Self::draw_silent), or make the
     /// generator printable with
-    /// [`print_as_value`](crate::generators::Generator::print_as_value),
-    /// [`print_as_debug`](crate::generators::Generator::print_as_debug), or
+    /// [`print_as_debug`](crate::generators::Generator::print_as_debug) or
     /// [`print_with`](crate::generators::Generator::print_with). The
     /// [`pretty`](crate::pretty) module docs explain the printing system and
     /// how to make your own types printable.

@@ -1578,6 +1578,15 @@ impl PrinterHandle {
         }))
     }
 
+    /// Re-emit a flat debug representation through the document's groups
+    /// and break points (see `hegel_printer_reflow`). Newlines are honored
+    /// as hard breaks.
+    pub(crate) fn reflow(&self, repr: &str) -> Result<(), PrinterCallError> {
+        Self::check(with_context(|ctx| unsafe {
+            hegel_c::hegel_printer_reflow(ctx, self.raw, ptr::null(), repr.as_ptr(), repr.len())
+        }))
+    }
+
     /// Adjust the indentation applied by subsequent break points.
     pub(crate) fn shift_indent(&self, delta: i64) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {

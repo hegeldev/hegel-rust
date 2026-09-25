@@ -323,10 +323,8 @@ where
 /// The generated generator is a
 /// [`PrintableGenerator`](crate::PrintableGenerator), printing values as
 /// `Name { field: value, … }` expressions, exactly when every field type
-/// implements [`PrettyPrintable`](crate::PrettyPrintable); otherwise it can
-/// only be drawn silently, or made printable with
-/// [`print_as_debug`](crate::Generator::print_as_debug) or
-/// [`print_with`](crate::Generator::print_with).
+/// implements `Debug`; otherwise it can only be drawn silently, or made
+/// printable with [`print_with`](crate::Generator::print_with).
 ///
 /// # Example
 ///
@@ -427,7 +425,7 @@ macro_rules! derive_generator {
 
         impl<'a> $crate::generators::PrintableGenerator<$struct_type> for $gen_name<'a>
         where
-            $($field_type: $crate::PrettyPrintable,)*
+            $($field_type: ::core::fmt::Debug,)*
         {
             fn do_draw_and_print(
                 &self,

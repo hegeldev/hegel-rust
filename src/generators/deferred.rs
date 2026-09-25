@@ -121,7 +121,7 @@ impl<T, B: PrintableGenerator<T> + Send + Sync> PrintableGenerator<T> for Deferr
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
-/// #[derive(hegel::PrettyPrintable)]
+/// #[derive(Debug)]
 /// enum Tree {
 ///     Leaf(i32),
 ///     Branch(Box<Tree>, Box<Tree>),
@@ -208,7 +208,7 @@ impl<T: Send + Sync + 'static> DeferredGeneratorDefinition<T, BoxedGenerator<'st
 /// ```no_run
 /// use hegel::generators::{self as gs, Generator};
 ///
-/// #[derive(hegel::PrettyPrintable)]
+/// #[derive(Debug)]
 /// enum Tree {
 ///     Leaf(i32),
 ///     Branch(Box<Tree>, Box<Tree>),
@@ -233,8 +233,7 @@ pub fn deferred<T>() -> DeferredGeneratorDefinition<T> {
 /// Like [`deferred()`], but `set` accepts any [`Generator`] — no
 /// printability required. The handles are [`BoxedGenerator`]s, so they
 /// follow the usual boxing rules (see [`Generator::boxed`]): drawable with
-/// [`draw`](crate::TestCase::draw) when `T` is
-/// [`PrettyPrintable`](crate::PrettyPrintable), and otherwise with
+/// [`draw`](crate::TestCase::draw) when `T` is `Debug`, and otherwise with
 /// [`draw_silent`](crate::TestCase::draw_silent) or via
 /// [`print_as_debug`](Generator::print_as_debug) or
 /// [`print_with`](Generator::print_with).

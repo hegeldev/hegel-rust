@@ -1,8 +1,9 @@
 use super::generators::draw_and_print_value;
 use super::{Collection, Generator, PrintableGenerator, TestCase, label_from_name};
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
+use std::fmt::Debug;
 
 const SUBSEQUENCE_LABEL: u64 = label_from_name("hegel.subsequence");
 const PERMUTATION_LABEL: u64 = label_from_name("hegel.permutation");
@@ -75,7 +76,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SubsequenceGenerator
     }
 }
 
-impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<Vec<T>>
     for SubsequenceGenerator<'a, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
@@ -142,7 +143,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for PermutationGenerator
     }
 }
 
-impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<Vec<T>>
     for PermutationGenerator<'a, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
@@ -267,7 +268,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<Vec<T>> for SampleGenerator<'a, 
     }
 }
 
-impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<Vec<T>>
+impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<Vec<T>>
     for SampleGenerator<'a, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {

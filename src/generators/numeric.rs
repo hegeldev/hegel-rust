@@ -1,7 +1,8 @@
 use super::generators::draw_and_print_value;
 use super::{Generator, PrintableGenerator, TestCase, label_from_name};
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::OnceLock;
 
@@ -175,7 +176,7 @@ impl<T: Integer> Generator<T> for IntegerGenerator<T> {
     }
 }
 
-impl<T: Integer + PrettyPrintable> PrintableGenerator<T> for IntegerGenerator<T> {
+impl<T: Integer + Debug> PrintableGenerator<T> for IntegerGenerator<T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
     }
@@ -443,7 +444,7 @@ impl<T: Float> Generator<T> for FloatGenerator<T> {
     }
 }
 
-impl<T: Float + PrettyPrintable> PrintableGenerator<T> for FloatGenerator<T> {
+impl<T: Float + Debug> PrintableGenerator<T> for FloatGenerator<T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
     }

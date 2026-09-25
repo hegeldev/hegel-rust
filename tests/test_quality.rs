@@ -189,7 +189,7 @@ mod shrink_quality {
         assert_eq!(b, a + 1);
     }
 
-    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable, Debug)]
+    #[derive(hegel::DefaultGenerator, Debug)]
     struct TwoBools {
         a: bool,
         b: bool,
@@ -324,7 +324,7 @@ mod shrink_quality {
         assert_eq!(b, 1000.0);
     }
 
-    #[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+    #[derive(Debug, Clone, PartialEq)]
     enum Expr {
         Int(i64),
         Add(Box<Expr>, Box<Expr>),
@@ -676,7 +676,7 @@ mod collective_minimization {
         ));
     }
 
-    #[derive(hegel::DefaultGenerator, hegel::PrettyPrintable, Debug)]
+    #[derive(hegel::DefaultGenerator, Debug)]
     struct IntBool {
         a: i64,
         b: bool,

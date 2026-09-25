@@ -1,25 +1,26 @@
 //! Pretty-printing of generated values: how a failing test reports what it
-//! drew, and how to make your own types and generators take part.
+//! drew, and how to take part in that report.
 //!
 //! When a test fails, Hegel replays the minimal failing example and prints
 //! every drawn value as a `let` binding:
 //!
 //! ```text
-//! let records = vec![Record {
-//!          name: "000".to_string(),
+//! let records = [Record {
+//!          name: "000",
 //!          tags: None,
-//!          scores: HashMap::from([("0".to_string(), 0)]) }];
+//!          scores: {"0": 0} }];
 //! ```
 //!
-//! The goal is output you can paste into an ordinary example-based test:
-//! valid Rust expressions (`"000".to_string()` rather than `Debug`'s
-//! `"000"`, `f64::NAN` rather than `NaN`), wrapped and indented like source
-//! code. This page explains the machinery behind that report and what to do
-//! when the compiler tells you a draw is not printable.
+//! Values print the way `{:?}` shows them — the `Debug` representation every
+//! Rust type already has — laid out by libhegel's layout engine so that a
+//! large value wraps one element or field per line instead of running off
+//! the edge of the terminal. This page explains the machinery behind that
+//! report and what to do when the compiler tells you a draw is not
+//! printable.
 //!
 //! # Printing is the generator's job
 //!
-//! A value often cannot print itself. There is no `Debug` for a drawn
+//! A value often cannot print itself: there is no `Debug` for a drawn
 //! closure, and the useful representation of a `HegelRandom` (the `rand`
 //! integration's fake PRNG) is the sequence of values it hands out *after*
 //! it is drawn. The process that constructed a value can always describe it,
@@ -33,94 +34,50 @@
 //! drawn; [`TestCase::draw_silent`](crate::TestCase::draw_silent) accepts
 //! any generator and reports nothing.
 //!
-//! Sometimes you do need to print values. For example,
-//! [`just`](crate::generators::just) and
-//! [`sampled_from`](crate::generators::sampled_from)
-//! can generate arbitrary values that you need to print, and if you have
-//! a generator with no obvious way to print its construction you might
-//! still want to print its output. For this, we have an additional trait
-//! [`PrettyPrintable`] — the protocol a value uses to describe its own
-//! representation. This is implemented for the primitives and the common
-//! standard-library types: strings, the sequence and map collections,
-//! `Option`/`Result`, tuples, smart pointers, ranges, paths, durations, IP
-//! addresses, and more ([`PrettyPrintable`]'s rustdoc lists every
-//! implementor), and you can also derive it for your own types. So a
-//! draw only fails to compile when a type the library
-//! does not know about enters the picture, and the fix depends on whose
-//! type it is.
-//!
-//! # Making your own type printable
-//!
-//! For a type you own, implement [`PrettyPrintable`] once and every
-//! generator of it (through `map`, composites, boxing, containers of it, …)
-//! becomes printable:
-//!
-//! - `#[derive(hegel::PrettyPrintable)]` prints in Rust-expression syntax,
-//!   field by field. A field whose type cannot implement [`PrettyPrintable`]
-//!   — a foreign type, say — can opt into its `Debug` representation with
-//!   `#[pretty(debug)]`. See [the derive's
-//!   documentation](derive@crate::PrettyPrintable).
-//! - [`pretty_print_as_debug!`](crate::pretty_print_as_debug) implements
-//!   the trait via the type's existing `Debug` representation, re-laid-out
-//!   through the layout engine.
-//! - A hand-written impl gives full control. Print in Rust-expression
-//!   syntax where possible, using the group machinery so large values wrap
-//!   (see [`PrettyPrinter`], and [`print_debug_repr`] to embed a `Debug`
-//!   representation).
-//!
-//! # Printing a foreign type
-//!
-//! The orphan rule keeps other crates' types out of [`PrettyPrintable`], so
-//! for those, make the *generator* printable at the point you build it:
-//!
-//! - [`print_as_debug`](crate::Generator::print_as_debug) — print drawn
-//!   values by their `Debug` representation. The usual choice, but check
-//!   the output once: a type whose `Debug` is opaque (a tagged pointer, a
-//!   bit-packed struct) produces a report you cannot decode, and
-//!   `print_as_call` or `print_with` is the fix.
-//! - [`print_as_call`](crate::generators::Mapped::print_as_call) — on a
-//!   `map` whose input draw is printable, print the input instead of the
-//!   output: `.map(KeyData::from_ffi).print_as_call("KeyData::from_ffi")`
-//!   reports the pastable `KeyData::from_ffi(3)`.
-//! - [`print_with`](crate::Generator::print_with) — print a custom
-//!   representation from a closure taking the value and the printer:
-//!   `.print_with(|value, printer| printer.text(&format!("make({value:?})")))`.
-//! - [`print_as_value`](crate::Generator::print_as_value) — print values by
-//!   their [`PrettyPrintable`] impl, for generators (hand-written ones, say)
-//!   that don't track printability themselves.
-//! - [`TestCase::draw_silent`](crate::TestCase::draw_silent) — draw without
-//!   reporting the value, when it isn't worth reporting.
-//!
-//! Annotate only the draws the compiler rejects: `.print_as_debug()` on an
-//! already-printable draw only degrades the report from Rust-expression
-//! syntax to `Debug` syntax.
-//!
-//! # What is already printable
-//!
-//! Most tests never think about any of this, because printability is the
-//! default throughout the generator library:
+//! Most generators are printable without anyone thinking about it:
 //!
 //! - Every leaf generator prints: integers, floats, booleans, strings and
 //!   regexes, bytes, characters, dates and times, UUIDs, IP addresses,
 //!   emails, URLs, durations.
 //! - Structural combinators print whenever their components do:
 //!   collections, tuples, [`optional`](crate::generators::optional),
-//!   [`one_of!`](crate::one_of), `flat_map`,
-//!   [`recursive`](crate::generators::recursive).
+//!   [`one_of!`](crate::one_of), `filter`, `flat_map`,
+//!   [`recursive`](crate::generators::recursive), and the generators
+//!   `#[derive(DefaultGenerator)]` produces. These print as they draw,
+//!   element by element and field by field, so an element's own printing
+//!   (a [`print_with`](crate::Generator::print_with) closure, a deferred
+//!   `HegelRandom`) shows up inside the containing value.
 //! - Value-producing combinators print whenever the produced type
-//!   implements [`PrettyPrintable`]: `map`, `filter`,
-//!   [`just`](crate::generators::just),
+//!   implements `Debug`: `map`, [`just`](crate::generators::just),
 //!   [`sampled_from`](crate::generators::sampled_from),
 //!   [`boxed`](crate::Generator::boxed), and
 //!   [`#[hegel::composite]`](crate::composite) functions. These print the
-//!   finished value, not the draws that built it: a composite's inner
-//!   draws never appear in the report, only its return value. NB: If you
-//!   have a generator with custom printing and you box it with `boxed`,
-//!   you will throw away that printing. Use
-//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable)
-//!   if you want to preserve that.
-//! - `#[derive(DefaultGenerator)]` generators print field by field as they
-//!   draw, so the type needs no [`PrettyPrintable`] implementation at all.
+//!   finished value through [`PrettyPrinter::debug`], not the draws that
+//!   built it: a composite's inner draws never appear in the report, only
+//!   its return value.
+//!
+//! # When a draw is not printable
+//!
+//! A draw fails to compile only when a generator that prints by value
+//! produces a type without a `Debug` implementation, or when a hand-written
+//! [`Generator`](crate::Generator) never implemented printing. The fixes,
+//! in order of preference:
+//!
+//! - `#[derive(Debug)]` on your own type makes every generator of it
+//!   printable at once.
+//! - [`print_with`](crate::Generator::print_with) — print a custom
+//!   representation from a closure taking the value and the printer:
+//!   `.print_with(|value, printer| printer.text(&format!("make({})", value.id)))`.
+//!   Also the way to mask a secret, or to print a foreign type whose `Debug`
+//!   output is opaque (a tagged pointer, a bit-packed struct).
+//! - [`print_as_debug`](crate::Generator::print_as_debug) — make a
+//!   hand-written generator of a `Debug` type printable.
+//! - [`print_as_call`](crate::generators::Mapped::print_as_call) — on a
+//!   `map` whose input draw is printable, print the input instead of the
+//!   output: `.map(KeyData::from_ffi).print_as_call("KeyData::from_ffi")`
+//!   reports `KeyData::from_ffi(3)`.
+//! - [`TestCase::draw_silent`](crate::TestCase::draw_silent) — draw without
+//!   reporting the value, when it isn't worth reporting.
 //!
 //! # Helpers and type erasure
 //!
@@ -134,17 +91,13 @@
 //!   adapter added inside the helper changes nothing. Declare
 //!   generator-returning helpers `-> impl PrintableGenerator<T>`.
 //! - [`Generator::boxed`](crate::Generator::boxed) keeps only value
-//!   printing: the boxed generator prints drawn values by their
-//!   [`PrettyPrintable`] impl, so boxing preserves printability for
-//!   printable value types but drops a printing strategy carried by the
-//!   erased generator (a `print_with` closure, say). To keep the
-//!   generator's own printing through the erasure, make the generator
-//!   printable *first* and box with
-//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable) —
-//!   `.print_as_debug().boxed_printable()` is the usual recipe for a
-//!   non-printable value type. `boxed_printable` exists only on generators
-//!   that are already printable; calling it on a plain generator is an
-//!   error.
+//!   printing: the boxed generator prints drawn values by their `Debug`
+//!   representation, so boxing preserves printability for `Debug` value
+//!   types but drops a printing strategy carried by the erased generator (a
+//!   `print_with` closure, say). To keep the generator's own printing
+//!   through the erasure, box with
+//!   [`boxed_printable`](crate::PrintableGenerator::boxed_printable)
+//!   instead, which exists only on generators that are already printable.
 //!
 //! The adapter methods come from the [`Generator`](crate::Generator) trait
 //! and `boxed_printable` from [`PrintableGenerator`](crate::PrintableGenerator),
@@ -166,8 +119,9 @@
 //! # The layout engine
 //!
 //! Everything above renders through a shared layout engine, which you meet
-//! directly when writing a [`PrettyPrintable`] or
-//! [`PrintableGenerator`](crate::PrintableGenerator) implementation.
+//! directly when writing a [`print_with`](crate::Generator::print_with)
+//! closure or a [`PrintableGenerator`](crate::PrintableGenerator)
+//! implementation.
 //!
 //! [`Document`] owns one pretty-printed document: its builder methods
 //! choose the layout options, [`Document::printer`] exposes the surface to
@@ -185,7 +139,13 @@
 //! [`PrettyPrinter::begin_group`] / [`PrettyPrinter::end_group`] delimit
 //! the groups those decisions are made over. A group either fits — every
 //! breakable renders as its separator — or breaks as a whole, outermost
-//! groups first.
+//! groups first. On top of those sit the conveniences most printing code
+//! wants: [`PrettyPrinter::debug`] prints any `Debug` value with its
+//! bracket structure recovered by libhegel's reflower, so it wraps like a
+//! structurally printed one; [`PrettyPrinter::group`] and
+//! [`PrettyPrinter::seq`] write a delimited group or a comma-separated
+//! sequence from a closure; [`PrettyPrinter::separator`] is the `,` plus
+//! break point between two items.
 //!
 //! Because printing happens *during* the draw, the printer is more than an
 //! append-only stream: a combinator that may reject a draw (a `filter`
@@ -197,6 +157,7 @@
 
 use crate::ffi::{PrinterCallError, PrinterHandle};
 use std::cell::Cell;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 /// Accept a printer operation's outcome: misuse panics with libhegel's
@@ -223,7 +184,7 @@ pub(crate) const DEFAULT_MAX_WIDTH: u64 = 79;
 /// render by consuming the document with [`finish`](Document::finish) —
 /// rendering happens exactly once, at the end. The [`PrettyPrinter`] this
 /// hands out is write-only, so code that is *given* a printer (a
-/// [`PrettyPrintable`] implementation, a
+/// [`print_with`](crate::Generator::print_with) closure, a
 /// [`PrintableGenerator`](crate::PrintableGenerator)) can never render or
 /// otherwise observe the document it is contributing to.
 ///
@@ -304,9 +265,10 @@ impl Default for Document {
 ///
 /// See the [module docs](self) for the printing model. Obtained from
 /// [`Document::printer`] — or received, already positioned, by printing
-/// code such as a [`PrettyPrintable`] implementation. Rejections of the
-/// layout protocol (an [`end_group`](PrettyPrinter::end_group) with no open
-/// group) panic, since they indicate a bug in the calling printing code.
+/// code such as a [`print_with`](crate::Generator::print_with) closure.
+/// Rejections of the layout protocol (an [`end_group`](PrettyPrinter::end_group)
+/// with no open group) panic, since they indicate a bug in the calling
+/// printing code.
 pub struct PrettyPrinter {
     /// `None` is the no-op printer: every emitting method returns without
     /// doing anything, so one drawing body can serve both the silent and the
@@ -384,6 +346,48 @@ impl PrettyPrinter {
         }
     }
 
+    /// Print a value's `Debug` representation, laid out through the group
+    /// machinery.
+    ///
+    /// The value is formatted with `{:?}` and handed to libhegel's reflower,
+    /// which recovers the bracket structure of the representation — `Name {
+    /// field: value, … }`, `Name(…)`, `(…)`, `[…]`, `{key: value, …}`, with
+    /// string and character literals kept whole — and re-emits it through
+    /// the printer's groups and break points, so a large value wraps one
+    /// field or element per line exactly like one printed structurally.
+    /// Output that doesn't follow that grammar (a hand-written `Debug`
+    /// implementation can produce anything) is emitted verbatim, with
+    /// embedded newlines honored as hard breaks. Nothing is formatted when
+    /// the printer is not printing.
+    ///
+    /// This is how every value-printing generator (`map`, `just`, a boxed
+    /// generator, a composite) reports its values, and the usual way for a
+    /// [`print_with`](crate::Generator::print_with) closure to embed a
+    /// component of a larger representation:
+    ///
+    /// ```
+    /// use hegel::Document;
+    ///
+    /// let mut doc = Document::new().max_width(20);
+    /// doc.printer().debug(&vec![(1, "one"), (2, "two")]);
+    /// assert_eq!(doc.finish(), "[(1, \"one\"),\n (2, \"two\")]");
+    /// ```
+    pub fn debug<T: Debug + ?Sized>(&mut self, value: &T) {
+        if self.should_print() {
+            self.reflow(&format!("{value:?}"));
+        }
+    }
+
+    /// Lay out an already-formatted flat representation through the group
+    /// machinery, as [`debug`](PrettyPrinter::debug) does for a value's
+    /// `Debug` output. For a representation produced some other way — a
+    /// `Display` implementation, a serialization — that follows the same
+    /// bracketed grammar.
+    pub fn reflow(&mut self, repr: &str) {
+        let Some(handle) = &self.handle else { return };
+        tolerate(handle.reflow(repr));
+    }
+
     /// Emit a potential break point: renders as `sep` if the enclosing group
     /// fits on the current line, and as a newline plus the current
     /// indentation if the group breaks.
@@ -412,6 +416,64 @@ impl PrettyPrinter {
     pub fn end_group(&mut self, close: &str) {
         let Some(handle) = &self.handle else { return };
         tolerate(handle.end_group(close));
+    }
+
+    /// Print a group: `open`, then whatever `body` prints with the
+    /// indentation of subsequent break points raised by `indent`, then
+    /// `close`. The closure form of
+    /// [`begin_group`](PrettyPrinter::begin_group) /
+    /// [`end_group`](PrettyPrinter::end_group), which cannot be left
+    /// unbalanced.
+    ///
+    /// ```
+    /// use hegel::Document;
+    ///
+    /// let mut doc = Document::new().max_width(12);
+    /// doc.printer().group(5, "Some(", ")", |p| {
+    ///     p.seq("[", "]", ["first", "second"], |p, item| p.text(item));
+    /// });
+    /// assert_eq!(doc.finish(), "Some([first,\n      second])");
+    /// ```
+    pub fn group(&mut self, indent: usize, open: &str, close: &str, body: impl FnOnce(&mut Self)) {
+        self.begin_group(indent, open);
+        body(self);
+        self.end_group(close);
+    }
+
+    /// Print `items` as a delimited, comma-separated sequence — `open`, each
+    /// item as `print` renders it with a [`separator`](PrettyPrinter::separator)
+    /// between consecutive items, `close` — laid out inline when it fits and
+    /// one item per line, aligned just inside `open`, when it does not.
+    ///
+    /// ```
+    /// use hegel::Document;
+    ///
+    /// let mut doc = Document::new().max_width(8);
+    /// doc.printer().seq("{", "}", [1, 2, 3], |p, n| p.debug(&n));
+    /// assert_eq!(doc.finish(), "{1,\n 2,\n 3}");
+    /// ```
+    pub fn seq<T>(
+        &mut self,
+        open: &str,
+        close: &str,
+        items: impl IntoIterator<Item = T>,
+        mut print: impl FnMut(&mut Self, T),
+    ) {
+        self.group(open.chars().count(), open, close, |printer| {
+            for (index, item) in items.into_iter().enumerate() {
+                if index > 0 {
+                    printer.separator();
+                }
+                print(printer, item);
+            }
+        });
+    }
+
+    /// Emit the separator between two items of a group: a `,` followed by a
+    /// break point that renders as a space when the group fits on one line.
+    pub fn separator(&mut self) {
+        self.text(",");
+        self.breakable(" ");
     }
 
     /// Adjust the indentation applied by subsequent break points by `delta`.
@@ -566,837 +628,3 @@ impl Drop for Speculation<'_> {
         }
     }
 }
-
-/// Print a `{:?}` representation through the layout machinery.
-///
-/// The output of a derived `Debug` implementation follows a small grammar —
-/// `Name { field: value, … }`, `Name(…)`, `(…)`, `[…]`, `{key: value, …}`,
-/// string and character literals, atoms — and this function re-emits it
-/// through the printer's group and breakable primitives, so a large value
-/// wraps exactly like one printed by `#[derive(PrettyPrintable)]`. Anything
-/// that doesn't parse as that grammar (a hand-written `Debug` can produce
-/// arbitrary text) is emitted verbatim, with embedded newlines honored as
-/// hard breaks.
-///
-/// This is the engine behind [`pretty_print_as_debug!`](crate::pretty_print_as_debug)
-/// and [`print_as_debug`](crate::Generator::print_as_debug); it is exposed
-/// for hand-written [`PrettyPrintable`] implementations that want to embed a
-/// `Debug` representation in a larger layout.
-pub fn print_debug_repr(repr: &str, printer: &mut PrettyPrinter) {
-    match DebugRepr::parse(repr) {
-        Some(nodes) => emit_debug_nodes(&nodes, printer),
-        None => printer.text(repr),
-    }
-}
-
-/// One parsed piece of a `Debug` representation: literal text, or a
-/// delimited group laid out with a breakable point after each comma.
-enum DebugNode {
-    Leaf(String),
-    Group {
-        /// The atom glued to the open delimiter (`Some` in `Some(5)`, `Name`
-        /// in `Name { … }`); empty for bare tuples, lists, and map braces.
-        prefix: String,
-        delimiter: char,
-        /// Brace group in derived struct style (`Name { … }`, spaces inside
-        /// the braces) as opposed to map style (`{… }`).
-        named: bool,
-        items: Vec<Vec<DebugNode>>,
-    },
-}
-
-/// Recursive-descent parser over the derived-`Debug` grammar. Any input
-/// outside the grammar makes a parsing method return `None`, and the whole
-/// representation falls back to verbatim text.
-struct DebugRepr {
-    chars: Vec<char>,
-    pos: usize,
-    depth: usize,
-}
-
-/// How deeply groups may nest before [`DebugRepr::parse`] gives up. The
-/// parser, the emitter, and the parsed tree's destructor all recurse
-/// per nesting level, so an unbounded representation would overflow the
-/// stack during failure reporting; past this depth the representation is
-/// emitted verbatim instead.
-const MAX_DEBUG_DEPTH: usize = 64;
-
-impl DebugRepr {
-    fn parse(repr: &str) -> Option<Vec<DebugNode>> {
-        if repr.contains('\n') {
-            return None;
-        }
-        let mut parser = DebugRepr {
-            chars: repr.chars().collect(),
-            pos: 0,
-            depth: 0,
-        };
-        let nodes = parser.parse_item()?;
-        if parser.pos != parser.chars.len() {
-            return None;
-        }
-        Some(nodes)
-    }
-
-    fn peek(&self) -> Option<char> {
-        self.chars.get(self.pos).copied()
-    }
-
-    fn peek_next(&self) -> Option<char> {
-        self.chars.get(self.pos + 1).copied()
-    }
-
-    fn bump(&mut self) -> Option<char> {
-        let c = self.peek()?;
-        self.pos += 1;
-        Some(c)
-    }
-
-    /// Parse one comma-separated item — literal runs and nested groups —
-    /// stopping (without consuming) at a `", "`, a close delimiter, or the
-    /// end of the input.
-    fn parse_item(&mut self) -> Option<Vec<DebugNode>> {
-        let mut nodes = Vec::new();
-        let mut text = String::new();
-        loop {
-            match self.peek() {
-                None | Some(']' | ')' | '}') => break,
-                Some(',') if self.peek_next() == Some(' ') => break,
-                Some(' ') if self.peek_next() == Some('}') => break,
-                Some('"' | '\'') => {
-                    flush_text(&mut text, &mut nodes);
-                    nodes.push(DebugNode::Leaf(self.lex_quoted()?));
-                }
-                Some(delimiter @ ('[' | '(' | '{')) => {
-                    let prefix = take_group_prefix(&mut text, delimiter);
-                    flush_text(&mut text, &mut nodes);
-                    nodes.push(self.parse_group(prefix)?);
-                }
-                Some(c) => {
-                    text.push(c);
-                    self.bump();
-                }
-            }
-        }
-        flush_text(&mut text, &mut nodes);
-        Some(nodes)
-    }
-
-    /// Parse a delimited group whose open delimiter is the current char.
-    fn parse_group(&mut self, prefix: String) -> Option<DebugNode> {
-        if self.depth == MAX_DEBUG_DEPTH {
-            return None;
-        }
-        self.depth += 1;
-        let delimiter = self.bump()?;
-        let close = match delimiter {
-            '[' => ']',
-            '(' => ')',
-            _ => '}',
-        };
-        let named = delimiter == '{' && !prefix.is_empty() && self.peek() == Some(' ');
-        if named {
-            self.bump();
-        }
-        let mut items = Vec::new();
-        if !named && self.peek() == Some(close) {
-            self.bump();
-        } else {
-            loop {
-                items.push(self.parse_item()?);
-                match self.peek() {
-                    Some(',') if self.peek_next() == Some(' ') => {
-                        self.bump();
-                        self.bump();
-                    }
-                    Some(' ') if named && self.peek_next() == Some(close) => {
-                        self.bump();
-                        self.bump();
-                        break;
-                    }
-                    Some(c) if !named && c == close => {
-                        self.bump();
-                        break;
-                    }
-                    _ => return None,
-                }
-            }
-        }
-        self.depth -= 1;
-        Some(DebugNode::Group {
-            prefix,
-            delimiter,
-            named,
-            items,
-        })
-    }
-
-    /// Lex a string or character literal, including its quotes. A backslash
-    /// escapes the following character, which is all the lexer needs: no
-    /// escape sequence contains an unescaped closing quote.
-    fn lex_quoted(&mut self) -> Option<String> {
-        let quote = self.bump()?;
-        let mut lit = String::new();
-        lit.push(quote);
-        loop {
-            let c = self.bump()?;
-            lit.push(c);
-            if c == '\\' {
-                lit.push(self.bump()?);
-            } else if c == quote {
-                return Some(lit);
-            }
-        }
-    }
-}
-
-/// Move accumulated literal text into a leaf node.
-fn flush_text(text: &mut String, nodes: &mut Vec<DebugNode>) {
-    if !text.is_empty() {
-        nodes.push(DebugNode::Leaf(std::mem::take(text)));
-    }
-}
-
-/// Split the atom glued to an open delimiter off the accumulated text:
-/// `Some` from `Some(`, and `Name` (dropping the joining space) from
-/// `Name {`. Brace groups only take a prefix across that space — a brace
-/// directly following text is not the derived-struct shape.
-fn take_group_prefix(text: &mut String, delimiter: char) -> String {
-    if delimiter == '{' {
-        let Some(without_space) = text.strip_suffix(' ') else {
-            return String::new();
-        };
-        let start = without_space.rfind(' ').map(|index| index + 1).unwrap_or(0);
-        let prefix = without_space[start..].to_string();
-        if prefix.is_empty() {
-            return String::new();
-        }
-        text.truncate(text.len() - prefix.len() - 1);
-        prefix
-    } else {
-        let start = text.rfind(' ').map(|index| index + 1).unwrap_or(0);
-        let prefix = text[start..].to_string();
-        text.truncate(start);
-        prefix
-    }
-}
-
-/// Emit parsed nodes, matching the layout `#[derive(PrettyPrintable)]`
-/// produces for the same shapes.
-fn emit_debug_nodes(nodes: &[DebugNode], printer: &mut PrettyPrinter) {
-    for node in nodes {
-        match node {
-            DebugNode::Leaf(text) => printer.text(text),
-            DebugNode::Group {
-                prefix,
-                delimiter,
-                named,
-                items,
-            } => {
-                let (open, close, indent) = match (delimiter, named) {
-                    ('{', true) => (format!("{prefix} {{"), " }", 4),
-                    ('{', false) if prefix.is_empty() => ("{".to_string(), "}", 1),
-                    ('{', false) => (format!("{prefix} {{"), "}", 1),
-                    ('[', _) => (format!("{prefix}["), "]", 1),
-                    _ => (format!("{prefix}("), ")", 1),
-                };
-                printer.begin_group(indent, &open);
-                if *named {
-                    printer.breakable(" ");
-                }
-                for (index, item) in items.iter().enumerate() {
-                    if index > 0 {
-                        printer.text(",");
-                        printer.breakable(" ");
-                    }
-                    emit_debug_nodes(item, printer);
-                }
-                printer.end_group(close);
-            }
-        }
-    }
-}
-
-/// A value that can describe its own printed representation.
-///
-/// Implementations should print the value in Rust-expression syntax wherever
-/// possible, so a reported failing example can be pasted back into code, and
-/// should express any internal structure through the printer's group and
-/// breakable primitives so large values wrap readably.
-///
-/// Provided for the standard types the generator library produces. For user
-/// types, either `#[derive(PrettyPrintable)]` or — to reuse an existing
-/// `Debug` representation without writing anything —
-/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug).
-///
-/// `HashMap` and `HashSet` print as `HashMap::from([…])` /
-/// `HashSet::from([…])`, expressions that only construct the default-hasher
-/// types, so maps and sets with a custom hasher are deliberately not
-/// printable — print those through
-/// [`print_as_debug`](crate::generators::Generator::print_as_debug) or
-/// [`print_with`](crate::generators::Generator::print_with) instead:
-///
-/// ```compile_fail,E0277
-/// use std::collections::{HashMap, HashSet};
-/// use std::hash::{BuildHasherDefault, DefaultHasher};
-///
-/// fn assert_printable<T: hegel::PrettyPrintable>() {}
-/// assert_printable::<HashSet<i32, BuildHasherDefault<DefaultHasher>>>();
-/// assert_printable::<HashMap<i32, bool, BuildHasherDefault<DefaultHasher>>>();
-/// ```
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` has no printed representation",
-    label = "`{Self}` does not implement `PrettyPrintable`",
-    note = "for your own type, add `#[derive(hegel::PrettyPrintable)]` (or `hegel::pretty_print_as_debug!` for a `Debug` type)",
-    note = "for a foreign type, make the generator printable instead: `.print_as_debug()` prints any `Debug` value, `.print_with(|value, printer| ..)` prints a custom representation",
-    note = "on a `map` whose input draw is printable, `.print_as_call(\"path::to::function\")` prints the mapped expression",
-    note = "or draw without reporting the value via `tc.draw_silent(..)`",
-    note = "the `hegel::pretty` module docs walk through the whole printing system"
-)]
-pub trait PrettyPrintable {
-    /// Print this value's representation to `printer`.
-    fn pretty_print(&self, printer: &mut PrettyPrinter);
-}
-
-/// The per-field obligation of `#[derive(PrettyPrintable)]`, split from
-/// [`PrettyPrintable`] so that a field whose type is not printable produces
-/// a diagnostic about the derive — pointing at the field, suggesting
-/// `#[pretty(debug)]` — instead of [`PrettyPrintable`]'s draw-site advice.
-/// Implemented for every [`PrettyPrintable`] type; only derive-generated
-/// code should ever name it.
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` has no printed representation, so this field cannot derive `PrettyPrintable`",
-    label = "`{Self}` does not implement `PrettyPrintable`",
-    note = "`#[derive(PrettyPrintable)]` requires every field's type to be `PrettyPrintable`",
-    note = "to print this field by its `Debug` representation instead, mark it `#[pretty(debug)]`",
-    note = "or make the field's type printable: `#[derive(hegel::PrettyPrintable)]` on your own type, `hegel::pretty_print_as_debug!` for a local `Debug` type"
-)]
-pub trait PrettyPrintableField {
-    #[doc(hidden)]
-    fn pretty_print_field(&self, printer: &mut PrettyPrinter);
-}
-
-impl<T: PrettyPrintable + ?Sized> PrettyPrintableField for T {
-    fn pretty_print_field(&self, printer: &mut PrettyPrinter) {
-        self.pretty_print(printer);
-    }
-}
-
-/// Implement [`PrettyPrintable`] for one or more local `Debug` types by
-/// printing their `{:?}` representation through
-/// [`print_debug_repr`](crate::pretty::print_debug_repr), so derived-`Debug`
-/// output wraps like a native implementation.
-///
-/// This is for **your own types** whose `Debug` output is already the
-/// representation you want: the orphan rule means it cannot implement a
-/// hegel trait for a type from another crate (including the standard
-/// library). To print a foreign type by its `Debug` representation, make
-/// the *generator* printable instead with
-/// [`print_as_debug`](crate::Generator::print_as_debug).
-///
-/// ```
-/// use hegel::{Document, PrettyPrintable};
-///
-/// #[derive(Debug)]
-/// struct Point {
-///     x: i32,
-///     y: i32,
-/// }
-/// hegel::pretty_print_as_debug!(Point);
-///
-/// let mut doc = Document::new();
-/// Point { x: 1, y: 2 }.pretty_print(doc.printer());
-/// assert_eq!(doc.finish(), "Point { x: 1, y: 2 }");
-/// ```
-#[macro_export]
-macro_rules! pretty_print_as_debug {
-    ($($t:ty),+ $(,)?) => {$(
-        impl $crate::PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut $crate::PrettyPrinter) {
-                $crate::pretty::print_debug_repr(&::std::format!("{:?}", self), printer);
-            }
-        }
-    )+};
-}
-
-macro_rules! pretty_via_display {
-    ($($t:ty),+) => {$(
-        impl PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                printer.text(&format!("{}", self));
-            }
-        }
-    )+};
-}
-
-pretty_via_display!(
-    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool
-);
-
-macro_rules! pretty_via_debug {
-    ($($t:ty),+) => {$(
-        impl PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                printer.text(&format!("{:?}", self));
-            }
-        }
-    )+};
-}
-
-pretty_via_debug!(char, str);
-
-impl PrettyPrintable for String {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text(&format!("{self:?}.to_string()"));
-    }
-}
-
-impl PrettyPrintable for std::time::Duration {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text(&format!(
-            "Duration::new({}, {})",
-            self.as_secs(),
-            self.subsec_nanos()
-        ));
-    }
-}
-
-impl PrettyPrintable for std::net::Ipv4Addr {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        let [a, b, c, d] = self.octets();
-        printer.text(&format!("Ipv4Addr::new({a}, {b}, {c}, {d})"));
-    }
-}
-
-impl PrettyPrintable for std::net::Ipv6Addr {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        let segments = self
-            .segments()
-            .map(|segment| format!("{segment:#x}"))
-            .join(", ");
-        printer.text(&format!("Ipv6Addr::new({segments})"));
-    }
-}
-
-impl PrettyPrintable for std::net::IpAddr {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        match self {
-            std::net::IpAddr::V4(addr) => {
-                printer.text("IpAddr::V4(");
-                addr.pretty_print(printer);
-                printer.text(")");
-            }
-            std::net::IpAddr::V6(addr) => {
-                printer.text("IpAddr::V6(");
-                addr.pretty_print(printer);
-                printer.text(")");
-            }
-        }
-    }
-}
-
-macro_rules! pretty_float {
-    ($t:ty, $name:literal) => {
-        impl PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                if self.is_nan() {
-                    if self.to_bits() == <$t>::NAN.to_bits() {
-                        printer.text(concat!($name, "::NAN"));
-                    } else {
-                        printer.text(&format!(
-                            concat!($name, "::from_bits(0x{:x})"),
-                            self.to_bits()
-                        ));
-                    }
-                } else if *self == <$t>::INFINITY {
-                    printer.text(concat!($name, "::INFINITY"));
-                } else if *self == <$t>::NEG_INFINITY {
-                    printer.text(concat!($name, "::NEG_INFINITY"));
-                } else {
-                    printer.text(&format!("{:?}", self));
-                }
-            }
-        }
-    };
-}
-
-pretty_float!(f32, "f32");
-pretty_float!(f64, "f64");
-
-macro_rules! pretty_delegating {
-    ($($t:ty),+) => {$(
-        impl<T: PrettyPrintable + ?Sized> PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                (**self).pretty_print(printer);
-            }
-        }
-    )+};
-}
-
-pretty_delegating!(&T, &mut T);
-
-macro_rules! pretty_smart_pointer {
-    ($($t:ty, $open:literal);+) => {$(
-        impl<T: PrettyPrintable> PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                printer.begin_group($open.len(), $open);
-                (**self).pretty_print(printer);
-                printer.end_group(")");
-            }
-        }
-    )+};
-}
-
-pretty_smart_pointer!(
-    Box<T>, "Box::new(";
-    std::rc::Rc<T>, "Rc::new(";
-    std::sync::Arc<T>, "Arc::new("
-);
-
-/// `Box::new` cannot build a boxed unsized value, so `Box<str>` prints its
-/// target instead of a constructor.
-impl PrettyPrintable for Box<str> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        (**self).pretty_print(printer);
-    }
-}
-
-/// Print `items` as a delimited, comma-separated sequence: inline when it
-/// fits, one element per line (aligned just inside `open`) when it does not.
-fn pretty_seq<'a, T: PrettyPrintable + ?Sized + 'a>(
-    printer: &mut PrettyPrinter,
-    open: &str,
-    close: &str,
-    items: impl Iterator<Item = &'a T>,
-) {
-    printer.begin_group(open.chars().count(), open);
-    for (index, item) in items.enumerate() {
-        if index > 0 {
-            printer.text(",");
-            printer.breakable(" ");
-        }
-        item.pretty_print(printer);
-    }
-    printer.end_group(close);
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for [T] {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "[", "]", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for Vec<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "vec![", "]", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable, const N: usize> PrettyPrintable for [T; N] {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.as_slice().pretty_print(printer);
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::collections::VecDeque<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "VecDeque::from([", "])", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::collections::LinkedList<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "LinkedList::from([", "])", self.iter());
-    }
-}
-
-/// Elements print in the heap's arbitrary iteration order, like the hash
-/// collections; the constructed heap is equal as a heap.
-impl<T: PrettyPrintable + Ord> PrettyPrintable for std::collections::BinaryHeap<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "BinaryHeap::from([", "])", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::collections::HashSet<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "HashSet::from([", "])", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::collections::BTreeSet<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_seq(printer, "BTreeSet::from([", "])", self.iter());
-    }
-}
-
-/// Print `entries` as a `Name::from([(key, value), …])` map: inline when it
-/// fits, one entry per line when it does not.
-fn pretty_map<'a, K: PrettyPrintable + 'a, V: PrettyPrintable + 'a>(
-    printer: &mut PrettyPrinter,
-    open: &str,
-    entries: impl Iterator<Item = (&'a K, &'a V)>,
-) {
-    printer.begin_group(open.chars().count(), open);
-    for (index, (key, value)) in entries.enumerate() {
-        if index > 0 {
-            printer.text(",");
-            printer.breakable(" ");
-        }
-        printer.text("(");
-        key.pretty_print(printer);
-        printer.text(", ");
-        value.pretty_print(printer);
-        printer.text(")");
-    }
-    printer.end_group("])");
-}
-
-impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::HashMap<K, V> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_map(printer, "HashMap::from([", self.iter());
-    }
-}
-
-impl<K: PrettyPrintable, V: PrettyPrintable> PrettyPrintable for std::collections::BTreeMap<K, V> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_map(printer, "BTreeMap::from([", self.iter());
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::Range<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.start.pretty_print(printer);
-        printer.text("..");
-        self.end.pretty_print(printer);
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeInclusive<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.start().pretty_print(printer);
-        printer.text("..=");
-        self.end().pretty_print(printer);
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeFrom<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        self.start.pretty_print(printer);
-        printer.text("..");
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeTo<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text("..");
-        self.end.pretty_print(printer);
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::RangeToInclusive<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text("..=");
-        self.end.pretty_print(printer);
-    }
-}
-
-impl PrettyPrintable for std::ops::RangeFull {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text("..");
-    }
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for std::ops::Bound<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        match self {
-            std::ops::Bound::Unbounded => printer.text("Bound::Unbounded"),
-            std::ops::Bound::Included(value) => {
-                printer.begin_group(16, "Bound::Included(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-            std::ops::Bound::Excluded(value) => {
-                printer.begin_group(16, "Bound::Excluded(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-        }
-    }
-}
-
-macro_rules! pretty_non_zero {
-    ($($t:ty, $name:literal);+) => {$(
-        impl PrettyPrintable for $t {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                printer.text(&format!(concat!($name, "::new({}).unwrap()"), self.get()));
-            }
-        }
-    )+};
-}
-
-pretty_non_zero!(
-    std::num::NonZeroI8, "NonZeroI8";
-    std::num::NonZeroI16, "NonZeroI16";
-    std::num::NonZeroI32, "NonZeroI32";
-    std::num::NonZeroI64, "NonZeroI64";
-    std::num::NonZeroI128, "NonZeroI128";
-    std::num::NonZeroIsize, "NonZeroIsize";
-    std::num::NonZeroU8, "NonZeroU8";
-    std::num::NonZeroU16, "NonZeroU16";
-    std::num::NonZeroU32, "NonZeroU32";
-    std::num::NonZeroU64, "NonZeroU64";
-    std::num::NonZeroU128, "NonZeroU128";
-    std::num::NonZeroUsize, "NonZeroUsize"
-);
-
-impl<T> PrettyPrintable for std::borrow::Cow<'_, T>
-where
-    T: ToOwned + PrettyPrintable + ?Sized,
-    T::Owned: PrettyPrintable,
-{
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        match self {
-            std::borrow::Cow::Borrowed(value) => {
-                printer.begin_group(14, "Cow::Borrowed(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-            std::borrow::Cow::Owned(value) => {
-                printer.begin_group(11, "Cow::Owned(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-        }
-    }
-}
-
-/// Prints `Path::new("…")` for valid UTF-8. A non-UTF-8 path has no string
-/// literal, so it prints an `OsString` byte (Unix) or wide (Windows)
-/// constructor, and its `Debug` representation on platforms with neither
-/// accessor.
-impl PrettyPrintable for std::path::Path {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_path(self, "Path::new(", printer);
-    }
-}
-
-/// Prints `PathBuf::from("…")`; non-UTF-8 handling as for [`std::path::Path`].
-impl PrettyPrintable for std::path::PathBuf {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        pretty_path(self, "PathBuf::from(", printer);
-    }
-}
-
-fn pretty_path(path: &std::path::Path, open: &str, printer: &mut PrettyPrinter) {
-    printer.begin_group(open.chars().count(), open);
-    match path.to_str() {
-        Some(utf8) => printer.text(&format!("{utf8:?}")),
-        None => pretty_non_utf8_os_str(path.as_os_str(), printer),
-    }
-    printer.end_group(")");
-}
-
-#[cfg(unix)]
-fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
-    use std::os::unix::ffi::OsStrExt;
-    printer.begin_group(19, "OsString::from_vec(");
-    os.as_bytes().to_vec().pretty_print(printer);
-    printer.end_group(")");
-}
-
-#[cfg(windows)]
-fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
-    use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = os.encode_wide().collect();
-    printer.begin_group(21, "OsString::from_wide(&");
-    wide.as_slice().pretty_print(printer);
-    printer.end_group(")");
-}
-
-#[cfg(not(any(unix, windows)))]
-fn pretty_non_utf8_os_str(os: &std::ffi::OsStr, printer: &mut PrettyPrinter) {
-    print_debug_repr(&format!("{os:?}"), printer);
-}
-
-impl<T: PrettyPrintable> PrettyPrintable for Option<T> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        match self {
-            None => printer.text("None"),
-            Some(value) => {
-                printer.begin_group(5, "Some(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-        }
-    }
-}
-
-impl<T: PrettyPrintable, E: PrettyPrintable> PrettyPrintable for Result<T, E> {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        match self {
-            Ok(value) => {
-                printer.begin_group(3, "Ok(");
-                value.pretty_print(printer);
-                printer.end_group(")");
-            }
-            Err(error) => {
-                printer.begin_group(4, "Err(");
-                error.pretty_print(printer);
-                printer.end_group(")");
-            }
-        }
-    }
-}
-
-impl PrettyPrintable for () {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.text("()");
-    }
-}
-
-impl<A: PrettyPrintable> PrettyPrintable for (A,) {
-    fn pretty_print(&self, printer: &mut PrettyPrinter) {
-        printer.begin_group(1, "(");
-        self.0.pretty_print(printer);
-        printer.end_group(",)");
-    }
-}
-
-macro_rules! pretty_tuple {
-    ($(($($name:ident),+)),+ $(,)?) => {$(
-        #[allow(non_snake_case)]
-        impl<$($name: PrettyPrintable),+> PrettyPrintable for ($($name,)+) {
-            fn pretty_print(&self, printer: &mut PrettyPrinter) {
-                let ($($name,)+) = self;
-                printer.begin_group(1, "(");
-                let mut index = 0usize;
-                $(
-                    if index > 0 {
-                        printer.text(",");
-                        printer.breakable(" ");
-                    }
-                    index += 1;
-                    $name.pretty_print(printer);
-                )+
-                let _ = index;
-                printer.end_group(")");
-            }
-        }
-    )+};
-}
-
-pretty_tuple!(
-    (A, B),
-    (A, B, C),
-    (A, B, C, D),
-    (A, B, C, D, E),
-    (A, B, C, D, E, F),
-    (A, B, C, D, E, F, G),
-    (A, B, C, D, E, F, G, H),
-    (A, B, C, D, E, F, G, H, I),
-    (A, B, C, D, E, F, G, H, I, J),
-    (A, B, C, D, E, F, G, H, I, J, K),
-    (A, B, C, D, E, F, G, H, I, J, K, L),
-);

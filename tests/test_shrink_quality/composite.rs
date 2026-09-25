@@ -71,7 +71,7 @@ fn test_earlier_exit_produces_shorter_sequence() {
     assert!(v0, "shrinker should prefer the shorter v0=true path");
 }
 
-#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum BoolOrFloat {
     Bool(bool),
     Float(f64),
@@ -173,7 +173,7 @@ fn test_one_of_branch_switch_to_float() {
     assert_eq!(result, BoolOrFloat::Float(0.0));
 }
 
-#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum TupOrBool {
     Tup((bool, bool)),
     Bool(bool),
@@ -269,7 +269,7 @@ fn test_shrinking_stale_indices_no_redistribute_crash() {
     assert_eq!(vals, vec![0, 51, 100]);
 }
 
-#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum BoolOrInt {
     Bool(bool),
     Int(i64),
@@ -426,7 +426,7 @@ fn test_lower_and_bump_with_float_target() {
     assert_eq!(v0, "");
 }
 
-#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum BoolIntOrInt {
     Bool(bool),
     Z,
@@ -532,7 +532,7 @@ fn test_shrink_duplicates_three_copies() {
     assert_eq!(c, 1);
 }
 
-#[derive(Debug, Clone, PartialEq, hegel::PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum ListOrIntOrBool {
     List(Vec<i64>),
     Zero,

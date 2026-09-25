@@ -3,7 +3,7 @@
 //! nothing about what is drawn keep the wrapped generator's label.
 
 use hegel::generators::{self as gs, DefaultGenerator as _, Generator, PrintableGenerator};
-use hegel::{DefaultGenerator, Hegel, PrettyPrintable, Settings};
+use hegel::{DefaultGenerator, Hegel, Settings};
 
 fn ints() -> gs::IntegerGenerator<i32> {
     gs::integers::<i32>()
@@ -166,7 +166,7 @@ fn wrappers_that_change_nothing_keep_the_wrapped_label() {
     assert_eq!(label_of(&inner), expected);
     assert_eq!(ints().map(|n| n + 1).boxed().label(), expected);
     assert_eq!(ints().map(|n| n + 1).boxed_printable().label(), expected);
-    assert_eq!(ints().map(|n| n + 1).print_as_value().label(), expected);
+    assert_eq!(ints().map(|n| n + 1).print_as_debug().label(), expected);
     assert_eq!(ints().map(|n| n + 1).print_as_debug().label(), expected);
     assert_eq!(
         ints()
@@ -187,7 +187,7 @@ fn wrappers_that_change_nothing_keep_the_wrapped_label() {
     assert_eq!(handle.label(), expected);
 }
 
-#[derive(Debug, Clone, PartialEq, PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq)]
 enum Tree {
     Leaf(i32),
     Branch(Box<Tree>, Box<Tree>),
@@ -338,16 +338,16 @@ fn composites_are_labelled_by_their_source() {
     assert_ne!(same_a.label(), different.label());
 }
 
-#[derive(Debug, Clone, PartialEq, DefaultGenerator, PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq, DefaultGenerator)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, DefaultGenerator, PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq, DefaultGenerator)]
 struct Pair(i32, bool);
 
-#[derive(Debug, Clone, PartialEq, DefaultGenerator, PrettyPrintable)]
+#[derive(Debug, Clone, PartialEq, DefaultGenerator)]
 enum Shape {
     Dot,
     Circle { radius: i32 },

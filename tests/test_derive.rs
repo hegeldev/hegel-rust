@@ -6,68 +6,68 @@ use common::utils::{assert_all_examples, check_can_generate_examples, find_any};
 use hegel::DefaultGenerator as DeriveGenerator;
 use hegel::generators::{self as gs, DefaultGenerator, Generator};
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct Person {
     name: String,
     age: u32,
     active: bool,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct WithOptional {
     label: String,
     value: Option<i32>,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct WithVec {
     items: Vec<i32>,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct WithNested {
     point: Point,
     label: String,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone, PartialEq)]
+#[derive(DeriveGenerator, Debug, Clone, PartialEq)]
 enum Color {
     Red,
     Green,
     Blue,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum Shape {
     Circle { radius: f64 },
     Rectangle { width: f64, height: f64 },
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum MixedEnum {
     Empty,
     WithValue(i32),
     WithFields { x: i32, y: String },
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum SingleVariantData {
     Only(String),
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum TupleVariants {
     Pair(i32, i32),
     Triple(bool, String, u8),
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 enum WithNestedTypes {
     VecVariant(Vec<i32>),
@@ -75,7 +75,7 @@ enum WithNestedTypes {
     PlainVariant { count: u32 },
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum Op {
     Reset,
     Skip,
@@ -431,7 +431,7 @@ fn test_derive_tuple_struct_with_multiple_custom_fields() {
     assert_all_examples(g, |t: &TuplePair| t.0 == 1 && t.1 == "a");
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum NameConflict {
     FieldName(i32),
@@ -448,7 +448,7 @@ fn test_derive_enum_triple_conflict() {
     check_can_generate_examples(g);
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 #[allow(non_camel_case_types)]
 enum KeywordVariants {
     Super(i32),
@@ -579,13 +579,13 @@ fn test_derive_enum_variant_builder_accepts_plain_generators() {
 /// Field names that shadow the derive machinery's own identifiers: the
 /// generated bindings are hygienically renamed, so these all compile and
 /// print correctly.
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct ShadowingFields {
     __tc: u8,
     __printer: bool,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum ShadowingVariant {
     Fields { __tc: u8, __printer: bool },
 }
@@ -596,22 +596,16 @@ fn test_derive_fields_shadowing_macro_identifiers() {
     check_can_generate_examples(gs::default::<ShadowingVariant>());
     let mut doc = hegel::Document::new();
     let printer = doc.printer();
-    use hegel::PrettyPrintable;
-    ShadowingFields {
+    printer.debug(&ShadowingFields {
         __tc: 1,
         __printer: true,
-    }
-    .pretty_print(printer);
+    });
     assert_eq!(doc.finish(), "ShadowingFields { __tc: 1, __printer: true }");
     let mut doc = hegel::Document::new();
     let printer = doc.printer();
-    ShadowingVariant::Fields {
+    printer.debug(&ShadowingVariant::Fields {
         __tc: 2,
         __printer: false,
-    }
-    .pretty_print(printer);
-    assert_eq!(
-        doc.finish(),
-        "ShadowingVariant::Fields { __tc: 2, __printer: false }"
-    );
+    });
+    assert_eq!(doc.finish(), "Fields { __tc: 2, __printer: false }");
 }

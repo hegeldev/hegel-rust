@@ -1,6 +1,7 @@
 use super::generators::draw_and_print_value;
 use super::{Generator, PrintableGenerator, TestCase, label_from_name};
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
+use std::fmt::Debug;
 
 const BOOLEAN_LABEL: u64 = label_from_name("hegel.booleans");
 
@@ -27,7 +28,7 @@ impl<T: Clone + Send + Sync> Generator<T> for JustGenerator<T> {
     }
 }
 
-impl<T: Clone + Send + Sync + PrettyPrintable> PrintableGenerator<T> for JustGenerator<T> {
+impl<T: Clone + Send + Sync + Debug> PrintableGenerator<T> for JustGenerator<T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
     }
