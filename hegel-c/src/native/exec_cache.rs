@@ -38,24 +38,31 @@ const FULL_TIER_MAX_BYTES: usize = 8 << 20;
 /// but keeps checking known ones; detection degrades, correctness doesn't.
 const KIND_LEDGER_CAP: usize = 1 << 16;
 
-/// 128-bit FNV-1a, the digest the verdict tier and the ledger key on. Collisions
+/// The 128-bit digest the verdict tier and the ledger key on. Collisions
 /// would surface as a false duplicate or a false kind contradiction, so the
 /// digest is sized to make them negligible rather than merely rare.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct Digest(u128);
+///
+/// Two independent 64-bit FNV-1a-style lanes (the FNV-1a prime and offset
+/// in one, a second odd multiplier and offset in the other), each one
+/// machine multiply per byte. The ledger updates it a node at a time, and
+/// most nodes encode to a few bytes, so the per-byte step is what matters.
+/// The digest never leaves the process: nothing persisted depends on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Digest([u64; 2]);
 
-const FNV_OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
-const FNV_PRIME: u128 = 0x0000000001000000000000000000013b;
+const LANE_OFFSETS: [u64; 2] = [0xcbf2_9ce4_8422_2325, 0x8422_2325_cbf2_9ce4];
+const LANE_PRIMES: [u64; 2] = [0x0000_0100_0000_01b3, 0x9e37_79b9_7f4a_7c15];
 
 impl Digest {
     fn new() -> Self {
-        Digest(FNV_OFFSET)
+        Digest(LANE_OFFSETS)
     }
 
     fn update(&mut self, bytes: &[u8]) {
         for &b in bytes {
-            self.0 ^= u128::from(b);
-            self.0 = self.0.wrapping_mul(FNV_PRIME);
+            let b = u64::from(b);
+            self.0[0] = (self.0[0] ^ b).wrapping_mul(LANE_PRIMES[0]);
+            self.0[1] = (self.0[1] ^ b).wrapping_mul(LANE_PRIMES[1]);
         }
     }
 
@@ -245,18 +252,18 @@ impl KindLedger {
         key.clear();
         crate::native::database::serialize_choice_count(key, nodes.len());
         for node in nodes {
-            let kind = node.kind();
             match self.entries.get(&prefix) {
-                Some(expected) if *expected != kind => {
+                Some(expected) if !node.has_kind(expected) => {
                     return Ok(Some(format!(
                         "Your data generation is non-deterministic: at the same choice \
                          position with the same prefix, the choice kind changed from {:?} to {:?}. \
                          This usually means a generator depends on global mutable state.",
-                        expected, kind
+                        expected,
+                        node.kind()
                     )));
                 }
                 None if self.entries.len() < KIND_LEDGER_CAP => {
-                    self.entries.insert(prefix, kind);
+                    self.entries.insert(prefix, node.kind());
                 }
                 _ => {}
             }

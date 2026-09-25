@@ -1261,6 +1261,33 @@ fn choice_data_as_float_is_none_for_other_kinds() {
 }
 
 #[test]
+fn has_kind_answers_as_kind_equality_does() {
+    let nodes = vec![
+        integer_node(0, 10, 3),
+        integer_node(0, 11, 3),
+        ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false),
+        ChoiceNode::boolean(BooleanChoice { p: 0.25 }, true, false),
+        ChoiceNode::float(fc(0.0, 1.0, false, false), 0.5, false),
+        ChoiceNode::float(fc(0.0, 2.0, false, false), 0.5, false),
+        bytes_node(0, 4, vec![1]),
+        bytes_node(0, 5, vec![1]),
+        string_node(vec![(b'a' as u32, b'z' as u32)], 0, 4, vec![b'a' as u32]),
+        string_node(vec![(b'a' as u32, b'z' as u32)], 0, 5, vec![b'a' as u32]),
+        clone_node(vec![]),
+        clone_node(vec![integer_node(0, 10, 3)]),
+    ];
+    for node in &nodes {
+        for other in &nodes {
+            assert_eq!(
+                node.has_kind(&other.kind()),
+                node.kind() == other.kind(),
+                "{node:?} vs {other:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn clone_kind_has_no_dense_index() {
     assert_eq!(
         ChoiceKind::Clone

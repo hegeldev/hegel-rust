@@ -1246,6 +1246,20 @@ impl ChoiceData {
         }
     }
 
+    /// Whether `kind` is this pair's constraint: what `self.kind() == *kind`
+    /// answers, without building the kind.
+    pub fn has_kind(&self, kind: &ChoiceKind) -> bool {
+        match (self, kind) {
+            (ChoiceData::Integer(ic, _), ChoiceKind::Integer(other)) => ic == other,
+            (ChoiceData::Boolean(bc, _), ChoiceKind::Boolean(other)) => bc == other,
+            (ChoiceData::Float(fc, _), ChoiceKind::Float(other)) => fc == other,
+            (ChoiceData::Bytes(bc, _), ChoiceKind::Bytes(other)) => bc == other,
+            (ChoiceData::String(sc, _), ChoiceKind::String(other)) => sc == other,
+            (ChoiceData::Clone(_), ChoiceKind::Clone) => true,
+            _ => false,
+        }
+    }
+
     /// The value half of the pair, as an owned [`ChoiceValue`]. Scalar and
     /// sequence payloads are cloned; a clone payload is wrapped in a
     /// [`CloneRecord`] sharing the realized stream.
@@ -1470,6 +1484,11 @@ impl ChoiceNode {
     /// The node's constraint, as a standalone [`ChoiceKind`].
     pub fn kind(&self) -> ChoiceKind {
         self.data.kind()
+    }
+
+    /// Whether `kind` is the node's constraint; see [`ChoiceData::has_kind`].
+    pub fn has_kind(&self, kind: &ChoiceKind) -> bool {
+        self.data.has_kind(kind)
     }
 
     /// The node's value, as an owned [`ChoiceValue`].

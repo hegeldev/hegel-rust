@@ -229,3 +229,28 @@ fn the_kind_ledger_stops_learning_at_its_cap_but_keeps_checking() {
             .is_none()
     );
 }
+
+#[test]
+fn the_kind_ledger_names_both_kinds_in_its_diagnostic() {
+    let mut ledger = KindLedger::default();
+    let nodes: Vec<ChoiceNode> = (0..12).map(|min| int_node(min, 50)).collect();
+    assert!(ledger.observe(&nodes, &mut Vec::new()).unwrap().is_none());
+    let mut drifted = nodes.clone();
+    drifted[0] = int_node(1, 50);
+    let msg = ledger.observe(&drifted, &mut Vec::new()).unwrap().unwrap();
+    assert!(msg.contains("min_value: BigInt(0)"), "{msg}");
+    assert!(msg.contains("min_value: BigInt(1)"), "{msg}");
+}
+
+#[test]
+fn the_digest_distinguishes_nearby_inputs() {
+    let bytes = [7u8; 16];
+    let same = bytes;
+    assert_eq!(Digest::of(&bytes), Digest::of(&same));
+    assert_ne!(Digest::of(&bytes), Digest::of(&bytes[..15]));
+    assert_ne!(Digest::of(&[]), Digest::of(&[0]));
+    let mut flipped = bytes;
+    flipped[3] ^= 0x80;
+    flipped[9] ^= 0x80;
+    assert_ne!(Digest::of(&bytes), Digest::of(&flipped));
+}
