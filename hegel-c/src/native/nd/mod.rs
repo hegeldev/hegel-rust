@@ -2,18 +2,17 @@
 //! replay-counting decision shares, the discovery-confirmation bar,
 //! the shrink gauntlet, the boost schedule arithmetic, and the replay
 //! budgets. Everything here is pure arithmetic — no engine state, no
-//! executions — so each rule is tested directly against the exact-DP and
-//! simulation results that derived it (`notes/experiments/`, decisions
-//! 7, 11, 16, 17, 19, 23, 54-56, 71 in `notes/decisions.md`).
+//! executions — so each rule is tested directly against the exact-DP
+//! operating points that justify its constants.
 
 use alloc::collections::BTreeMap;
 
 /// Replay evidence for one proposition ("this test case reproduces this
 /// origin"). Every replay is one Bernoulli trial of the test case under the
 /// standing replay procedure — whatever timeline it realized — so failures
-/// and misses both count in full (decision 71: the statistics are about the
-/// test case, which can realize many timelines, not about tracking one
-/// realized timeline).
+/// and misses both count in full: the statistics are about the test case,
+/// which can realize many timelines, not about tracking one realized
+/// timeline.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Evidence {
     fails: u64,
@@ -75,14 +74,13 @@ pub(crate) enum BarVerdict {
     Continue,
 }
 
-/// The discovery-confirmation bar (decision 23): gate then extend — reject
+/// The discovery-confirmation bar: gate then extend — reject
 /// on zero failures in the first [`GATE_RUNS`] replays, otherwise continue
 /// to [`CONFIRM_CAP`] total, accepting early on the [`CONFIRM_MIN_FAILS`]th
-/// failure. Operating points (exact DP, experiment 005A): 0.6% false accept
-/// per p = 0.02 fluke, 45% per-discovery power at the p = 0.1 target, ~15
-/// replays per rejected fluke, ~4.4 per p = 0.9 confirmation. Since
-/// decision 71 the arithmetic runs on plain counts — exactly the Bernoulli
-/// setting the DP modelled.
+/// failure. Operating points (exact DP): 0.6% false accept per p = 0.02
+/// fluke, 45% per-discovery power at the p = 0.1 target, ~15 replays per
+/// rejected fluke, ~4.4 per p = 0.9 confirmation. The arithmetic runs on
+/// plain counts — exactly the Bernoulli setting the DP modelled.
 pub(crate) fn discovery_bar(evidence: &Evidence) -> BarVerdict {
     if evidence.fails >= CONFIRM_MIN_FAILS {
         return BarVerdict::Accept;
@@ -97,20 +95,20 @@ pub(crate) fn discovery_bar(evidence: &Evidence) -> BarVerdict {
 }
 
 /// Discovery-bar batches one origin may spend per run across the sweep,
-/// shrink admission, and the pooled review (decision 72): recycling a
+/// shrink admission, and the pooled review: recycling a
 /// re-sighted origin into fresh batches compounds the bar's per-batch
 /// false accept without bound over a long run (21% per q = 0.02 fluke by
-/// 200 sweep epochs, experiment 014); five attempts pin it at 2.9% and
+/// 200 sweep epochs); five attempts pin it at 2.9% and
 /// keep >95% power at the target rate. At the cap the origin is rejected
 /// without a batch.
 pub(crate) const BAR_ATTEMPTS_PER_RUN: u64 = 5;
 
-/// Bar attempts per origin across its backtracks (gate G25): a probed
+/// Bar attempts per origin across its backtracks: a probed
 /// entry reaches the bar at roughly its true reproduction rate, each
 /// attempt holds 45% target-regime power, and three compose to ~83%. A
 /// budget separate from [`BAR_ATTEMPTS_PER_RUN`] because backtrack
 /// candidates come from history, which is disproportionately the real
-/// bug's pre-flip sightings (experiment 014's mixed-origin table); the
+/// bug's pre-flip sightings; the
 /// two compose to a per-origin ceiling of eight batches, 4.6% false
 /// confirm per q = 0.02 fluke.
 pub(crate) const BACKTRACK_BAR_ATTEMPTS: u64 = 3;
@@ -118,7 +116,7 @@ pub(crate) const BACKTRACK_BAR_ATTEMPTS: u64 = 3;
 pub(crate) const GAUNTLET_CAP: u64 = 30;
 pub(crate) const GAUNTLET_GAMMA: f64 = 0.8;
 
-/// Floor of the accept threshold, derived in experiment 008: 0.05 <
+/// Floor of the accept threshold: 0.05 <
 /// LCB(4/30) = 0.0531, the [`GAUNTLET_MIN_FAILS`] acceptance boundary at
 /// [`GAUNTLET_CAP`], so the floor costs no power — and it is the largest
 /// such value, at 0.02 false accepts per entered gauntlet against a
@@ -128,19 +126,19 @@ pub(crate) const GAUNTLET_FLOOR: f64 = 0.05;
 /// Base failure minimum for a gauntlet accept. A single failure on a fresh
 /// ledger bounds the rate above 0.2065 (Wilson at 1/1), so without a
 /// minimum every threshold below that accepts on the recruiting run and the
-/// whole low-anchor regime degenerates to single-run accepts (experiment
-/// 008, H1: 33% bug loss at the decision-16 target). Falling short is never
+/// whole low-anchor regime degenerates to single-run accepts (33% bug loss
+/// at [`TARGET_FAILURE_RATE`] in simulation). Falling short is never
 /// grounds to reject — the verdict stays Continue and evidence accumulates.
-/// [`GauntletSpend`] escalates the minimum within a run (decision 72).
+/// [`GauntletSpend`] escalates the minimum within a run.
 pub(crate) const GAUNTLET_MIN_FAILS: u64 = 4;
 
 /// Anchors at or above this run the gauntlet at gamma 1.0 instead of
 /// [`GAUNTLET_GAMMA`]. With [`ANCHOR_SEED_RUNS`]-sized seeding only
 /// zero-miss evidence reaches it (LCB(20/20) = 0.839; 19/20 gives 0.764),
 /// so it marks incumbents indistinguishable from deterministic and refuses
-/// to trade their reliability down: experiment 008's D2 displacement drops
-/// from 33% to zero, for +26% replay cost on near-deterministic landscapes
-/// (decision 55's G6 trade).
+/// to trade their reliability down: in simulation, displacement of a
+/// reliable incumbent by a flakier reduction drops from 33% to zero, for
+/// +26% replay cost on near-deterministic landscapes.
 pub(crate) const RETENTION_HIGH_WATER: f64 = 0.8;
 
 /// Physical runs an anchor-seeding batch extends to past its accept: the
@@ -149,11 +147,10 @@ pub(crate) const RETENTION_HIGH_WATER: f64 = 0.8;
 /// accept itself biases the anchor toward the stopping rule (a
 /// four-straight-fail bar batch seeds 0.51 whatever the true rate); 20 is
 /// the largest size whose all-fail LCB (0.839) a candidate can still match
-/// within [`GAUNTLET_CAP`] — 40-run seeding stalls shrinking outright
-/// (experiment 008).
+/// within [`GAUNTLET_CAP`] — 40-run seeding stalls shrinking outright.
 pub(crate) const ANCHOR_SEED_RUNS: u64 = 20;
 
-/// The highest anchor an accept may raise an incumbent to (decision 77):
+/// The highest anchor an accept may raise an incumbent to:
 /// the all-fail LCB at [`ANCHOR_SEED_RUNS`], the resolution the anchor was
 /// seeded at. An accept needs its LCB at or above the anchor and then
 /// becomes the anchor, so raising to the LCB of longer ledgers ratchets
@@ -186,19 +183,19 @@ pub(crate) fn gauntlet_threshold(anchor: f64) -> f64 {
     (gamma * anchor).max(GAUNTLET_FLOOR)
 }
 
-/// The shrink-candidate gauntlet (decisions 7, 17, 54): accept when the
+/// The shrink-candidate gauntlet: accept when the
 /// evidence carries `min_fails` failures and its lower bound clears
 /// [`gauntlet_threshold`]; reject when the upper bound proves the threshold
 /// unreachable or the cap is spent, otherwise keep rerunning — short of the
 /// failure minimum the verdict is Continue, never Reject. `min_fails` is
-/// [`GAUNTLET_MIN_FAILS`] until the alpha budget escalates it (decision 72),
+/// [`GAUNTLET_MIN_FAILS`] until the alpha budget escalates it,
 /// and is pinned per candidate: a stopping rule never changes mid-test.
-/// Operating points: the exact-DP rows in experiments 008 and 014, pinned
-/// by `gauntlet_matches_the_008_operating_points`; the check-per-run
-/// stopping bias is absorbed in those numbers (z stays 1.96). The caller
+/// Operating points are pinned by exact DP in
+/// `gauntlet_matches_its_operating_points`; the check-per-run stopping
+/// bias is absorbed in those numbers (z stays 1.96). The caller
 /// raises its monotone anchor from the accepted candidate's topped-up
 /// ledger — never lowering it, and post-accept re-measurement of the
-/// standing incumbent never feeds it (decision 19).
+/// standing incumbent never feeds it.
 pub(crate) fn gauntlet(evidence: &Evidence, anchor: f64, min_fails: u64) -> GauntletVerdict {
     gauntlet_at(evidence, gauntlet_threshold(anchor), min_fails)
 }
@@ -213,25 +210,25 @@ fn gauntlet_at(evidence: &Evidence, threshold: f64, min_fails: u64) -> GauntletV
     GauntletVerdict::Continue
 }
 
-/// False-accept budget one origin's gauntlet proposals share per run
-/// (decision 72): every proposal is charged its exact false-accept mass
-/// against a [`CHARGE_FLUKE_RATE`] fluke before it runs, so expected false
+/// False-accept budget one origin's gauntlet proposals share per run:
+/// every proposal is charged its exact false-accept mass against a
+/// [`CHARGE_FLUKE_RATE`] fluke before it runs, so expected false
 /// accepts stay under the budget however many candidates the body realizes
 /// — the uncharged rule's exposure reaches 33% by a thousand
-/// floor-threshold proposals (experiment 014). At the floor the budget
+/// floor-threshold proposals. At the floor the budget
 /// affords ~50 fast-sweep proposals before the failure minimum escalates.
 pub(crate) const GAUNTLET_ALPHA_BUDGET: f64 = 0.02;
 
 /// Escalation ceiling for the failure minimum: at eight required failures
 /// a proposal's charge is at most ~1e-7, so proposals past an exhausted
 /// budget still run instead of stalling the shrink, adding a negligible
-/// tail (experiment 014).
+/// tail.
 pub(crate) const GAUNTLET_MIN_FAILS_CEILING: u64 = 8;
 
-/// The design fluke rate charges are priced against (decisions 16, 23).
+/// The design fluke rate charges are priced against.
 const CHARGE_FLUKE_RATE: f64 = 0.02;
 
-/// One origin's per-run gauntlet alpha-spending state (decision 72).
+/// One origin's per-run gauntlet alpha-spending state.
 pub(crate) struct GauntletSpend {
     remaining: f64,
     min_fails: u64,
@@ -257,7 +254,7 @@ impl GauntletSpend {
     /// bounded by one charge); a new candidate is pinned at the current
     /// minimum, escalated up to [`GAUNTLET_MIN_FAILS_CEILING`] first when
     /// the remainder cannot afford it. An unreachable threshold charges
-    /// zero — the high-anchor cost lottery (experiment 012) spends nothing.
+    /// zero — the high-anchor cost lottery spends nothing.
     pub(crate) fn charge(
         &mut self,
         seed: &Evidence,
@@ -295,7 +292,7 @@ impl GauntletSpend {
 /// P(the evidence loop accepts | the candidate is a [`CHARGE_FLUKE_RATE`]
 /// fluke): exact DP over the (runs, fails) probability mass from `seed`
 /// under the per-replay verdict checks — the false-accept mass one driven
-/// proposal contributes (experiment 014). Terminates because every
+/// proposal contributes. Terminates because every
 /// Continue adds a run and [`GAUNTLET_CAP`] runs force a verdict.
 fn gauntlet_alpha(seed: Evidence, threshold: f64, min_fails: u64) -> f64 {
     let mut mass = BTreeMap::from([((seed.runs, seed.fails), 1.0f64)]);
@@ -317,7 +314,7 @@ fn gauntlet_alpha(seed: Evidence, threshold: f64, min_fails: u64) -> f64 {
     accept
 }
 
-/// Candidates in a boost's successive-halving race (experiment 006): the
+/// Candidates in a boost's successive-halving race: the
 /// incumbent and probe mutants of it.
 pub(crate) const BOOST_POOL: usize = 16;
 
@@ -326,13 +323,13 @@ pub(crate) const BOOST_POOL: usize = 16;
 pub(crate) const BOOST_HOLDOUT: u64 = ANCHOR_SEED_RUNS;
 
 /// Boost runs only for origins whose confirmation anchor sits below this
-/// floor (gate G2): replay of a sub-floor origin is unreliable enough
+/// floor: replay of a sub-floor origin is unreliable enough
 /// that hunting a steadier timeline is worth the measurement runs, while
-/// above it the halving race buys nothing a user would notice. In
-/// [`ANCHOR_SEED_RUNS`]-batch LCB units the boundary image of decision
-/// 28's "true rate below 0.5" class is LCB(10/20) ~= 0.30 (experiment
-/// 008: recall 0.991, precision 1.000 on the G7 population; the literal
-/// 0.5 triggers on 59% of true-0.7 incumbents, 0.30 on 5%).
+/// above it the halving race buys nothing a user would notice. The class
+/// meant is "true rate below 0.5", whose image in
+/// [`ANCHOR_SEED_RUNS`]-batch LCB units is LCB(10/20) ~= 0.30 (in
+/// simulation recall 0.991, precision 1.000; the literal 0.5 would trigger
+/// on 59% of true-0.7 incumbents, 0.30 on 5%).
 pub(crate) const BOOST_RELIABILITY_FLOOR: f64 = 0.30;
 
 /// Candidates surviving one successive-halving boost round.
@@ -341,13 +338,13 @@ pub(crate) fn boost_keep(candidates: usize) -> usize {
 }
 
 /// Candidate perturbations per ND targeting race — [`BOOST_POOL`], the same
-/// halving-race width boost runs (decision 68).
+/// halving-race width boost runs.
 pub(crate) const TARGET_ND_POOL: usize = 16;
 
 /// Fresh replays scoring an ND targeting race's winner against the
 /// reference, and re-estimating the reference after an adoption —
 /// [`ANCHOR_SEED_RUNS`], so score references are estimated on the same
-/// batch size as anchors. Experiment 013: at 20 the sign test needs 15
+/// batch size as anchors. In simulation, at 20 the sign test needs 15
 /// beats (LCB(15/20) = 0.53), passing a true 75%-beat improvement 62% of
 /// the time per gate at a 2.1% false-adopt rate; 10 runs need 9 beats
 /// (24% power) and stall on tie-heavy scores, and 30 buys nothing over 20
@@ -357,14 +354,14 @@ pub(crate) const TARGET_ND_HOLDOUT: u64 = ANCHOR_SEED_RUNS;
 /// Races per targeting firing under ND handling. A race costs ~130
 /// halving replays plus pool probes and up to two holdout batches, and a
 /// race that adopts is always followed by another, so a live gradient is
-/// climbed until this cap. Experiment 013: at four races a full run costs
+/// climbed until this cap. In simulation, at four races a full run costs
 /// ~950 replays (~410 per adopted step) and reaches the landscape maximum
 /// everywhere the race can move; two races reach it too at roughly half
 /// the cost, and eight double the cost and the flat-landscape false-adopt
 /// rate for no progress.
 pub(crate) const TARGET_ND_RACES: u64 = 4;
 
-/// Adoption rule for an ND targeting race winner (decision 68): the Wilson
+/// Adoption rule for an ND targeting race winner: the Wilson
 /// lower bound of `beats / runs` must clear 0.5, where a beat is a fresh
 /// holdout run whose score strictly exceeds the reference — a sign test
 /// that the winner's median score beats the reference, with ties and
@@ -388,14 +385,14 @@ pub(crate) fn target_median(scores: &[f64]) -> Option<f64> {
 }
 
 /// Continuation budget for replaying a timeline of flattened length `len`:
-/// the timeline plus `max(4, len / 8)` fresh draws. Experiment 004: a budget
+/// the timeline plus `max(4, len / 8)` fresh draws. In simulation a budget
 /// of 4 absorbs all net elongation on plateau bodies and larger flat budgets
 /// buy nothing; the `len / 8` term scales for long timelines.
 pub(crate) fn continuation_budget(len: usize) -> usize {
     len + (len / 8).max(4)
 }
 
-/// The reproduction target (decision 16): the machinery is sized for tests
+/// The reproduction target: the machinery is sized for tests
 /// failing at least this often.
 pub(crate) const TARGET_FAILURE_RATE: f64 = 0.1;
 
@@ -403,8 +400,8 @@ const REUSE_MISS_TOLERANCE: f64 = 0.05;
 
 /// Replays before concluding a stored timeline no longer fails: enough that
 /// a bug failing at `rate` slips through with probability at most
-/// `tolerance` (decision 11; a flat 10 misses a rate-0.1 bug 35% of the
-/// time, decision 16). Callers exit early on the first failure, so the
+/// `tolerance` (a flat 10 would miss a rate-0.1 bug 35% of the time).
+/// Callers exit early on the first failure, so the
 /// expected cost on a live bug is ~1/rate.
 pub(crate) fn replay_budget(rate: f64, tolerance: f64) -> u64 {
     libm::ceil(libm::log(tolerance) / libm::log(1.0 - rate)) as u64
@@ -415,79 +412,17 @@ pub(crate) fn reuse_replay_budget() -> u64 {
     replay_budget(TARGET_FAILURE_RATE, REUSE_MISS_TOLERANCE)
 }
 
-/// Dump hook for experiment 011: when armed, every nondeterminism flip
-/// records its detection site, the run's call count, and the interesting
-/// map at flip time, and every reject-eviction records the evicted
-/// incumbent, for the harness to drain.
-#[cfg(feature = "__bench")]
-pub mod seam_dump {
-    use alloc::string::String;
-    use alloc::vec::Vec;
-    use core::sync::atomic::{AtomicBool, Ordering};
-
-    use crate::native::core::ChoiceValue;
-    use crate::sys::sync::Mutex;
-
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    pub enum FlipSite {
-        CacheMismatch,
-        FirstCheck,
-        ShrinkVerify,
-        FinalReplay,
-        StoredV2Reuse,
-        StoredV2Blob,
-    }
-
-    pub enum SeamEvent {
-        Flip {
-            site: FlipSite,
-            calls: u64,
-            incumbents: Vec<(String, Vec<ChoiceValue>)>,
-        },
-        Evict {
-            origin: String,
-            values: Vec<ChoiceValue>,
-            at_final_replay: bool,
-        },
-        Backtrack {
-            origin: String,
-            restored: Vec<ChoiceValue>,
-            history_best: Vec<ChoiceValue>,
-            history_bytes: usize,
-        },
-    }
-
-    static ARMED: AtomicBool = AtomicBool::new(false);
-    static EVENTS: Mutex<Vec<SeamEvent>> = Mutex::new(Vec::new());
-
-    pub fn arm() {
-        ARMED.store(true, Ordering::Relaxed);
-    }
-
-    pub fn drain() -> Vec<SeamEvent> {
-        core::mem::take(&mut *EVENTS.lock())
-    }
-
-    pub(crate) fn record(event: SeamEvent) {
-        if !ARMED.load(Ordering::Relaxed) {
-            return;
-        }
-        EVENTS.lock().push(event);
-    }
-}
-
 /// Fresh generations tried at the end of the report-time final replay,
 /// after the stored counterexample's replays miss. A fresh reproduction is
 /// still a reportable failing execution; its misses carry no weight.
-/// Chosen, not derived (decision 53): a small tail behind the budgeted
-/// replays — no experiment prices it.
+/// Chosen, not derived: a small tail behind the budgeted replays.
 pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 
 /// Replay attempts for a v1 exact-choice blob, each with the standard
 /// continuation budget (the reuse path's semantics). One exact
 /// no-continuation replay reproduced never-flipped runs' blobs at 13%
-/// against v2's 100% at p = 0.9 (009a); four continuation attempts bound
-/// the worst-case joint escape-then-miss at 1.2e-3 (seam plan).
+/// against v2's 100% at p = 0.9; four continuation attempts bound
+/// the worst-case joint escape-then-miss at 1.2e-3.
 pub(crate) const V1_BLOB_REPLAYS: u64 = 4;
 
 #[cfg(test)]

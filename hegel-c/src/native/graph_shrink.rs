@@ -1,4 +1,4 @@
-//! Shrinking a counterexample graph (decision 78; experiments 018–019).
+//! Shrinking a counterexample graph.
 //!
 //! The shrinker holds an incumbent [`Graph`] and its **witness** — the
 //! smallest clean failing run replayed from it, the example the failure
@@ -25,7 +25,7 @@
 //! A failing unclean replay is a failing run the graph could not fully
 //! produce: it is grafted into the incumbent and the candidate unless it is
 //! **foreign** — the graph's walk would have served a different value
-//! somewhere, so no replay of the graph produces it (experiment 019). A
+//! somewhere, so no replay of the graph produces it. A
 //! value edit is accepted only when a clean replay **settled** on the
 //! edited draw (exercise by settlement: an edit no failing run drew is not
 //! tested), and its tie alternatives no judging replay settled on are
@@ -88,7 +88,7 @@ pub(crate) trait GraphProbe: Send {
     fn replay<'s>(&'s mut self, graph: Arc<Graph>, max_size: usize) -> ProbeFuture<'s>;
 
     /// Charge one gauntlet proposal priced against `anchor` to the origin's
-    /// alpha budget (decision 72) and return the failure minimum its
+    /// alpha budget and return the failure minimum its
     /// verdicts use; `drive` in the confirmation sweep.
     fn charge(&mut self, anchor: f64, drive: bool) -> u64;
 
@@ -635,11 +635,10 @@ impl GraphShrinker {
     /// the incumbent never had — and on accept the tie alternatives no
     /// clean replay settled on are pruned. An accept stands, and its
     /// ledger is topped up to [`nd::ANCHOR_SEED_RUNS`] runs, unchecked by
-    /// the deadline, before its bound seeds the anchor (decision 54):
+    /// the deadline, before its bound seeds the anchor:
     /// stopped at the accept itself, four straight clean replays would
     /// seed 0.51 whatever the candidate's true rate, and an anchor that
-    /// never climbs lets a deletion that halves the reproduction rate pass
-    /// (experiment 020).
+    /// never climbs lets a deletion that halves the reproduction rate pass.
     async fn judge(
         &mut self,
         probe: &mut dyn GraphProbe,

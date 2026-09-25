@@ -1,5 +1,5 @@
 //! Embedded tests for `src/native/core/replay.rs`: the live-set replay
-//! semantics of decision 74, driven through `NativeTestCase`.
+//! semantics, driven through `NativeTestCase`.
 
 use super::*;
 use crate::native::bignum::BigInt;

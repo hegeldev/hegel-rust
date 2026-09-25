@@ -74,7 +74,7 @@ pub(crate) async fn run_native_async(
 /// passed). A deterministic blob replays exactly, and choices that no
 /// longer match the caller's generators surface as a stop-test error from
 /// the draw that overruns; a nondeterministic blob replays its whole
-/// counterexample as one test case (decision 74) with the stored entropy
+/// counterexample as one test case with the stored entropy
 /// seed and continuation budget, so a replay that leaves every stored
 /// timeline completes with fresh draws instead.
 #[doc(hidden)]

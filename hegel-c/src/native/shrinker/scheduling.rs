@@ -39,7 +39,7 @@ pub type ShrinkPassFn<'a> = Box<
 /// of the underlying pass and let the scheduler decide whether to call
 /// it again.
 pub struct ShrinkPass<'a> {
-    /// Display name.  Read by `fixate_shrink_passes` for the per-pass
+    /// Display name. Read by `fixate_shrink_passes` for the per-pass
     /// "Trying shrink pass: <name>" debug line and by
     /// `Shrinker::shrink`'s end-of-run profile report.
     pub name: &'static str,
@@ -113,15 +113,15 @@ impl<'a> Shrinker<'a> {
     ///   passes that deleted nodes (-1) come first, then passes that
     ///   changed shape (0), then useless passes (1).
     ///
-    /// Stopping is confirmed-dry (decision 18): after the [`SweepMode::Fast`]
+    /// Stopping is confirmed-dry: after the [`SweepMode::Fast`]
     /// fixpoint — no pass made progress over a full outer iteration — a
     /// probe that honors sweep modes gets one [`SweepMode::Confirm`]
     /// iteration, in which it skips its single-run fast reject and drives
     /// each candidate's cumulative evidence to a bound decision. An
     /// improvement there resumes the fast fixpoint; only a confirmation
-    /// iteration that accepts nothing ends the shrink. Experiment 001's
-    /// follow-up run: on the constant-p=0.5 landscape fixed dry-sweep rules
-    /// miss reachable reductions 18-46% of the time, confirmed-dry 10%.
+    /// iteration that accepts nothing ends the shrink. In simulation on a
+    /// landscape failing at a constant p = 0.5, fixed dry-sweep rules miss
+    /// reachable reductions 18-46% of the time, confirmed-dry 10%.
     /// Called by [`Shrinker::shrink`].
     pub async fn fixate_shrink_passes(
         &mut self,

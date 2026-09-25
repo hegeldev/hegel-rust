@@ -59,7 +59,6 @@ pub mod __bench {
     pub use crate::native::core::state::{FloatGenerationParameters, FloatWidth};
     pub use crate::native::core::{ChoiceValue, CloneRecord};
     pub use crate::native::intervalsets::IntervalSet;
-    pub use crate::native::nd::seam_dump;
     pub use crate::native::rng::EngineRng;
 
     pub fn blob_is_nd(blob: &str) -> Option<bool> {
@@ -80,8 +79,8 @@ pub mod __bench {
         pub edges: Vec<BlobEdge>,
     }
 
-    /// The counterexample graph behind a nondeterministic blob (experiment
-    /// 020): node 0 is `Start`, node 1 is `End`.
+    /// The counterexample graph behind a nondeterministic blob: node 0 is
+    /// `Start`, node 1 is `End`.
     pub struct BlobGraph {
         pub nodes: Vec<BlobNode>,
         pub longest: u32,
@@ -166,13 +165,13 @@ pub mod __bench {
             choices: &'a [ChoiceValue],
             extend: usize,
         },
-        /// A counterexample under the live set (decision 74), with up to
+        /// A counterexample under the live set, with up to
         /// `extend` random draws past its longest timeline.
         Set {
             timelines: &'a [Vec<ChoiceValue>],
             extend: usize,
         },
-        /// Every draw decided by the resolver (experiment 017).
+        /// Every draw decided by the resolver.
         External {
             resolver: alloc::boxed::Box<dyn ExternalReplay>,
             budget: usize,
@@ -188,7 +187,7 @@ pub mod __bench {
     }
 
     /// Run the caller's body once against a replayed test case and report
-    /// what it realized (experiments 004 and 017).
+    /// what it realized.
     pub fn replay_case(
         kind: ReplayKind<'_>,
         seed: u64,
@@ -385,8 +384,7 @@ pub enum hegel_backend_t {
 ///
 /// Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
 /// 0.35 ABI break) is retired and must never be reused for a new meaning:
-/// bindings built against the old header may still compare against it
-/// (decision 27).
+/// bindings built against the old header may still compare against it.
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
@@ -3724,7 +3722,7 @@ unsafe fn state_machine_ref<'a>(
 /// watches the run's observed behavior — verdict flips, replay misses —
 /// exactly as it does for any other test, and switches into
 /// nondeterministic handling (or aborts, under `error` strictness) only
-/// when those observations fire (decision 70).
+/// when those observations fire.
 ///
 /// On success writes a caller-owned handle into `*out_state_machine` —
 /// pass it to subsequent `hegel_state_machine_next_group` /
@@ -5608,7 +5606,7 @@ pub unsafe extern "C" fn hegel_printer_breakable(
 ///
 /// The engine stores the text verbatim: pass the full rendered form of the
 /// comment, in the comment syntax of the language being printed (e.g.
-/// `"  // like this"` or `"  (* like this *)"`), including any separating
+/// `" // like this"` or `" (* like this *)"`), including any separating
 /// whitespace.
 ///
 /// `text` follows the same rules as `hegel_printer_text` (UTF-8, no

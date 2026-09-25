@@ -1,5 +1,5 @@
-//! Embedded tests for the graph walk in `src/native/core/replay.rs`
-//! (decision 78), driven through `NativeTestCase`.
+//! Embedded tests for the graph walk in `src/native/core/replay.rs`,
+//! driven through `NativeTestCase`.
 
 use super::*;
 use crate::native::bignum::BigInt;

@@ -16,7 +16,7 @@ struct BestTarget {
     choices: Vec<ChoiceValue>,
 }
 
-/// One label's targeting state under ND handling (decision 68): the
+/// One label's targeting state under ND handling: the
 /// reference timeline's realized nodes (the race perturbs these and derives
 /// replayable values from them), a monotone reference score estimated only
 /// from fresh unselected batches, and a dead marker for labels whose
@@ -37,7 +37,7 @@ impl NdTarget {
 /// Per-label best score and the choice sequence that produced it, plus the
 /// per-label ND state. The recorded best is a running maximum of single-run
 /// observations, so under ND handling it is selection-biased and serves
-/// only as seed material for honest measurement (decision 68).
+/// only as seed material for honest measurement.
 pub(crate) struct TargetingState {
     best_targets: HashMap<String, BestTarget>,
     nd_targets: HashMap<String, NdTarget>,
@@ -97,8 +97,7 @@ impl TargetingState {
     }
 
     /// Move `label` onto an adopted winner's fresh-batch node view. The
-    /// reference only ever rises, and always from a fresh unselected batch
-    /// (decision 68).
+    /// reference only ever rises, and always from a fresh unselected batch.
     pub(crate) fn adopt_nd(&mut self, label: &str, nodes: Vec<ChoiceNode>, median: f64) {
         let target = self
             .nd_targets

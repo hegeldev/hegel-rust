@@ -655,7 +655,7 @@ fn past_deadline_latches_and_short_circuits_consider_and_probe() {
 use crate::native::shrinker::{ProbeFuture, ShrinkProbe, SweepMode};
 use std::sync::{Arc, Mutex};
 
-/// Experiment 001's L3 shape, taken to its extreme: every candidate is
+/// The adversarial landscape for a dry-sweep rule: every candidate is
 /// truly interesting, but every fast single-run judgment misses, so a
 /// fast sweep is dry from the first proposal. Confirm-mode judgments
 /// report the truth.

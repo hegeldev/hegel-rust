@@ -54,8 +54,8 @@ fn boom(msg: &str) -> TestCaseResult {
 }
 
 /// Create (and immediately drop) a one-rule state machine whose declared
-/// concurrency bound is above 1. Since decision 70 this does not by itself
-/// flip the run: only observed nondeterminism does.
+/// concurrency bound is above 1. This does not by itself flip the run:
+/// only observed nondeterminism does.
 fn concurrent_machine(ds: &dyn DataSource) -> Result<(), TestCaseResult> {
     match ds.new_state_machine(
         vec!["rule".to_string()],
@@ -174,8 +174,8 @@ fn int_node(value: i128) -> ChoiceNode {
 
 /// The flat cache keys on exact realized values, so a proposal longer than
 /// a recorded conclusion is a miss and executes — the trailing-unread
-/// serving the tree did is a deliberately accepted loss (experiment 010:
-/// serves were ≈ exact repeats).
+/// serving the tree did is a deliberately accepted loss (measured over the
+/// suite, its serves were almost all exact repeats).
 #[test]
 fn cached_test_function_executes_a_proposal_longer_than_a_known_conclusion() {
     with_counting_ctx(
@@ -412,7 +412,7 @@ fn a_reexecuted_fingerprint_with_a_different_outcome_flips_the_run() {
 }
 
 /// Under `error` strictness the same verdict flake is the flaky-test abort,
-/// with decision 30's diagnostic verbatim.
+/// with the first-check diagnostic verbatim.
 #[test]
 fn a_reexecuted_fingerprint_with_a_different_outcome_aborts_under_error_strictness() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -702,7 +702,7 @@ fn cached_test_function_probe_replays_prefix_then_draws_continuation() {
 /// Span-mutation proposals are keyed as whole proposals, and the body here
 /// realizes only one of the proposal's four values — so no attempt is an
 /// exact repeat of a recorded conclusion and every one executes. The tree
-/// served these; the loss is accepted (experiment 010).
+/// served these; the loss is accepted.
 #[test]
 fn span_mutation_re_executes_proposals_that_are_not_exact_repeats() {
     with_counting_ctx(
@@ -2182,7 +2182,7 @@ fn a_concurrent_machine_alone_neither_flips_nor_notices() {
             .count();
         assert_eq!(
             notices, 0,
-            "declared concurrency is not a detection (decision 70), \
+            "declared concurrency is not a detection, \
              got a notice under {strictness:?}"
         );
     }
@@ -2234,7 +2234,7 @@ fn reuse_detects_nondeterministic_generator_across_replays() {
     }
 }
 
-/// Decision 9: a stored entry that no longer matches the generator is
+/// A stored entry that no longer matches the generator is
 /// staleness, never nondeterminism evidence — even under `error`
 /// strictness. The ledger only ever compares executions within one run,
 /// so the stored sequence's obsolete shape cannot contradict anything.
@@ -3806,8 +3806,7 @@ fn an_exhausted_backtrack_at_shrink_verify_keeps_the_caveat_path() {
 }
 
 /// An origin first observed after the flip has no history (post-flip
-/// executions never enter it), so its shrink admission is the bar,
-/// unchanged from decision 24.
+/// executions never enter it), so its shrink admission is the bar.
 #[test]
 fn a_post_flip_origin_faces_the_bar_at_shrink_time() {
     let bug = "bug";
@@ -5364,7 +5363,7 @@ fn nd_reproduce_replays_the_counterexample_as_one_test_case_whichever_branch_the
                 assert_eq!(
                     evidence.runs(),
                     1,
-                    "one attempt reproduces whichever branch the test took (decision 74)"
+                    "one attempt reproduces whichever branch the test took"
                 );
                 assert_eq!(run.divergence, None, "a served branch is not a divergence");
             }
@@ -5447,7 +5446,7 @@ fn nd_reproduce_spends_its_attempts_on_diverged_clone_replays() {
             assert_eq!(
                 evidence.runs(),
                 3,
-                "every replay is one budgeted trial, diverged or not (decision 71)"
+                "every replay is one budgeted trial, diverged or not"
             );
         },
     );
@@ -5634,7 +5633,7 @@ fn nd_trusted_promotion_repersists_the_shrunk_graph() {
 /// 9). Neither branch fails by luck under a random continuation often
 /// enough to matter. The spans give the arms' draws distinct addresses:
 /// two arms drawing at one address are one state to the graph, which
-/// serves them one value (decision 78).
+/// serves them one value.
 fn branching_body() -> impl FnMut(&dyn DataSource) -> TestCaseResult {
     let mut executions = 0usize;
     move |ds| {
@@ -6386,8 +6385,8 @@ fn report_multiple_false_truncates_after_the_confirmed_filter() {
     );
 }
 
-/// Amends the decision-39 pin: observations record under ND handling too,
-/// as selection-biased seed material for the measured race (decision 68).
+/// Observations record under ND handling too, as selection-biased seed
+/// material for the measured race.
 #[test]
 fn nd_runs_record_targeting_observations_as_race_seeds() {
     let observing_run = || {
@@ -6966,9 +6965,9 @@ fn deterministic_final_replay_is_stamped() {
     assert_eq!(
         u64::from(stamped.load(Ordering::SeqCst)),
         FIRST_CHECK_REPLAYS + 1,
-        "the check replays and the final replay are stamped (decision 49, \
-         amended): a stamped failing check replay of the same choices serves \
-         as the captured discovery"
+        "the check replays and the final replay are stamped: a stamped \
+         failing check replay of the same choices serves as the captured \
+         discovery"
     );
     assert!(execs.load(Ordering::SeqCst) > 1);
 }

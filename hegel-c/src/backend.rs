@@ -323,7 +323,7 @@ pub trait DataSource: Send + Sync {
     ///
     /// Called exactly once per test case, after the test body has finished
     /// (or panicked) and the lifecycle has translated the panic payload into
-    /// a [`TestCaseResult`].  The implementation does whatever bookkeeping
+    /// a [`TestCaseResult`]. The implementation does whatever bookkeeping
     /// its engine needs here — e.g. stashing the outcome on a handle for the
     /// engine to consume.
     fn mark_complete(&self, result: &TestCaseResult);
@@ -340,7 +340,7 @@ pub trait DataSource: Send + Sync {
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
-    /// `take_panic_info` returns nothing).  Passed through
+    /// `take_panic_info` returns nothing). Passed through
     /// `DataSource::mark_complete` so the engine can group test cases by
     /// which bug they trigger and shrink each origin to its own minimal
     /// counterexample.
@@ -355,8 +355,8 @@ pub struct Failure {
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
     /// The failure's confirmation standing when the run handled
-    /// nondeterminism — quoting the run's own replay evidence, per
-    /// decision 3 — for the caller to print alongside the report. `None`
+    /// nondeterminism — quoting the run's own replay evidence rather than
+    /// a bare verdict — for the caller to print alongside the report. `None`
     /// for a deterministic failure, and always `None` on the per-case
     /// results the client reports in; only a run's aggregate failures
     /// carry it.

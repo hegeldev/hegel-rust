@@ -1,4 +1,4 @@
-//! Replaying a counterexample as one test case (decision 74).
+//! Replaying a counterexample as one test case.
 //!
 //! A live-set replay takes an ordered list of timelines — the records a
 //! graph's clone edges carry, or a stored pool at a test seam. It keeps the
@@ -15,7 +15,7 @@
 //! disagreement inside a cloned stream prunes the timeline for its parent
 //! too.
 //!
-//! A counterexample stored as a graph (decision 78, [`Graph`]) is replayed
+//! A counterexample stored as a [`Graph`] is replayed
 //! by [`Replay::graph`]: a walk that stands at the states the last draw may
 //! have led to, arrives at each draw by the identity its address reports,
 //! and serves the first fitting edge there. See [`GraphWalk`].
@@ -52,13 +52,13 @@ pub struct Divergence {
     pub position: usize,
 }
 
-/// A resolver outside the engine deciding every draw of a replay
-/// (experiment 017: the counterexample as a graph, walked by the
-/// harness). `resolve` returns the stored value to serve at `position` of
+/// A resolver outside the engine deciding every draw of a replay, so a
+/// stored counterexample can be walked by a harness rather than the
+/// engine. `resolve` returns the stored value to serve at `position` of
 /// `stream`, or `None` to draw randomly; `fits` is the draw's acceptance
-/// test over stored values; `frames` is the draw's structural address
-/// (experiment 019): the spans open at the draw, outermost first, each as
-/// its label and the number of earlier siblings with that label.
+/// test over stored values; `frames` is the draw's structural address:
+/// the spans open at the draw, outermost first, each as its label and the
+/// number of earlier siblings with that label.
 pub trait ExternalReplay: Send {
     fn resolve(
         &mut self,
@@ -134,7 +134,7 @@ enum Pending {
     },
 }
 
-/// The root stream's walk of a [`Graph`] (decision 78). At each draw the
+/// The root stream's walk of a [`Graph`]. At each draw the
 /// walk computes the identity of the state the run is in from the draw's
 /// address and the previous draw's, and **arrives** at the pending state of
 /// that identity — settling the edge that led there. No pending state of
@@ -336,7 +336,7 @@ impl Replay {
         }
     }
 
-    /// The walk of a counterexample stored as a graph (decision 78): see
+    /// The walk of a counterexample stored as a graph: see
     /// [`GraphWalk`].
     pub(crate) fn graph(graph: Arc<Graph>) -> Self {
         Replay {

@@ -176,7 +176,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
     assert!(
         !text.contains("note: nondeterministic") && !text.contains("note: unconfirmed"),
         "a concurrent failure that reproduces exactly is a plain \
-         deterministic failure, no caveat (decision 70):\n{text}"
+         deterministic failure, no caveat:\n{text}"
     );
     assert!(
         text.contains("---------------- Round 1: group \"<anonymous>\" ----------------"),
@@ -190,7 +190,7 @@ fn a_worker_panic_is_reported_with_its_real_origin_and_buffered_output() {
         .unwrap()[1];
     assert_matches_regex(
         &text,
-        &format!(r"\[worker {worker} \+\d+\.\d{{3}}ms\]   let x = "),
+        &format!(r"\[worker {worker} \+\d+\.\d{{3}}ms\] let x = "),
     );
     assert!(
         text.contains("test_concurrent_stateful.rs"),
@@ -951,8 +951,8 @@ impl Noop {
 }
 
 /// Run a trivial concurrent machine on an independent clone stream, leaving
-/// `tc` free for the test body's own draws. Since decision 70 this does not
-/// flip the run by itself: the bodies below go nondeterministic later, at
+/// `tc` free for the test body's own draws. This does not flip the run by
+/// itself: the bodies below go nondeterministic later, at
 /// their first replay miss.
 fn concurrent_noise(tc: &TestCase) {
     machine(Noop)
@@ -1015,7 +1015,7 @@ fn a_verbose_nondeterministic_run_streams_every_cases_output_live() {
     assert_eq!(
         diagnostics, 1,
         "the diagnostic prints live at discovery; the caveat-only report \
-         has no reproducing capture to reprint (decision 70): {lines:?}"
+         has no reproducing capture to reprint: {lines:?}"
     );
 }
 

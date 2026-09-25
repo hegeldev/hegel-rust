@@ -14,7 +14,7 @@
 //!
 //! where the `prefix_byte` selects the payload's meaning and storage:
 //!
-//! - `0` (`PREFIX_RAW`):  `payload` is the raw [`serialize_choices`] bytes of
+//! - `0` (`PREFIX_RAW`): `payload` is the raw [`serialize_choices`] bytes of
 //!   one choice sequence.
 //! - `1` (`PREFIX_ZLIB`): `payload` is the zlib compression of those bytes.
 //! - `2` (`PREFIX_ND_RAW`) / `3` (`PREFIX_ND_ZLIB`): `payload` is the raw /
@@ -47,7 +47,8 @@
 //! engine never produces one.
 //!
 //! The nondeterministic state bytes double as the version-3 **database
-//! entry** format (decision 8: ND-ness is carried by the representation).
+//! entry** format: whether an entry is nondeterministic is carried by its
+//! representation, so the database needs no side table of kinds.
 //! They open with a `u32::MAX` choice count no genuine [`serialize_choices`]
 //! output can start with, so a pre-v2 reader's [`deserialize_choices`]
 //! rejects them as corrupt instead of misreading them. Version-2 entries
@@ -112,7 +113,7 @@ pub fn encode_failure(choices: &[ChoiceValue]) -> Option<String> {
 }
 
 /// The replay state a nondeterministic failure persists (blob prefix 2/3,
-/// or a version-3 database entry): the counterexample graph (decision 78),
+/// or a version-3 database entry): the counterexample graph,
 /// an entropy seed for a deterministic single replay, and the flattened
 /// length of the longest failing run the graph holds, which sizes the
 /// continuation budget of a replay.

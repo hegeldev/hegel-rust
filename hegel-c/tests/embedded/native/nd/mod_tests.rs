@@ -1,10 +1,9 @@
 //! Embedded tests for `src/native/nd/mod.rs`.
 //!
-//! The discovery-bar and gauntlet tests recompute the exact DPs from
-//! experiments 005A and 008 over the production decision functions and
-//! assert the recorded operating points (decisions 23 and 54); the budget
-//! tests pin the replay budgets decisions 11 and 16 derive and experiment
-//! 004's continuation budget.
+//! The discovery-bar and gauntlet tests recompute exact DPs over the
+//! production decision functions and assert the operating points their
+//! constants were chosen for; the budget tests pin the replay and
+//! continuation budgets.
 
 use super::*;
 
@@ -212,8 +211,8 @@ fn gauntlet_gamma_is_unity_above_the_retention_high_water() {
 }
 
 /// Exact DP over [`gauntlet`] with i.i.d. failure probability `q` for one
-/// fresh-ledger candidate whose recruiting run failed and is counted
-/// (decision 54): (P(accept | fail), E[physical runs | fail]).
+/// fresh-ledger candidate whose recruiting run failed and is counted:
+/// (P(accept | fail), E[physical runs | fail]).
 fn gauntlet_operating_point(q: f64, anchor: f64) -> (f64, f64) {
     let cap = GAUNTLET_CAP as usize;
     let mut mass = [[0.0f64; 31]; 31];
@@ -250,7 +249,7 @@ fn gauntlet_operating_point(q: f64, anchor: f64) -> (f64, f64) {
 }
 
 #[test]
-fn gauntlet_matches_the_008_operating_points() {
+fn gauntlet_matches_its_operating_points() {
     let rows = [
         (0.05, 0.02, 0.0198, 29.9),
         (0.05, 0.10, 0.5650, 24.2),
@@ -334,8 +333,7 @@ fn boost_keep_halves_rounding_up() {
 }
 
 /// The sign test's acceptance boundary at the holdout size: 15 of 20 is
-/// the smallest beat count whose Wilson lower bound clears 0.5
-/// (experiment 013's DP table).
+/// the smallest beat count whose Wilson lower bound clears 0.5.
 #[test]
 fn target_adopt_needs_fifteen_of_twenty_beats() {
     assert!(!target_adopt(14, TARGET_ND_HOLDOUT));
@@ -368,8 +366,8 @@ fn attempt_budgets_match_their_documented_values() {
     assert_eq!(GAUNTLET_MIN_FAILS_CEILING, 8);
 }
 
-/// The exact-DP charges pin experiment 014's per-proposal table at the
-/// floor threshold and design fluke: 0.0198 for a drive from a failed
+/// The exact-DP charges per proposal at the floor threshold and design
+/// fluke: 0.0198 for a drive from a failed
 /// recruit, 2.9e-3 for a confirmation-sweep drive from empty, zero for an
 /// unreachable threshold.
 #[test]
@@ -445,7 +443,7 @@ fn an_unreachable_threshold_charges_nothing() {
         assert_eq!(
             spend.charge(&Evidence::default(), 0.9, false, None),
             GAUNTLET_MIN_FAILS,
-            "the cost lottery (experiment 012) spends no budget"
+            "the cost lottery spends no budget"
         );
     }
     assert_eq!(spend.remaining, GAUNTLET_ALPHA_BUDGET);

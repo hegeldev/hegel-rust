@@ -1432,8 +1432,8 @@ impl Spans {
     }
 
     /// True iff every non-forced choice inside the span at `span_idx` is at
-    /// its kind's simplest value.  A forced choice can't be lowered further,
-    /// so it counts as trivial for this purpose.  Out-of-range `span_idx`
+    /// its kind's simplest value. A forced choice can't be lowered further,
+    /// so it counts as trivial for this purpose. Out-of-range `span_idx`
     /// returns `false`.
     pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> Result<bool, InternalError> {
         let Some(span) = self.inner.get(span_idx) else {
@@ -1491,7 +1491,7 @@ impl core::ops::Index<usize> for Spans {
 }
 
 /// Observer hook called by [`NativeTestCase`] after each draw and on
-/// conclusion.  All methods have default no-op implementations so
+/// conclusion. All methods have default no-op implementations so
 /// concrete observers only need to override the callbacks they care
 /// about.
 pub trait DataObserver: Send {
@@ -1703,7 +1703,7 @@ impl NativeTestCase {
     /// `trailing` if set.
     ///
     /// `max_size` is the upper bound on the total number of choices the test
-    /// case will make.  It is floored to `choices.len()` so a too-tight value
+    /// case will make. It is floored to `choices.len()` so a too-tight value
     /// can never truncate the explicit prefix.
     pub fn for_choices_and_template(
         choices: &[ChoiceValue],
@@ -1731,12 +1731,12 @@ impl NativeTestCase {
     }
 
     /// Replay a pool of timelines as one test case under
-    /// [`Rescue::Continue`] (decision 74): every draw is served from the
+    /// [`Rescue::Continue`]: every draw is served from the
     /// first live timeline that fits it, and a run that leaves every
     /// timeline continues with random draws up to `max_size` choices in
     /// total. `max_size` is floored to the longest timeline's length. The
     /// engine walks graphs ([`Self::for_graph`]); this is the live set's
-    /// test and experiment seam.
+    /// test seam.
     #[cfg(any(test, feature = "__bench"))]
     pub fn for_counterexample(
         timelines: &[Vec<ChoiceValue>],
@@ -1758,9 +1758,8 @@ impl NativeTestCase {
         .with_random(rng)
     }
 
-    /// Replay a test case every draw of which `resolver` decides
-    /// (experiment 017), drawing randomly where it declines, up to
-    /// `max_size` choices in total.
+    /// Replay a test case every draw of which `resolver` decides, drawing
+    /// randomly where it declines, up to `max_size` choices in total.
     #[cfg(any(test, feature = "__bench"))]
     pub fn for_external(
         resolver: Box<dyn ExternalReplay>,
@@ -1782,7 +1781,7 @@ impl NativeTestCase {
         .with_random(rng)
     }
 
-    /// Walk a counterexample stored as a graph (decision 78): every draw
+    /// Walk a counterexample stored as a graph: every draw
     /// served by the graph where its state and address have an edge, at
     /// random where they do not, up to `max_size` choices in total. See
     /// [`Replay::graph`].
@@ -1871,7 +1870,7 @@ impl NativeTestCase {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
-    /// Attach an RNG for post-prefix random draws.  Internal builder used by
+    /// Attach an RNG for post-prefix random draws. Internal builder used by
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
@@ -1901,7 +1900,7 @@ impl NativeTestCase {
     }
 
     /// Where this test case's replay first left its stored counterexample,
-    /// if it did (decision 74): the family's first divergence.
+    /// if it did: the family's first divergence.
     pub fn divergence(&self) -> Option<Divergence> {
         self.replay.divergence()
     }
@@ -1915,7 +1914,7 @@ impl NativeTestCase {
         self.replay.live()
     }
 
-    /// Under a graph walk (decision 78), the graph edges this run settled
+    /// Under a graph walk, the graph edges this run settled
     /// on, as `(node, edge index)`: see [`Replay::settled`].
     pub fn settled_edges(&self) -> Vec<(usize, usize)> {
         self.replay.settled()
@@ -2018,7 +2017,7 @@ impl NativeTestCase {
 
     /// Open a new span at the current choice position, labelled with `label`.
     ///
-    /// Returns the index assigned to the span in `self.spans`.  The span's
+    /// Returns the index assigned to the span in `self.spans`. The span's
     /// `end` is set to `self.nodes.len()` as a placeholder and overwritten
     /// when [`Self::stop_span`] is called.
     ///
@@ -2052,7 +2051,7 @@ impl NativeTestCase {
         self.span_stack.len()
     }
 
-    /// The structural address of the next draw (experiment 019): the open
+    /// The structural address of the next draw: the open
     /// spans outermost first, each as its label and the number of earlier
     /// siblings under the same parent with that label.
     pub fn open_span_frames(&self) -> Vec<(u64, usize)> {

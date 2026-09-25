@@ -59,7 +59,7 @@ use crate::settings::{
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
-/// identifying *where* the panic happened.  The origin is supplied by
+/// identifying *where* the panic happened. The origin is supplied by
 /// [`crate::run_lifecycle::run_test_case`] from the captured panic
 /// `file:line:col`; per-origin shrinking and database storage key on it.
 #[derive(Clone)]
@@ -75,12 +75,12 @@ pub struct RunResult {
     /// in recording order. Empty for tests that record no events and on a
     /// result served from the execution cache.
     pub events: Vec<(String, Option<f64>)>,
-    /// Where the replay first left its stored counterexample (decision
-    /// 74): `None` for a run every draw of which the stored state served —
+    /// Where the replay first left its stored counterexample: `None` for a
+    /// run every draw of which the stored state served —
     /// a run that stayed on its counterexample — and for fresh generation
     /// and cache hits.
     pub divergence: Option<Divergence>,
-    /// Under a graph walk (decision 78), the graph edges the run settled
+    /// Under a graph walk, the graph edges the run settled
     /// on, as `(node, edge index)`; empty otherwise.
     pub settled: Vec<(usize, usize)>,
     /// Under a graph walk, whether the run ended where the graph ends.
@@ -91,7 +91,7 @@ const RANDOM_GENERATION_BATCH: u64 = 10;
 
 /// Stop generating after this many consecutive generation-phase cases whose
 /// realized values had been executed before — the flat-cache replacement for
-/// the tree's exhaustion stop (G22), applied only while no valid case has
+/// the tree's exhaustion stop, applied only while no valid case has
 /// been generated. The stop exists so a tiny fully-filtered space reaches
 /// the exhausted-space FilterTooMuch instead of grinding out the whole
 /// invalid budget; once anything is valid the test-case budget bounds the
@@ -101,14 +101,14 @@ const RANDOM_GENERATION_BATCH: u64 = 10;
 /// `one_of` before reaching every alternative).
 const DUPLICATE_STOP: u64 = RANDOM_GENERATION_BATCH;
 
-/// Replays in the first-interesting determinism check, stop on first miss
-/// (gate G23 option (a)): the discovering case is selection, not evidence,
-/// so all four replays are fresh observations. Detection is
+/// Replays in the first-interesting determinism check, stop on first miss:
+/// the discovering case is selection, not evidence, so all four replays
+/// are fresh observations. Detection is
 /// `1 - (p·s)^4` for a bug failing at rate `p` with seam survival `s`; a
 /// deterministic origin pays exactly +4 executions.
 const FIRST_CHECK_REPLAYS: u64 = 4;
 
-/// Scan-replay cap for one backtrack (gate G25): the geometric profile
+/// Scan-replay cap for one backtrack: the geometric profile
 /// plus binary refinement fit in ~2·log2(m) replays over the accept
 /// segment, but the first pass also probes every raw sighting once, so a
 /// raw-heavy history spends the cap on raws — the cap is the budget there,
@@ -123,9 +123,9 @@ struct NdReplay {
     failed: bool,
 }
 
-/// Outcome of one evidence batch (experiment 005): the replays, their
+/// Outcome of one evidence batch: the replays, their
 /// evidence, the first failing run, and the replayed graph with every
-/// failing run grafted in (decision 78).
+/// failing run grafted in.
 struct NdBatch {
     /// Whether the discovery bar's arithmetic accepted. Decides admission
     /// for unconfirmed origins; for trusted origins the bar is only the
@@ -154,7 +154,7 @@ enum StoredEntry {
     Graph(crate::native::blob::NdReproState),
 }
 
-/// Outcome of one history backtrack (seam plan step 4, gate G25).
+/// Outcome of one history backtrack.
 enum Backtrack {
     /// A history entry cleared the discovery bar and is the origin's
     /// incumbent again; the origin is confirmed and the restored save
@@ -204,7 +204,7 @@ const MAX_OVERRUN_DRAWS: u64 = 20;
 
 /// Cap on secondary-corpus entries per database key: end-of-run
 /// reconciliation evicts the shortlex-largest above it — a resource bound
-/// outside decision 11's two-strike hygiene (decision 44).
+/// independent of the reuse phase's two-strike hygiene.
 const SECONDARY_CORPUS_CAP: usize = 50;
 
 /// Run the exploration half of a test run — database replay, generation, and
@@ -279,8 +279,6 @@ pub(crate) async fn reproduce_blob(
         Some(crate::native::blob::DecodedBlob::Nd(state)) => {
             let mut engine = Engine::new(settings, None, exchange)?;
             if settings.nondeterminism_strictness != NondeterminismStrictness::Error {
-                #[cfg(feature = "__bench")]
-                engine.seam_flip(nd::seam_dump::FlipSite::StoredV2Blob);
                 engine.nd_flip();
             }
             engine.capture_replays = true;
@@ -408,8 +406,6 @@ impl<'a> Engine<'a> {
                         if self.settings.nondeterminism_strictness
                             != NondeterminismStrictness::Error
                         {
-                            #[cfg(feature = "__bench")]
-                            self.seam_flip(nd::seam_dump::FlipSite::StoredV2Reuse);
                             self.nd_flip();
                         }
                         StoredEntry::Graph(state)
@@ -736,15 +732,16 @@ impl<'a> Engine<'a> {
                                 db.delete(&secondary_key, &raw);
                             }
                             // A flip makes single-replay deletes unsound for
-                            // the remaining entries (decision 11's budget
-                            // derivation).
+                            // the remaining entries: one miss of a
+                            // nondeterministic entry is not evidence that
+                            // it no longer fails.
                             if self.nd_handling() {
                                 break;
                             }
                         } else if crate::native::blob::decode_nd_state(&raw).is_some() {
                             // A v2 entry's hygiene lives in the reuse phase's
                             // budgeted strikes: a pre-shrink reproduction
-                            // could change no outcome (decisions 20/24).
+                            // could change no outcome.
                             continue;
                         } else if let Some(db) = self.db() {
                             db.delete(&secondary_key, &raw);
@@ -884,15 +881,15 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    /// Assemble the run's failure report, enforcing decision 24 at the
-    /// seam: blobs and replay-state caveats only for origins past
+    /// Assemble the run's failure report: blobs and replay-state caveats
+    /// only for origins past
     /// confirmation — the same [`OriginLifecycle::needs_confirmation`]
     /// predicate the persistence filter uses — with the partition applied
     /// before the sort and the single-failure truncation, so a leaked
     /// unconfirmed origin can never displace a confirmed one. Unconfirmed
     /// origins (bar rejects and never-replayed report-time admissions
     /// alike) report caveat-only, and only when nothing confirmed or
-    /// trusted survived (decision 3).
+    /// trusted survived.
     fn build_report(&mut self) -> Result<TestRunResult, InternalError> {
         let nd_blobs = self.nd_handling();
         let mut origins_sorted: Vec<(
@@ -1073,10 +1070,9 @@ pub(crate) fn large_initial_check(
 /// Message for a flaky test — one whose outcome changed when re-run with
 /// the same generated data. Wrapped as [`RunError::Flaky`] at the sites
 /// that detect it.
-/// The first-interesting check's structural-miss diagnostic (decision 30,
-/// amended by G26): names the divergence position, richer than the tree's
-/// kind message. Used under `error` strictness; quiet and warn flip
-/// instead.
+/// The first-interesting check's structural-miss diagnostic: names the
+/// divergence position, richer than the tree's kind message. Used under
+/// `error` strictness; quiet and warn flip instead.
 fn first_check_diagnostic(expected: &[ChoiceValue], realized: &[ChoiceValue]) -> String {
     let at = expected
         .iter()
@@ -1150,7 +1146,7 @@ pub(crate) fn slow_shrink_warning() -> String {
 /// rate is below `r`.
 ///
 /// ```text
-/// base    = ceil(log(1 - c) / log(1 - r)) - 1
+/// base = ceil(log(1 - c) / log(1 - r)) - 1
 /// per_valid = ceil(1 / r)
 /// ```
 fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {
@@ -1242,13 +1238,13 @@ fn should_generate_more(
 /// choice sequence is saved to the primary key, then the bytes it
 /// supersedes are deleted. Saving before deleting keeps the primary key
 /// carrying the most recent validated incumbent at every instant, so a
-/// Ctrl-C / SIGTERM mid-shrink loses nothing (decision 44).
+/// Ctrl-C / SIGTERM mid-shrink loses nothing.
 ///
 /// A superseded same-run save is deleted, never demoted: it never ended a
 /// run as anyone's best example, so it earned no cross-run staleness
 /// strike. A run-start primary entry (in `preexisting`) *did* end a run as
 /// someone's best example, so superseding it demotes it to the secondary
-/// key (decision 11's strike one) even when a reuse replay re-saved its
+/// key even when a reuse replay re-saved its
 /// bytes this run; end-of-run reconciliation demotes the rest, using
 /// `saved_this_run` to tell run-start entries from same-run leftovers.
 /// Bytes another origin's last save still points at are never deleted:
@@ -1312,7 +1308,9 @@ impl<'a> Persister<'a> {
     /// nodes are shortlex-larger than the barred shrunk save, which
     /// `record_bytes`'s monotone `needs_save` would refuse, leaving the
     /// shrunk bytes as primary. Saving first and then deleting the
-    /// superseded bytes preserves decision 44's ordering.
+    /// superseded bytes keeps the primary key carrying the most recent
+    /// validated incumbent at every instant, so an interrupted shrink
+    /// loses nothing.
     fn supersede_nd(
         &mut self,
         origin: &str,
@@ -1384,8 +1382,7 @@ impl<'a> Persister<'a> {
 /// executed conclusion on its realized choice values: exact repeats are
 /// served without re-running the body, a repeat concluding differently is
 /// nondeterminism evidence, and the consecutive-duplicate counter it feeds
-/// is what stops generation on an exhausted space
-/// (`notes/experiments/010-tree-value`).
+/// is what stops generation on an exhausted space.
 ///
 /// Every execution records into the cache via [`Self::record_run`].
 /// [`Self::test_function`] is the raw executor+recorder (generation goes
@@ -1410,7 +1407,7 @@ pub(crate) struct Engine<'a> {
     /// [`NondeterminismStrictness::Error`] — under quiet/warn, verdict
     /// flips (the cache) and replay checks carry detection instead — and
     /// never fed between runs: a stored entry that stops reproducing is
-    /// staleness, not nondeterminism (decision 9).
+    /// staleness, not nondeterminism.
     kind_ledger: KindLedger,
     /// Consecutive generation-phase conclusions whose realized values had
     /// been executed before. [`DUPLICATE_STOP`] of these ends generation
@@ -1447,13 +1444,12 @@ pub(crate) struct Engine<'a> {
     /// run trusts no cached prediction: execution-cache recording and
     /// serving and the duplicate stop are off, and targeting switches from
     /// single-run hill climbing to the measured race
-    /// ([`Self::optimise_targets_nd`], decision 68). Never cleared within a
-    /// run.
+    /// ([`Self::optimise_targets_nd`]). Never cleared within a run.
     pub(crate) nd_active: bool,
     /// Set while the first-interesting check's replays run: they count on
-    /// the measurement statistics line despite running pre-flip (decision
-    /// 51, amended), and a cache mismatch they trigger is the check's
-    /// detection, not a generation flake (the seam dump's site).
+    /// the measurement statistics line despite running pre-flip, and a
+    /// cache mismatch they trigger is the check's detection, not a
+    /// generation flake.
     check_window: bool,
     /// Set around the reuse phase's `nd_reproduce` replays: they are
     /// measurement runs, but their reproductions must still displace and
@@ -1477,13 +1473,6 @@ pub(crate) struct Engine<'a> {
     /// probes are measurement runs), and the case that itself flips the
     /// run (its stamp decision predates the flip).
     capture_discoveries: bool,
-    /// Seam-dump site for a cache-mismatch flip detected inside the
-    /// execution this is set around (the shrink verify and the
-    /// deterministic final replay), so experiment 011's flip-site table
-    /// attributes an aligned outcome-only miss to its calling site instead
-    /// of the generic cache channel.
-    #[cfg(feature = "__bench")]
-    flip_site_hint: Option<nd::seam_dump::FlipSite>,
 }
 
 impl<'a> Engine<'a> {
@@ -1528,42 +1517,15 @@ impl<'a> Engine<'a> {
             reuse_replays: false,
             capture_replays: false,
             capture_discoveries: false,
-            #[cfg(feature = "__bench")]
-            flip_site_hint: None,
         })
     }
 
     /// Whether the full nondeterministic pipeline — discovery confirmation,
     /// the shrink gauntlet, the graph, validated persistence, caveated
     /// reporting — is driving this run. Concurrent-machine runs flow
-    /// through it like any other nondeterministic run (experiment 007).
+    /// through it like any other nondeterministic run.
     fn nd_handling(&self) -> bool {
         self.nd_active
-    }
-
-    /// Record a flip event for [`nd::seam_dump`] (experiment 011): the
-    /// detection site, the call count, and the interesting map at flip
-    /// time. Call before `nd_flip` at each detection site; a no-op when
-    /// the run is already flipped or the dump is unarmed.
-    #[cfg(feature = "__bench")]
-    fn seam_flip(&self, site: nd::seam_dump::FlipSite) {
-        if self.nd_active {
-            return;
-        }
-        nd::seam_dump::record(nd::seam_dump::SeamEvent::Flip {
-            site,
-            calls: self.calls,
-            incumbents: self
-                .origins
-                .live()
-                .map(|(origin, nodes)| {
-                    (
-                        origin.to_string(),
-                        nodes.iter().map(|n| n.value()).collect(),
-                    )
-                })
-                .collect(),
-        });
     }
 
     /// Switch the run into nondeterministic handling, per
@@ -1598,7 +1560,7 @@ impl<'a> Engine<'a> {
         self.nd_measure(ntc, origin).await
     }
 
-    /// One measurement replay of a counterexample graph (decision 78) as
+    /// One measurement replay of a counterexample graph as
     /// one test case, drawing at random past it up to `max_size` choices.
     async fn nd_replay_graph(
         &mut self,
@@ -1612,7 +1574,7 @@ impl<'a> Engine<'a> {
 
     /// Run one measurement replay: reports whether the run reproduced
     /// `origin` (any interesting origin when `None`). One Bernoulli trial
-    /// of the test case, whatever the replay realized (decision 71). A
+    /// of the test case, whatever the replay realized. A
     /// choice-tree mismatch aborts under `Error` strictness like any other
     /// execution.
     async fn nd_measure(
@@ -1637,7 +1599,7 @@ impl<'a> Engine<'a> {
         Ok(NdReplay { run, failed })
     }
 
-    /// Replay-until-failure over stored ND state (decisions 25 and 78): the
+    /// Replay-until-failure over stored ND state: the
     /// counterexample as one test case, up to `attempts` times, then up to
     /// `fresh` fresh generations. Returns the first reproducing run plus
     /// the evidence accumulated across every attempt, for the caller's
@@ -1695,21 +1657,24 @@ impl<'a> Engine<'a> {
     /// generations, up to the standard reuse budget — and the evidence
     /// lands in the lifecycle: a reproducing replay on a yet-unconfirmed
     /// origin is a sighting whose realized run then faces the standard bar
-    /// on the origin's remaining attempts (decision 72); a dry confirmed
+    /// on the origin's remaining attempts; a dry confirmed
     /// origin switches its caveat's wording instead of unreporting the
-    /// failure (decision 3); a dry unconfirmed origin is evicted like a
+    /// failure; a dry unconfirmed origin is evicted like a
     /// bar reject and reaches the report only through the caveat-only
-    /// fallback (decision 24).
+    /// fallback.
     /// One origin's shrink pass: the pre-shrink verify, admission (stashed
     /// witness, trusted batch, or the discovery bar), optional boost, and
-    /// the shrinker run, with decision 38's requeue semantics. Returns
+    /// the shrinker run. A flip during the shrink probes requeues the
+    /// origin once, from its verified pre-shrink nodes: single-run
+    /// progress made before the flip was never checked against
+    /// nondeterminism, and the second pass is gauntleted. Returns
     /// whether the shrinker hit the deadline. A method rather than shrink-
     /// loop code so report-time backtracking can re-enter a per-origin
-    /// shrink (seam plan). Under nondeterministic handling the shrink is
-    /// the graph shrinker's (decision 78), whose accepts install the moved
+    /// shrink. Under nondeterministic handling the shrink is
+    /// the graph shrinker's, whose accepts install the moved
     /// counterexample as they happen ([`EngineGraphProbe`]); for a trusted
     /// origin the admission batch's bar arithmetic is only its stopping
-    /// rule, since admission happened at reuse (decision 24).
+    /// rule, since admission happened at reuse.
     async fn shrink_origin(
         &mut self,
         origin: String,
@@ -1726,15 +1691,7 @@ impl<'a> Engine<'a> {
             None
         } else {
             let verify_ntc = NativeTestCase::for_choices(&choices, Some(&initial), None);
-            #[cfg(feature = "__bench")]
-            {
-                self.flip_site_hint = Some(nd::seam_dump::FlipSite::ShrinkVerify);
-            }
             let outcome = self.test_function(verify_ntc).await;
-            #[cfg(feature = "__bench")]
-            {
-                self.flip_site_hint = None;
-            }
             let (verify, mismatch) = outcome?;
             if let Some(err) = mismatch {
                 return Err(err);
@@ -1746,8 +1703,6 @@ impl<'a> Engine<'a> {
             } else if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                 return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
             } else {
-                #[cfg(feature = "__bench")]
-                self.seam_flip(nd::seam_dump::FlipSite::ShrinkVerify);
                 self.nd_flip();
                 None
             }
@@ -1779,14 +1734,14 @@ impl<'a> Engine<'a> {
                 match self.backtrack(&origin).await? {
                     Backtrack::Restored { .. } => return Ok(false),
                     Backtrack::Exhausted { evidence } => {
-                        self.reject_origin(&origin, evidence, false);
+                        self.reject_origin(&origin, evidence);
                         shrunk_origins.insert(origin);
                         return Ok(false);
                     }
                 }
             }
             if !self.origins.entry(&origin).spend_bar_attempt() {
-                self.reject_origin(&origin, (0, 0), false);
+                self.reject_origin(&origin, (0, 0));
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
@@ -1796,7 +1751,7 @@ impl<'a> Engine<'a> {
                 .await?;
             let evidence = (batch.evidence.fails(), batch.evidence.runs());
             if !batch.bar_accepted {
-                self.reject_origin(&origin, evidence, false);
+                self.reject_origin(&origin, evidence);
                 shrunk_origins.insert(origin);
                 return Ok(false);
             }
@@ -1884,11 +1839,11 @@ impl<'a> Engine<'a> {
         Ok(timed_out)
     }
 
-    /// The engine-owned final replay (decision 30): one exact replay per
+    /// The engine-owned final replay: one exact replay per
     /// origin while the run is deterministic, the counterexample's
     /// replay-until-failure under ND handling. A deterministic miss flips
-    /// the run; a never-confirmed origin with history then backtracks (gate
-    /// G25) — a restored incumbent re-shrinks under the gauntlet on the
+    /// the run; a never-confirmed origin with history then backtracks — a
+    /// restored incumbent re-shrinks under the gauntlet on the
     /// shrink deadline's remaining budget before its replay, an exhausted
     /// backtrack rejects into the caveat-only report. The same backtrack
     /// runs when a never-confirmed origin's review itself comes up dry with
@@ -1898,7 +1853,7 @@ impl<'a> Engine<'a> {
     /// predates what the run now knows. A reproducing review run on an
     /// unconfirmed origin is a sighting, not a confirmation: grafted into
     /// the origin's graph, it faces the standard bar on the origin's
-    /// remaining attempt budget (decision 72).
+    /// remaining attempt budget.
     async fn final_replay(
         &mut self,
         verbosity: Verbosity,
@@ -1921,17 +1876,9 @@ impl<'a> Engine<'a> {
             let choices: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
             if !self.nd_handling() {
                 self.capture_replays = true;
-                #[cfg(feature = "__bench")]
-                {
-                    self.flip_site_hint = Some(nd::seam_dump::FlipSite::FinalReplay);
-                }
                 let ntc = NativeTestCase::for_choices(&choices, Some(&nodes), None);
                 let outcome = self.measure(ntc).await;
                 self.capture_replays = false;
-                #[cfg(feature = "__bench")]
-                {
-                    self.flip_site_hint = None;
-                }
                 let (run, mismatch) = outcome?;
                 if let Some(err) = mismatch {
                     return Err(err);
@@ -1947,8 +1894,6 @@ impl<'a> Engine<'a> {
                     if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                         return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
                     }
-                    #[cfg(feature = "__bench")]
-                    self.seam_flip(nd::seam_dump::FlipSite::FinalReplay);
                     self.nd_flip();
                     if self.origins.needs_confirmation(&origin) && self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
@@ -1967,7 +1912,7 @@ impl<'a> Engine<'a> {
                                 }
                             }
                             Backtrack::Exhausted { evidence } => {
-                                self.reject_origin(&origin, evidence, true);
+                                self.reject_origin(&origin, evidence);
                                 continue;
                             }
                         }
@@ -2055,7 +2000,7 @@ impl<'a> Engine<'a> {
                             }
                         }
                     }
-                    self.reject_origin(&origin, reject_evidence, true);
+                    self.reject_origin(&origin, reject_evidence);
                 }
             } else {
                 self.origins.entry(&origin).record_final_replay(batch);
@@ -2066,10 +2011,10 @@ impl<'a> Engine<'a> {
 
     /// One evidence batch: replay `graph` (with the continuation budget
     /// for `longest`) with capture-at-confirmation, each replay one plain
-    /// trial of the test case (decision 71), until the discovery bar
-    /// ([`nd::discovery_bar`], decision 23) decides, starting from the
+    /// trial of the test case, until the discovery bar
+    /// ([`nd::discovery_bar`]) decides, starting from the
     /// origin's first-check seed when one exists. Two uses: the bar's
-    /// driver for admitting unconfirmed origins (experiment 005), and an
+    /// driver for admitting unconfirmed origins, and an
     /// evidence-gathering batch for trusted origins, where the bar
     /// arithmetic is only the stopping rule. The triggering run is
     /// selection, not evidence — only these fresh replays count. An accept
@@ -2077,16 +2022,16 @@ impl<'a> Engine<'a> {
     /// first-check seed can carry the bar's whole failure quota, and a
     /// seeded quota with no in-batch reproduction rejects at
     /// [`nd::CONFIRM_CAP`] runs instead of confirming an origin the batch
-    /// never saw fail. An accept extends to [`nd::ANCHOR_SEED_RUNS`] runs
-    /// (decision 54), so the anchor a caller seeds from the batch is not
-    /// biased by the bar's stopping rule; a reject stops at the bar. An
+    /// never saw fail. An accept extends to [`nd::ANCHOR_SEED_RUNS`] runs,
+    /// so the anchor a caller seeds from the batch is not biased by the
+    /// bar's stopping rule; a reject stops at the bar. An
     /// expired `deadline` (passed only by the final replay's review)
     /// rejects before the next replay — a batch cut short proves nothing;
     /// the accept extension runs unchecked, bounded by
     /// [`nd::ANCHOR_SEED_RUNS`]. Every failing run is grafted into the
-    /// graph (unless foreign) and the next replay walks the grafted graph
-    /// (experiment 020): the counterexample under confirmation is the one
-    /// the batch will store, and a failure with many structures — each
+    /// graph (unless foreign) and the next replay walks the grafted graph:
+    /// the counterexample under confirmation is the one the batch will
+    /// store, and a failure with many structures — each
     /// reproducing rarely from a single run — confirms as the batch learns
     /// them.
     async fn nd_evidence_batch(
@@ -2155,22 +2100,22 @@ impl<'a> Engine<'a> {
     }
 
     /// Backtrack over `origin`'s history for the reproduction boundary —
-    /// the newest entry that still reproduces (seam plan step 4, gate
-    /// G25). Probes are single continuation-tolerant replays: the accept
+    /// the newest entry that still reproduces. Probes are single
+    /// continuation-tolerant replays: the accept
     /// segment at geometric offsets from the newest plus its oldest entry
     /// and every raw sighting, then binary refinement between the newest
     /// reproducing probe and its nearest newer non-reproducing one, capped
     /// at [`BACKTRACK_SCAN_REPLAYS`] in total. The best candidate faces
     /// the full discovery bar, spending the origin's
     /// [`nd::BACKTRACK_BAR_ATTEMPTS`]-batch budget — held across
-    /// backtracks of the same origin (decision 72); a
+    /// backtracks of the same origin; a
     /// reject resumes the scan on the older side, and with no reproducing
     /// probe the remaining replay budget goes on a second pass before
     /// giving up. A cleared bar confirms the origin — witness and anchor
     /// from the batch's extension, the scan's other reproducing entries
     /// grafted into its graph — and the restored incumbent supersedes the
     /// barred shrunk save. Scan errors bias old: a too-old restore
-    /// re-shrinks under the gauntlet (decision 2), a too-new one anchors
+    /// re-shrinks under the gauntlet, a too-new one anchors
     /// low or gets rejected. Every probe walks the entry's run as a graph.
     async fn backtrack(&mut self, origin: &str) -> Result<Backtrack, RunError> {
         let mut entries: Vec<(Arc<Graph>, usize, bool)> = Vec::new();
@@ -2328,14 +2273,6 @@ impl<'a> Engine<'a> {
             let anchor = batch.evidence.lower_bound();
             let mut graph = batch.graph;
             let mut longest = batch.longest;
-            #[cfg(feature = "__bench")]
-            let history_bytes: usize = self.origins.get(origin).map_or(0, |c| {
-                c.history()
-                    .entries()
-                    .iter()
-                    .map(|e| e.nodes.len() * core::mem::size_of::<ChoiceNode>())
-                    .sum()
-            });
             let (nodes, spans) = self
                 .origins
                 .get(origin)
@@ -2357,16 +2294,6 @@ impl<'a> Engine<'a> {
                 (batch.evidence.fails(), batch.evidence.runs()),
             );
             confirmed?;
-            #[cfg(feature = "__bench")]
-            {
-                let best = accepts.last().copied().unwrap_or(candidate);
-                nd::seam_dump::record(nd::seam_dump::SeamEvent::Backtrack {
-                    origin: origin.to_string(),
-                    restored: entry_values[candidate].clone(),
-                    history_best: entry_values[best].clone(),
-                    history_bytes,
-                });
-            }
             let restored = self.origins.entry(origin);
             restored.replace(nodes.clone(), spans.clone());
             let state = restored.repro_state()?;
@@ -2375,15 +2302,15 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// The boost phase (experiment 006) — successive halving over the
+    /// The boost phase — successive halving over the
     /// incumbent and probe mutants of it, scored by failure rate under
     /// budgeted replay. Returns a witness run and new anchor when the
     /// winner's holdout LCB beats the confirmation anchor (holdout because
     /// the in-race rate of a halving winner is selection-biased upward). A
-    /// winner other than the incumbent is installed as the counterexample
-    /// (decision 78): its witness run grafted into the stored graph, or
-    /// alone when foreign to it. Run before shrinking only when the anchor
-    /// sits below [`nd::BOOST_RELIABILITY_FLOOR`] (gate G2).
+    /// winner other than the incumbent is installed as the counterexample:
+    /// its witness run grafted into the stored graph, or alone when foreign
+    /// to it. Run before shrinking only when the anchor
+    /// sits below [`nd::BOOST_RELIABILITY_FLOOR`].
     async fn nd_boost(
         &mut self,
         origin: &str,
@@ -2477,7 +2404,7 @@ impl<'a> Engine<'a> {
         })
     }
 
-    /// Targeting under ND handling (decision 68, experiment 013): the
+    /// Targeting under ND handling: the
     /// per-label counterpart of [`crate::native::targeting::Optimiser`],
     /// with every single-run trust point replaced by measurement. Each
     /// label's recorded best is selection-biased seed material, never a
@@ -2755,8 +2682,7 @@ impl<'a> Engine<'a> {
         Ok(Some(run.nodes.iter().map(|n| n.value()).collect()))
     }
 
-    /// The universal first-interesting determinism check (seam plan step
-    /// 2, extending decision 21's principle to every run): before anything
+    /// The universal first-interesting determinism check: before anything
     /// else consumes a generation-discovered origin, its incumbent sighting
     /// at sweep time (in-batch displacement may already have replaced the
     /// discovery) replays [`FIRST_CHECK_REPLAYS`] times exactly, stopping at
@@ -2769,7 +2695,7 @@ impl<'a> Engine<'a> {
     /// starts partially filled. All-reproduce marks the origin checked.
     /// Pre-flip only (`nd_force` starts flipped and skips it); reuse
     /// reproductions are exempted at the reuse site, and origins first
-    /// admitted at shrink verify or final replay keep decision 35's path.
+    /// admitted at shrink verify or final replay are checked there instead.
     /// Shares [`Self::nd_discovery_sweep`]'s call sites, running first.
     async fn first_check_sweep(&mut self) -> Result<(), RunError> {
         while !self.nd_handling() {
@@ -2794,8 +2720,6 @@ impl<'a> Engine<'a> {
                     return Err(err);
                 }
                 self.origins.entry(&origin).seed_evidence(evidence);
-                #[cfg(feature = "__bench")]
-                self.seam_flip(nd::seam_dump::FlipSite::FirstCheck);
                 self.nd_flip();
             }
         }
@@ -2834,12 +2758,12 @@ impl<'a> Engine<'a> {
         Ok((None, evidence))
     }
 
-    /// Experiment 005: confirm every interesting origin that hasn't passed
-    /// the discovery bar yet. Swept after each generation iteration (and once
+    /// Confirm every interesting origin that hasn't passed the discovery
+    /// bar yet. Swept after each generation iteration (and once
     /// after the loop) rather than keyed on the iteration's own run, because
     /// span-mutation and targeting executions also fill vacant origins.
     /// Loops because confirmation replays can themselves discover origins.
-    /// Each batch spends the origin's per-run bar budget (decision 72); at
+    /// Each batch spends the origin's per-run bar budget; at
     /// the cap the origin is rejected and evicted without a batch.
     async fn nd_discovery_sweep(
         &mut self,
@@ -2864,7 +2788,7 @@ impl<'a> Engine<'a> {
                         "nd discovery confirm: origin={origin} out of bar attempts"
                     ));
                 }
-                self.reject_origin(&origin, (0, 0), false);
+                self.reject_origin(&origin, (0, 0));
                 continue;
             }
             let (graph, longest) = self.replay_source(&origin)?;
@@ -2891,7 +2815,7 @@ impl<'a> Engine<'a> {
                 confirmed?;
                 self.record_nd_incumbent(&origin)?;
             } else {
-                self.reject_origin(&origin, evidence, false);
+                self.reject_origin(&origin, evidence);
             }
         }
     }
@@ -2926,23 +2850,11 @@ impl<'a> Engine<'a> {
 
     /// The discovery bar rejected `origin` with `evidence`: record it and
     /// evict the incumbent unless the origin is trusted or confirmed
-    /// ([`Counterexample::reject`]), logging an eviction for the seam dump.
-    #[cfg_attr(not(feature = "__bench"), allow(unused_variables))]
-    fn reject_origin(&mut self, origin: &str, evidence: (u64, u64), at_final_replay: bool) {
-        let evicted = self.origins.entry(origin).reject(evidence);
-        #[cfg(feature = "__bench")]
-        if let Some(nodes) = evicted {
-            nd::seam_dump::record(nd::seam_dump::SeamEvent::Evict {
-                origin: origin.to_string(),
-                values: nodes.iter().map(|n| n.value()).collect(),
-                at_final_replay,
-            });
-        }
+    /// ([`Counterexample::reject`]).
+    fn reject_origin(&mut self, origin: &str, evidence: (u64, u64)) {
+        self.origins.entry(origin).reject(evidence);
     }
 
-    /// Persist `origin`'s counterexample as a version-3 entry carrying its
-    /// graph — the validated-persistence points under ND handling
-    /// (confirmation, gauntlet accepts, and boost).
     /// Confirm `origin` from an evidence batch's graph, longest run and
     /// physical evidence, without a witness of its own, and persist it.
     fn confirm_batch(
@@ -3018,12 +2930,6 @@ impl<'a> Engine<'a> {
         if mismatch.is_some()
             && self.settings.nondeterminism_strictness != NondeterminismStrictness::Error
         {
-            #[cfg(feature = "__bench")]
-            self.seam_flip(self.flip_site_hint.unwrap_or(if self.check_window {
-                nd::seam_dump::FlipSite::FirstCheck
-            } else {
-                nd::seam_dump::FlipSite::CacheMismatch
-            }));
             self.nd_flip();
             mismatch = None;
         }
@@ -3033,8 +2939,8 @@ impl<'a> Engine<'a> {
     /// Record one executed test case: the execution cache and kind ledger
     /// (via [`Self::record_execution`]), counters, test time, triviality,
     /// the targeting observations (generation runs only; under `nd_active`
-    /// they are selection-biased seed material for the measured race,
-    /// decision 68), the per-origin interesting
+    /// they are selection-biased seed material for the measured race), the
+    /// per-origin interesting
     /// map (with its incremental database save and history entry), and the
     /// bug-window markers. Pre-flip, a measurement run leaves the
     /// interesting map, the database, and history untouched — check and
@@ -3107,7 +3013,7 @@ impl<'a> Engine<'a> {
     /// the duplicate-stop counter (generation-window, non-measurement cases
     /// only) and, on a verdict change, reports the flake the tree could
     /// never see. The returned error is `NonDeterministic` for kind drift
-    /// and `Flaky` for a verdict change (decision 30's split); the caller
+    /// and `Flaky` for a verdict change; the caller
     /// keeps it under `error` strictness and flips otherwise.
     fn record_execution(
         &mut self,
@@ -3211,11 +3117,10 @@ impl<'a> Engine<'a> {
     /// `extend` random draws past the end of `choices` otherwise — and its
     /// conclusion enters the cache so a later repeat is served. The tree's
     /// predictions beyond exact repeats (trailing-unread proposals,
-    /// truncated-proposal overruns, pun resolution) are gone by measurement:
-    /// serves were ≈ exact repeats (`notes/experiments/010-tree-value`).
-    /// Under nondeterministic handling nothing is served: identical choices
-    /// need not produce identical outcomes, so every replay executes the
-    /// body (`notes/experiments/002-cache-seam`).
+    /// truncated-proposal overruns, pun resolution) are gone: measured over
+    /// the suite, its serves were almost all exact repeats. Under
+    /// nondeterministic handling nothing is served: identical choices need
+    /// not produce identical outcomes, so every replay executes the body.
     pub(crate) async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
@@ -3322,7 +3227,7 @@ impl ShrinkProbe for EngineShrinkProbe<'_, '_> {
     }
 }
 
-/// The engine side of the graph shrinker's [`GraphProbe`] (decision 78):
+/// The engine side of the graph shrinker's [`GraphProbe`]:
 /// every replay is a measurement run of the candidate graph, every charge
 /// goes to the origin's gauntlet budget, and an accepted candidate is
 /// installed as the origin's counterexample and persisted at once.

@@ -6,16 +6,13 @@
 //! - the **incumbent**, the best failing execution it holds — the reported
 //!   example and the graph shrinker's witness — with the spans it was
 //!   realized under, which give its draws their addresses;
-//! - the **graph** ([`Graph`], decision 78): the origin's failing executions
+//! - the **graph** ([`Graph`]): the origin's failing executions
 //!   captured when it was confirmed, reproduced, or shrunk, merged by the
 //!   state each draw was made in and replayed as one test case;
 //! - its [`Standing`] — how far the failure is believed — and the replay
-//!   evidence behind that belief, which the report's caveat quotes
-//!   (decision 3);
-//! - the pre-flip **history** a late nondeterminism detection backtracks over
-//!   (decision 66);
-//! - the per-run **budgets** the repeated statistical tests spend
-//!   (decision 72).
+//!   evidence behind that belief, which the report's caveat quotes;
+//! - the pre-flip **history** a late nondeterminism detection backtracks over;
+//! - the per-run **budgets** the repeated statistical tests spend.
 //!
 //! One value per origin lives in `Engine::origins`. The stored form of a
 //! counterexample under nondeterministic handling — a version-3 database
@@ -24,7 +21,7 @@
 //! incumbent's values alone, as it always has.
 //!
 //! Two rules of the design are enforced here rather than at call sites.
-//! Confirmation gates admission (decisions 20, 21, 24): a raw interesting
+//! Confirmation gates admission: a raw interesting
 //! execution founds or shortlex-displaces an incumbent through
 //! [`Counterexample::adopt`], which the engine only calls while the run is
 //! deterministic or the origin is vacant; a rejection evicts the incumbent
@@ -56,7 +53,7 @@ use crate::native::test_runner::RunResult;
 /// [`Counterexample`]'s methods implement: `Unconfirmed → Confirmed` is a
 /// discovery-bar accept (the post-generation sweep, shrink admission, a
 /// backtrack, or the final replay's review handing its reproducing run to
-/// a fresh batch — decision 72); `Unconfirmed → Trusted` is database or
+/// a fresh batch); `Unconfirmed → Trusted` is database or
 /// blob reproduction; `Trusted → Confirmed` is promotion by a failing
 /// evidence batch. Rejection never demotes and never removes state.
 #[derive(Default)]
@@ -67,15 +64,14 @@ pub(crate) enum Standing {
     #[default]
     Unconfirmed,
     /// Reproduced from stored state: exempt from the bar's verdict and from
-    /// eviction (decision 24). Carries the stored graph but no anchor until
+    /// eviction. Carries the stored graph but no anchor until
     /// an evidence batch promotes it.
     Trusted,
     /// Past the discovery bar, or promoted from `Trusted` by a failing
     /// evidence batch.
     Confirmed {
         /// Failure-rate anchor the gauntlet prices shrink candidates
-        /// against; monotone, raised only by validated accepts
-        /// (decision 19).
+        /// against; monotone, raised only by validated accepts.
         anchor: f64,
         /// The confirmation run the shrinker starts from; taken once.
         witness: Option<Box<RunResult>>,
@@ -101,8 +97,8 @@ impl HistoryEntry {
 
 /// Everything a never-confirmed origin failed with before any flip: raw
 /// sightings and shrink accepts alike, in execution order, deduplicated by
-/// serialized choices, unbounded (gate G24: a recency bound evicts exactly
-/// the entries an early slip-in needs). A late flip backtracks over these
+/// serialized choices, unbounded: a recency bound would evict exactly the
+/// early entries a late detection needs. A late flip backtracks over these
 /// to find the reproduction boundary. Dropped when the origin confirms —
 /// the graph takes over — which also keeps the accept segment sorted: no
 /// post-restore accept is ever recorded.
@@ -155,7 +151,7 @@ pub(crate) struct Counterexample {
     /// The spans the incumbent was realized under: what gives its draws
     /// their addresses in the graph.
     incumbent_spans: Vec<Span>,
-    /// The counterexample graph, once confirmed or trusted (decision 78);
+    /// The counterexample graph, once confirmed or trusted;
     /// the graph shrinker moves it.
     graph: Option<Arc<Graph>>,
     /// The flattened length of the longest failing run the graph holds:
@@ -174,7 +170,7 @@ pub(crate) struct Counterexample {
     report_fails: u64,
     report_replays: u64,
     /// Starting evidence for the next evidence batch, deposited by the
-    /// first-interesting check's replays (seam plan step 2) so the discovery
+    /// first-interesting check's replays so the discovery
     /// bar begins partially filled. Taken once.
     seed: Option<Evidence>,
     history: History,
@@ -184,14 +180,13 @@ pub(crate) struct Counterexample {
     /// already replayed once.
     first_checked: bool,
     /// Bar batches spent this run by the sweep, shrink admission, and the
-    /// final replay's review, capped at [`nd::BAR_ATTEMPTS_PER_RUN`]
-    /// (decision 72).
+    /// final replay's review, capped at [`nd::BAR_ATTEMPTS_PER_RUN`].
     bar_attempts: u64,
     /// Bar batches spent across this origin's backtracks, capped at
     /// [`nd::BACKTRACK_BAR_ATTEMPTS`] — a budget separate from
     /// `bar_attempts` because backtrack candidates come from history.
     backtrack_attempts: u64,
-    /// Gauntlet alpha-spending state (decision 72). Held here rather than
+    /// Gauntlet alpha-spending state. Held here rather than
     /// on the shrink probe so a re-shrink's rebuilt probe keeps spending
     /// from the same budget.
     pub(crate) gauntlet_spend: GauntletSpend,
@@ -305,7 +300,7 @@ impl Counterexample {
     }
 
     /// Stored state reproduced this origin: trusted without re-running the
-    /// bar (decision 24). `stored` is the reproducing entry's graph and
+    /// bar. `stored` is the reproducing entry's graph and
     /// longest-run length (`None` for a version-1 entry, which carries no
     /// structure: the origin then replays as its incumbent's run).
     /// `evidence` is the reproducing replay batch's physical (fails,
@@ -376,7 +371,7 @@ impl Counterexample {
         Ok(())
     }
 
-    /// A validated move of the whole counterexample (decision 78): the
+    /// A validated move of the whole counterexample: the
     /// graph shrinker accepted `graph`, whose witness `nodes` (realized
     /// under `spans`) is the new incumbent, measured at `anchor` — which
     /// raises the stored anchor, never lowers it — with `longest` the
@@ -397,9 +392,8 @@ impl Counterexample {
     }
 
     /// A validated accept measured the failure rate at `anchor` (a gauntlet
-    /// accept or a boost holdout). Monotone: never lowers the stored anchor
-    /// (decision 19), and a no-op unless confirmed — an anchor only exists
-    /// past the bar.
+    /// accept or a boost holdout). Monotone: never lowers the stored anchor,
+    /// and a no-op unless confirmed — an anchor only exists past the bar.
     pub(crate) fn raise_anchor(&mut self, anchor: f64) {
         if let Standing::Confirmed { anchor: stored, .. } = &mut self.standing {
             if anchor > *stored {
@@ -483,7 +477,7 @@ impl Counterexample {
         self.first_checked = true;
     }
 
-    /// Spend one bar attempt (decision 72). False once the budget is gone:
+    /// Spend one bar attempt. False once the budget is gone:
     /// the caller treats the origin as a bar reject without running a
     /// batch.
     pub(crate) fn spend_bar_attempt(&mut self) -> bool {
@@ -500,7 +494,7 @@ impl Counterexample {
         self.backtrack_attempts < nd::BACKTRACK_BAR_ATTEMPTS
     }
 
-    /// Spend one backtrack bar attempt (decision 72): the budget holds
+    /// Spend one backtrack bar attempt: the budget holds
     /// across backtracks of the same origin, not per call.
     pub(crate) fn spend_backtrack_attempt(&mut self) -> bool {
         if !self.backtrack_attempts_left() {
@@ -511,7 +505,7 @@ impl Counterexample {
     }
 
     /// The caveat attached to this failure's report under nondeterministic
-    /// handling (decision 3): its standing with the in-run replay
+    /// handling: its standing with the in-run replay
     /// evidence, worded per the standing. Quotes only in-run measurements,
     /// and weights the environment-modification hypothesis only when
     /// non-reproduction is surprising given the evidence.
@@ -659,8 +653,8 @@ impl Counterexamples {
     }
 
     /// Origins observed but never confirmed — bar rejects and never-barred
-    /// sightings alike — in origin order: the caveated-failure report
-    /// (decision 3), used only when nothing confirmed (decision 24).
+    /// sightings alike — in origin order: the caveated-failure report, used
+    /// only when nothing confirmed.
     pub(crate) fn unconfirmed(&self) -> impl Iterator<Item = &str> {
         self.origins
             .iter()

@@ -1,4 +1,4 @@
-//! The flat replacements for the data tree (experiment 010): a two-tier
+//! The flat replacements for the data tree: a two-tier
 //! execution cache and a choice-kind ledger.
 //!
 //! The cache keys every executed conclusion on its realized choice values —

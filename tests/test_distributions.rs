@@ -727,8 +727,7 @@ mod recursive {
     /// pricing alone: the data tree's novelty forcing used to stretch
     /// chains toward the depth limit (the floors with it were 0.30 for
     /// 10+ and 0.08 for 25+), and restoring that spread is a
-    /// recursive-pricing follow-up, not a reason to keep the tree
-    /// (seam plan, phase 15).
+    /// recursive-pricing follow-up, not a reason to keep the tree.
     #[test]
     fn chain_only_trees_reach_deep_chains() {
         let vs = sample(4000, 0xE5, |tc| {

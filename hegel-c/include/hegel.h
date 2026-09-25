@@ -256,8 +256,7 @@ typedef enum {
 
  Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
  0.35 ABI break) is retired and must never be reused for a new meaning:
- bindings built against the old header may still compare against it
- (decision 27).
+ bindings built against the old header may still compare against it.
  */
 typedef enum {
     /*
@@ -1783,7 +1782,7 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  watches the run's observed behavior — verdict flips, replay misses —
  exactly as it does for any other test, and switches into
  nondeterministic handling (or aborts, under `error` strictness) only
- when those observations fire (decision 70).
+ when those observations fire.
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /
@@ -2423,7 +2422,7 @@ hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
 
  The engine stores the text verbatim: pass the full rendered form of the
  comment, in the comment syntax of the language being printed (e.g.
- `"  // like this"` or `"  (* like this *)"`), including any separating
+ `" // like this"` or `" (* like this *)"`), including any separating
  whitespace.
 
  `text` follows the same rules as `hegel_printer_text` (UTF-8, no

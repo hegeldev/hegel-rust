@@ -1384,8 +1384,8 @@ fn interesting_with_null_origin_synthesizes_placeholder() {
 
 /// A full run over a concurrent, intermittently-failing body enters
 /// nondeterministic handling when the engine observes a verdict flip
-/// (decision 70: creating a `max_concurrency > 1` machine declares
-/// nothing): the bug is confirmed by replay and shrunk, and the run
+/// (creating a `max_concurrency > 1` machine declares nothing by itself):
+/// the bug is confirmed by replay and shrunk, and the run
 /// reports `HEGEL_RUN_STATUS_FAILED` with a reproduce blob and a
 /// confirmation caveat. The engine stamps the replay executions it makes
 /// for the report (`hegel_test_case_should_capture`).
@@ -1492,8 +1492,7 @@ fn concurrent_run_failure_has_blob_and_caveat() {
 /// Drain `run` with an intermittently-failing body that creates a
 /// concurrent state machine, marking most completed cases interesting at
 /// `origin` and every eighth one valid — the verdict flips the engine
-/// observes are what put the run into nondeterministic handling
-/// (decision 70).
+/// observes are what put the run into nondeterministic handling.
 unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, origin: &CString) {
     let rule = CString::new("only").unwrap();
     let mut executions = 0usize;

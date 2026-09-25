@@ -1,5 +1,4 @@
-//! The counterexample as a graph of draws (decision 78; experiments
-//! 017–019).
+//! The counterexample as a graph of draws.
 //!
 //! A nondeterministic failure is not one choice sequence: the test's
 //! structure after a draw may depend on a hidden coin, so its failing
