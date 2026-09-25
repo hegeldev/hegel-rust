@@ -22,6 +22,7 @@ pub struct Workload {
 pub struct Options {
     pub test_cases: u64,
     pub seed: u64,
+    pub trace: bool,
 }
 
 fn settings(kind: Kind, options: &Options) -> Settings {
@@ -33,7 +34,11 @@ fn settings(kind: Kind, options: &Options) -> Settings {
         .test_cases(options.test_cases)
         .seed(Some(options.seed))
         .database(None)
-        .verbosity(Verbosity::Quiet)
+        .verbosity(if options.trace {
+            Verbosity::Debug
+        } else {
+            Verbosity::Quiet
+        })
         .print_blob(false)
         .phases(phases)
         .suppress_health_check([HealthCheck::TooSlow])
@@ -54,7 +59,7 @@ pub fn measured(workload: &Workload, options: &Options) -> (u64, bool) {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: hegel-bench <workload> [--repeat N] [--test-cases N] [--seed N]\n       hegel-bench --list"
+        "usage: hegel-bench <workload> [--repeat N] [--test-cases N] [--seed N] [--trace]\n       hegel-bench --list\n\n--trace runs at debug verbosity, so two builds' outputs can be diffed."
     );
     exit(2);
 }
@@ -78,11 +83,17 @@ fn main() {
     let mut options = Options {
         test_cases: 100,
         seed: 0,
+        trace: false,
     };
     let mut i = 1;
     while i < args.len() {
         let value = || args.get(i + 1).and_then(|v| v.parse::<u64>().ok());
         match args[i].as_str() {
+            "--trace" => {
+                options.trace = true;
+                i += 1;
+                continue;
+            }
             "--repeat" => repeat = value().unwrap_or_else(|| usage()),
             "--test-cases" => options.test_cases = value().unwrap_or_else(|| usage()),
             "--seed" => options.seed = value().unwrap_or_else(|| usage()),

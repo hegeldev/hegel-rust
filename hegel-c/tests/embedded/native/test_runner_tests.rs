@@ -827,6 +827,57 @@ fn span_mutation_handles_same_label_spans_sharing_a_start() {
     );
 }
 
+fn distinct_label_spans(count: usize) -> Vec<Span> {
+    (0..count)
+        .map(|i| Span {
+            start: i,
+            end: i + 1,
+            label: i as u64,
+            depth: 0,
+            parent: None,
+            discarded: false,
+        })
+        .collect()
+}
+
+#[test]
+fn span_mutation_skips_a_case_whose_labels_are_all_distinct() {
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true)];
+            let spans = distinct_label_spans(2);
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert_eq!(count.get(), 0);
+            assert_eq!(ctx.calls, 0);
+        },
+    );
+}
+
+#[test]
+fn span_mutation_skips_a_large_case_whose_labels_are_all_distinct() {
+    with_counting_ctx(
+        |ds| match rbool(ds) {
+            Ok(_) => TestCaseResult::Valid,
+            Err(()) => TestCaseResult::Overrun,
+        },
+        async |ctx, count| {
+            let nodes: Vec<ChoiceNode> = (0..40).map(|i| bool_node(i % 2 == 0)).collect();
+            let spans = distinct_label_spans(40);
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert_eq!(count.get(), 0);
+            assert_eq!(ctx.calls, 0);
+        },
+    );
+}
+
 #[test]
 fn span_mutation_stops_when_example_budget_is_full() {
     with_counting_ctx(

@@ -84,6 +84,12 @@ const RANDOM_GENERATION_BATCH: u64 = 10;
 const DUPLICATE_STOP: u64 = RANDOM_GENERATION_BATCH;
 const SPAN_MUTATION_ATTEMPTS: usize = 5;
 
+/// Up to this many spans, `try_span_mutation` looks for a repeated label
+/// with a pairwise scan, which allocates nothing; a test case with more
+/// spans is grouped by label directly, since it nearly always repeats one
+/// (a label repeats as soon as any generator is drawn from twice).
+const SPAN_MUTATION_SCAN: usize = 32;
+
 /// Maximum number of *total* filtered (assume()-failed) test cases — counted
 /// while fewer than [`HEALTH_CHECK_MAX_VALID`] valid test cases have been seen —
 /// before FilterTooMuch is reported. Mirrors Hypothesis's `max_invalid_draws`
@@ -1466,31 +1472,37 @@ impl<'a> Engine<'a> {
         nodes: &[ChoiceNode],
         spans: &[Span],
     ) -> Result<(), RunError> {
-        let mut labelled: Vec<(u64, usize, usize)> =
-            spans.iter().map(|s| (s.label, s.start, s.end)).collect();
-        labelled.sort_unstable();
-        labelled.dedup();
-        if !labelled.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        if self.valid_test_cases >= self.settings.test_cases {
+            return Ok(());
+        }
+        if spans.len() <= SPAN_MUTATION_SCAN
+            && spans
+                .iter()
+                .enumerate()
+                .all(|(i, s)| spans[..i].iter().all(|t| t.label != s.label))
+        {
             return Ok(());
         }
 
-        let mut by_label: crate::native::HashMap<u64, crate::native::HashSet<(usize, usize)>> =
+        let mut by_label: crate::native::HashMap<u64, Vec<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {
             by_label
                 .entry(span.label)
                 .or_default()
-                .insert((span.start, span.end));
+                .push((span.start, span.end));
         }
         let multi: Vec<Vec<(usize, usize)>> = by_label
             .into_values()
-            .filter(|v| v.len() >= 2)
-            .map(|v| {
-                let mut items: Vec<(usize, usize)> = v.into_iter().collect();
-                items.sort();
-                items
+            .filter_map(|mut items| {
+                items.sort_unstable();
+                items.dedup();
+                (items.len() >= 2).then_some(items)
             })
             .collect();
+        if multi.is_empty() {
+            return Ok(());
+        }
 
         let values: Vec<ChoiceValue> = nodes.iter().map(|n| n.value()).collect();
 
