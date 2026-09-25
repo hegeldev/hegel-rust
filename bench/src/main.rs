@@ -16,7 +16,7 @@ pub enum Kind {
 pub struct Workload {
     pub name: &'static str,
     pub kind: Kind,
-    pub body: fn(&TestCase),
+    pub body: fn(TestCase),
 }
 
 pub struct Options {
@@ -50,7 +50,7 @@ pub fn measured(workload: &Workload, options: &Options) -> (u64, bool) {
     let body = workload.body;
     let run = Hegel::new(|tc: TestCase| {
         cases.set(cases.get() + 1);
-        body(&tc);
+        body(tc);
     })
     .settings(settings(workload.kind, options));
     let failed = catch_unwind(AssertUnwindSafe(|| run.run())).is_err();
