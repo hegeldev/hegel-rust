@@ -259,7 +259,7 @@ fn data_observer_conclude_test_default_is_no_op() {
 
 #[test]
 fn weighted_with_p_zero_returns_false_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc.weighted(0.0, None).ok().unwrap();
     assert!(!v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -267,7 +267,7 @@ fn weighted_with_p_zero_returns_false_without_consulting_rng() {
 
 #[test]
 fn weighted_with_p_one_returns_true_without_consulting_rng() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc.weighted(1.0, None).ok().unwrap();
     assert!(v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -275,7 +275,7 @@ fn weighted_with_p_one_returns_true_without_consulting_rng() {
 
 #[test]
 fn weighted_with_explicit_forced_records_forced_node() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc.weighted(0.5, Some(true)).ok().unwrap();
     assert!(v);
     assert!(tc.nodes.last().unwrap().was_forced);
@@ -463,7 +463,7 @@ fn stop_span_closes_nested_spans_innermost_first() {
 #[test]
 fn draw_float_unbounded_with_nan_can_produce_nan() {
     for seed in 0..200u64 {
-        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
+        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let v = tc
             .draw_float(f64::NEG_INFINITY, f64::INFINITY, true, true, 5e-324)
             .ok()
@@ -477,7 +477,7 @@ fn draw_float_unbounded_with_nan_can_produce_nan() {
 
 #[test]
 fn draw_float_half_bounded_below_explores_finite_range() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     let v = tc
         .draw_float(1.0, f64::INFINITY, false, false, 5e-324)
         .ok()
@@ -1385,7 +1385,7 @@ fn fresh_id_kind_max(tc: &NativeTestCase, i: usize) -> BigInt {
 
 #[test]
 fn draw_fresh_id_hands_out_sequential_ids_during_generation() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
     assert_eq!(tc.draw_fresh_id().unwrap(), 2);
@@ -1467,8 +1467,7 @@ fn draw_fresh_id_repairs_a_used_prefix_id_to_the_smallest_unused() {
 fn draw_fresh_id_fills_gaps_when_generating_past_the_prefix() {
     let choices = [ChoiceValue::Integer(BigInt::from(1))];
     let mut tc = NativeTestCase::for_choices_and_template(&choices, None, None, BUFFER_SIZE, None)
-        .with_random(EngineRng::seeded(0))
-        .unwrap();
+        .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 1);
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert_eq!(tc.draw_fresh_id().unwrap(), 2);
@@ -1481,7 +1480,7 @@ fn draw_fresh_id_fills_gaps_when_generating_past_the_prefix() {
 /// smallest unused id.
 #[test]
 fn draw_fresh_id_continues_across_clone_streams_without_collisions() {
-    let mut parent = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut parent = NativeTestCase::new_random(EngineRng::seeded(0));
     assert_eq!(parent.draw_fresh_id().unwrap(), 0);
     assert_eq!(parent.draw_fresh_id().unwrap(), 1);
     assert_eq!(parent.draw_fresh_id().unwrap(), 2);
@@ -1514,8 +1513,7 @@ fn draw_fresh_id_notifies_the_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
-        .with_random(EngineRng::seeded(0))
-        .unwrap();
+        .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     let recorded = captured.lock().unwrap().take();
     assert_eq!(recorded, Some((BigInt::from(0), false)));
@@ -1544,7 +1542,7 @@ fn fresh_ids_track_the_smallest_unused_id_across_gaps() {
 fn draw_from_set_generates_a_member_and_records_it_by_value() {
     let members = [4, 9];
     for seed in 0..10 {
-        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
+        let mut tc = NativeTestCase::new_random(EngineRng::seeded(seed));
         for i in 0..10 {
             assert_eq!(tc.draw_fresh_id().unwrap(), i);
         }
@@ -1622,8 +1620,7 @@ fn draw_from_set_notifies_the_observer() {
         captured: captured.clone(),
     });
     let mut tc = NativeTestCase::for_choices_and_template(&[], None, None, 4, Some(obs))
-        .with_random(EngineRng::seeded(0))
-        .unwrap();
+        .with_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     let chosen = tc.draw_from_set(&[0]).unwrap();
     assert_eq!(chosen, 0);
@@ -1633,19 +1630,19 @@ fn draw_from_set_notifies_the_observer() {
 
 #[test]
 fn draw_from_set_with_no_members_is_an_internal_error() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     assert!(tc.draw_from_set(&[]).is_err());
 }
 
 #[test]
 fn draw_from_set_with_negative_members_is_an_internal_error() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     assert!(tc.draw_from_set(&[-1, 3]).is_err());
 }
 
 #[test]
 fn draw_from_set_with_members_beyond_the_registry_is_an_internal_error() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     assert_eq!(tc.draw_fresh_id().unwrap(), 0);
     assert!(tc.draw_from_set(&[7]).is_err());
 }
@@ -1709,7 +1706,7 @@ fn weighted_index_sample_of_a_single_positive_entry_is_that_entry() {
 
 #[test]
 fn draw_index_weighted_records_an_ordinary_index_choice() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3));
     let mut seen = [false; 3];
     for _ in 0..50 {
         let i = ntc.draw_index_weighted(&[0.0, 5.0, 5.0]).unwrap();
@@ -1753,7 +1750,7 @@ fn draw_index_weighted_simplest_is_zero() {
 
 #[test]
 fn consecutive_integer_nodes_under_one_constraint_share_it() {
-    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0));
     tc.draw_integer(BigInt::from(0), BigInt::from(10)).unwrap();
     tc.draw_integer(BigInt::from(0), BigInt::from(10)).unwrap();
     tc.draw_integer(BigInt::from(0), BigInt::from(20)).unwrap();
@@ -1764,4 +1761,51 @@ fn consecutive_integer_nodes_under_one_constraint_share_it() {
     assert!(core::ptr::eq(kind(2), kind(3)));
     assert_eq!(kind(0).max_value, BigInt::from(10));
     assert_eq!(kind(2).max_value, BigInt::from(20));
+}
+
+/// A probe draws the family's swarm parameters from its RNG only when it
+/// first uses that RNG: replaying its prefix costs no Dirichlet draw, and
+/// the values it then samples are the ones an up-front draw would give.
+#[test]
+fn probe_draws_swarm_parameters_on_first_rng_use_only() {
+    let prefix = [ChoiceValue::Integer(BigInt::from(3))];
+    let mut lazy = NativeTestCase::for_probe(&prefix, EngineRng::seeded(9), BUFFER_SIZE);
+    assert_eq!(lazy.draw_integer(0i64, 10).unwrap(), 3);
+    assert!(lazy.family().generation_parameters().is_none());
+    let first = lazy.draw_integer(0i64, 1_000_000).unwrap();
+    let params = lazy.family().generation_parameters().copied().unwrap();
+
+    let mut rng = EngineRng::seeded(9);
+    let eager_params = GenerationParameters::draw(&mut rng).unwrap();
+    assert_eq!(params, eager_params);
+    let mut eager = NativeTestCase::new_random_with_params(rng, eager_params, BUFFER_SIZE);
+    assert_eq!(eager.draw_integer(0i64, 1_000_000).unwrap(), first);
+}
+
+/// Spawning a clone stream is a use of the RNG too, so it draws the
+/// parameters first and the child samples exactly as it did when they were
+/// drawn up front.
+#[test]
+fn cloning_a_probe_stream_draws_the_swarm_parameters_before_spawning() {
+    let mut probe = NativeTestCase::for_probe(&[], EngineRng::seeded(13), BUFFER_SIZE);
+    let child = probe.clone_stream().unwrap();
+    let params = probe.family().generation_parameters().copied().unwrap();
+
+    let mut rng = EngineRng::seeded(13);
+    assert_eq!(params, GenerationParameters::draw(&mut rng).unwrap());
+    let mut eager = NativeTestCase::new_random_with_params(rng, params, BUFFER_SIZE);
+    let eager_child = eager.clone_stream().unwrap();
+    assert_eq!(
+        child.lock().draw_integer(0i64, 1_000_000).unwrap(),
+        eager_child.lock().draw_integer(0i64, 1_000_000).unwrap()
+    );
+}
+
+/// A bare replay has no RNG and so never gets parameters; the family reports
+/// none rather than inventing some.
+#[test]
+fn replay_only_family_has_no_swarm_parameters() {
+    let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(1))], None, None);
+    assert_eq!(tc.draw_integer(0i64, 10).unwrap(), 1);
+    assert!(tc.family().generation_parameters().is_none());
 }

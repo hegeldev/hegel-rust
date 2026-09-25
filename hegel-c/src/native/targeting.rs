@@ -128,7 +128,7 @@ impl Optimiser<'_, '_> {
             return Ok(None);
         }
         let bound = self.engine.choice_bound();
-        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), bound)?;
+        let ntc = NativeTestCase::for_probe(choices, self.engine.rng_spawn(), bound);
         let (run, mismatch) = self.engine.test_function(ntc).await?;
         if let Some(err) = mismatch {
             return Err(err);

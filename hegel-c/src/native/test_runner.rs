@@ -249,7 +249,7 @@ impl<'a> Engine<'a> {
                         continue;
                     };
                     let bound = self.choice_bound();
-                    let ntc = NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), bound)?;
+                    let ntc = NativeTestCase::for_probe(&stored_choices, self.rng.spawn(), bound);
                     let (run, mismatch) = self.test_function(ntc).await?;
                     if let Some(err) = mismatch {
                         return Err(err);
@@ -1392,7 +1392,7 @@ impl<'a> Engine<'a> {
             NativeTestCase::for_owned_choices(choices, nodes, None)
         } else {
             let budget = crate::native::core::flattened_values_len(&choices).saturating_add(extend);
-            NativeTestCase::for_owned_probe(choices, self.rng_spawn(), budget)?
+            NativeTestCase::for_owned_probe(choices, self.rng_spawn(), budget)
         }))
     }
 }

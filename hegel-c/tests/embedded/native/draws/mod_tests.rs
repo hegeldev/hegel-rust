@@ -17,7 +17,7 @@ fn float_spec(width: u32, min_value: f64, max_value: f64) -> FloatSpec {
 
 #[test]
 fn width_32_float_bounds_must_be_f32_representable() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3));
 
     for (min_value, max_value, bad) in [
         (1.0f64.next_up(), 2.0, "min_value"),
@@ -64,7 +64,7 @@ fn narrow_to_f32_keeps_overflowing_finite_draws_finite() {
 
 #[test]
 fn many_reject_marks_invalid_when_cannot_reach_min_size() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(1)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(1));
     let mut state = ManyState::new(6, Some(10));
     state.count = 5;
     state.rejections = 9;
@@ -79,7 +79,7 @@ fn many_reject_marks_invalid_when_cannot_reach_min_size() {
 
 #[test]
 fn many_more_respects_fixed_and_bounded_sizes() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(2)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(2));
     let mut fixed = ManyState::new(3, Some(3));
     let mut count = 0;
     while many_more(&mut ntc, &mut fixed).unwrap() {
@@ -262,7 +262,7 @@ fn new_recursion_state_draws_a_spread_of_targets() {
     let mut single = 0;
     let mut large = 0;
     for seed in 0..200 {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed));
         let state = new_recursion_state(&mut ntc, 32, 100).unwrap();
         assert!(state.target == 1 || (2..=100).contains(&state.target));
         if state.target == 1 {
@@ -279,7 +279,7 @@ fn new_recursion_state_draws_a_spread_of_targets() {
 #[test]
 fn new_recursion_state_with_a_tiny_budget_aims_for_a_single_leaf() {
     for max_leaves in [0, 1] {
-        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(23)).unwrap();
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(23));
         let state = new_recursion_state(&mut ntc, 32, max_leaves).unwrap();
         assert_eq!(state.target, 1);
         assert_eq!(
@@ -291,7 +291,7 @@ fn new_recursion_state_with_a_tiny_budget_aims_for_a_single_leaf() {
 
 #[test]
 fn recursion_pricing_never_moves_for_a_binary_branch_function() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(7)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(7));
     let mut state = recursion_state(32, 100, 1, &ntc);
     let priced = state.branch_probability;
     assert_eq!(priced, recursion_branch_probability(2.0, 2));
@@ -316,7 +316,7 @@ fn recursion_pricing_never_moves_for_a_binary_branch_function() {
 
 #[test]
 fn recursion_target_steering_drives_a_binary_tree_toward_its_target() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(29)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(29));
     let mut state = recursion_state(32, 100, 64, &ntc);
 
     let leaves = 'drawn: loop {
@@ -346,7 +346,7 @@ fn recursion_target_steering_drives_a_binary_tree_toward_its_target() {
 
 #[test]
 fn recursion_finish_reprices_a_chain_heavy_value_and_accepts_the_redraw() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(11)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(11));
     let base = ntc.span_depth();
     let mut state = recursion_state(32, 100, 1, &ntc);
     let priced = state.branch_probability;
@@ -381,7 +381,7 @@ fn recursion_finish_reprices_a_chain_heavy_value_and_accepts_the_redraw() {
 
 #[test]
 fn recursion_finish_reprices_an_undersized_value_with_a_reachable_target() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(31)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(31));
     let base = ntc.span_depth();
     let mut state = recursion_state(32, 100, 64, &ntc);
     state.closed_children = 8;
@@ -401,7 +401,7 @@ fn recursion_finish_reprices_an_undersized_value_with_a_reachable_target() {
 
 #[test]
 fn recursion_finish_accepts_an_undersized_value_whose_target_is_unreachable() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(37)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(37));
     let mut state = recursion_state(32, 100, 64, &ntc);
     for depth in 0..6 {
         state.observe_decision(depth);
@@ -415,7 +415,7 @@ fn recursion_finish_accepts_an_undersized_value_whose_target_is_unreachable() {
 
 #[test]
 fn recursion_finish_stops_repricing_at_the_cap() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(13)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(13));
     let mut state = recursion_state(32, 100, 1, &ntc);
 
     for round in 0..RECURSION_MAX_REPRICES {
@@ -438,7 +438,7 @@ fn recursion_finish_stops_repricing_at_the_cap() {
 
 #[test]
 fn recursion_finish_accepts_a_branchless_value_at_first_sight() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(17)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(17));
     let mut state = recursion_state(32, 100, 1, &ntc);
     let priced = state.branch_probability;
     state.observe_decision(0);
@@ -450,7 +450,7 @@ fn recursion_finish_accepts_a_branchless_value_at_first_sight() {
 
 #[test]
 fn recursion_retry_discards_partial_observations_and_halves_the_target() {
-    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(19)).unwrap();
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(19));
     let base = ntc.span_depth();
     let mut state = recursion_state(32, 100, 40, &ntc);
     let priced = state.branch_probability;

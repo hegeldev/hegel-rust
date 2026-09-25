@@ -1400,10 +1400,11 @@ pub struct FamilyCore {
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<FreshIds>,
-    /// This test case's swarm [`GenerationParameters`], drawn once when the
-    /// root stream's RNG is attached (see [`NativeTestCase::with_random`]) and
-    /// shared by every clone-stream so the whole case has one consistent
-    /// distribution. Unset for replay-only families, which never sample.
+    /// This test case's swarm [`GenerationParameters`], drawn once from the
+    /// root stream's RNG the first time that RNG is used (see
+    /// [`NativeTestCase::rng`]) and shared by every clone-stream so the whole
+    /// case has one consistent distribution. Unset for replay-only families,
+    /// which never sample, and for a probe until it draws past its prefix.
     generation_parameters: OnceBox<GenerationParameters>,
 }
 
@@ -1449,20 +1450,28 @@ impl FamilyCore {
         self.reject_concurrent_machine.load(Ordering::Relaxed)
     }
 
-    /// Record this test case's swarm parameters. Called once when the root
-    /// stream's RNG is attached; later calls (there are none in practice) are
-    /// ignored by the `OnceBox`.
+    /// Record swarm parameters the caller drew itself, as the exploration
+    /// loop does for each generated case; later calls (there are none in
+    /// practice) are ignored by the `OnceBox`.
     fn set_generation_parameters(&self, params: GenerationParameters) {
         let _ = self.generation_parameters.set(Box::new(params));
     }
 
-    /// This test case's swarm parameters, or [`GenerationParameters::default`]
-    /// if none were drawn (a replay-only family, which never samples).
-    pub(crate) fn generation_parameters(&self) -> GenerationParameters {
+    /// This test case's swarm parameters, or `None` while none have been
+    /// drawn: a replay-only family, or a probe still inside its prefix.
+    #[cfg(test)]
+    pub(crate) fn generation_parameters(&self) -> Option<&GenerationParameters> {
+        self.generation_parameters.get()
+    }
+
+    /// Draw this test case's swarm parameters from `rng`, or return the ones
+    /// already recorded.
+    fn draw_generation_parameters(
+        &self,
+        rng: &mut EngineRng,
+    ) -> Result<&GenerationParameters, InternalError> {
         self.generation_parameters
-            .get()
-            .copied()
-            .unwrap_or_default()
+            .get_or_try_init(|| GenerationParameters::draw(rng).map(Box::new))
     }
 
     /// The family's concluded status, or `None` while still running.
@@ -1569,7 +1578,7 @@ pub struct NativeTestCase {
 
 impl NativeTestCase {
     #[cfg(test)]
-    pub fn new_random(rng: EngineRng) -> Result<Self, InternalError> {
+    pub fn new_random(rng: EngineRng) -> Self {
         Self::for_choices_and_template(&[], None, None, super::BUFFER_SIZE, None).with_random(rng)
     }
 
@@ -1713,20 +1722,12 @@ impl NativeTestCase {
     /// `max_size` choices.
     ///
     /// Used by `mutate_and_shrink`.
-    pub fn for_probe(
-        prefix: &[ChoiceValue],
-        rng: EngineRng,
-        max_size: usize,
-    ) -> Result<Self, InternalError> {
+    pub fn for_probe(prefix: &[ChoiceValue], rng: EngineRng, max_size: usize) -> Self {
         Self::for_owned_probe(prefix.to_vec(), rng, max_size)
     }
 
     /// [`Self::for_probe`] taking ownership of `prefix`.
-    pub fn for_owned_probe(
-        prefix: Vec<ChoiceValue>,
-        rng: EngineRng,
-        max_size: usize,
-    ) -> Result<Self, InternalError> {
+    pub fn for_owned_probe(prefix: Vec<ChoiceValue>, rng: EngineRng, max_size: usize) -> Self {
         Self::for_owned_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
@@ -1735,12 +1736,14 @@ impl NativeTestCase {
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
     /// `max_size` rather than the bare-replay `usize::MAX`. Swarm parameters
-    /// are drawn from the RNG up front, before any value is sampled; the main
-    /// exploration loop draws its own and uses
+    /// are drawn from the RNG the first time it is used (see [`Self::rng`]),
+    /// so a probe that never draws past its prefix never draws them; the
+    /// main exploration loop draws its own and uses
     /// [`Self::with_random_and_params`] instead.
-    fn with_random(self, mut rng: EngineRng) -> Result<Self, InternalError> {
-        let params = GenerationParameters::draw(&mut rng)?;
-        Ok(self.with_random_and_params(rng, params))
+    fn with_random(mut self, rng: EngineRng) -> Self {
+        self.rng = Some(rng);
+        self.family.set_budget(self.max_size);
+        self
     }
 
     /// Attach an RNG and use the given, already-drawn swarm parameters (rather
@@ -1752,6 +1755,19 @@ impl NativeTestCase {
         self.rng = Some(rng);
         self.family.set_budget(self.max_size);
         self
+    }
+
+    /// This stream's RNG together with the family's swarm parameters, or
+    /// `None` for a bare replay. The parameters are drawn from the RNG on the
+    /// family's first use of it — ahead of any other use, so the values a
+    /// seed produces are the ones an up-front draw would have produced — and
+    /// a probe that stays inside its prefix never pays for them.
+    fn rng(&mut self) -> Result<Option<(&mut EngineRng, &GenerationParameters)>, InternalError> {
+        let Some(rng) = self.rng.as_mut() else {
+            return Ok(None);
+        };
+        let params = self.family.draw_generation_parameters(rng)?;
+        Ok(Some((rng, params)))
     }
 
     /// The family state shared by every stream of this test case.
@@ -1797,7 +1813,7 @@ impl NativeTestCase {
             ),
             _ => (Vec::new(), None),
         };
-        let child_rng = self.rng.as_mut().map(EngineRng::spawn);
+        let child_rng = self.rng()?.map(|(rng, _)| rng.spawn());
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
             count: None,
@@ -1976,9 +1992,9 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let params = self.family.generation_parameters();
-        let v =
-            self.draw_integer_from(&kind, |kind, rng| biased_integer_sample(kind, rng, params))?;
+        let v = self.draw_integer_from(&kind, |kind, rng, params| {
+            biased_integer_sample(kind, rng, *params)
+        })?;
 
         Ok(hegel_internal_unwrap!(
             T::try_from(v).ok(),
@@ -2007,7 +2023,7 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let v = self.draw_integer_from(&kind, |_, rng| {
+        let v = self.draw_integer_from(&kind, |_, rng, _| {
             Ok(BigInt::from(rng.random_range(min_value..=max_value)))
         })?;
 
@@ -2034,7 +2050,7 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let v = self.draw_integer_from(&kind, |_, rng| {
+        let v = self.draw_integer_from(&kind, |_, rng, _| {
             Ok(BigInt::from(weighted_index_sample(weights, rng) as u64))
         })?;
 
@@ -2050,7 +2066,11 @@ impl NativeTestCase {
     fn draw_integer_from(
         &mut self,
         kind: &IntegerChoice,
-        sample: impl Fn(&IntegerChoice, &mut EngineRng) -> Result<BigInt, InternalError>,
+        sample: impl Fn(
+            &IntegerChoice,
+            &mut EngineRng,
+            &GenerationParameters,
+        ) -> Result<BigInt, InternalError>,
     ) -> Result<BigInt, EngineError> {
         let (v, was_forced) = self.resolve_choice(
             || Ok(kind.simplest()),
@@ -2059,7 +2079,7 @@ impl NativeTestCase {
                 ChoiceValue::Integer(n) if kind.validate(n) => Some(n.clone()),
                 _ => None,
             },
-            |rng| sample(kind, rng),
+            |rng, params| sample(kind, rng, params),
         )?;
 
         if let Some(ref mut obs) = self.observer {
@@ -2169,7 +2189,7 @@ impl NativeTestCase {
                 }
                 _ => None,
             },
-            |_rng| Ok(BigInt::from(fallback)),
+            |_, _| Ok(BigInt::from(fallback)),
         )?;
 
         if let Some(ref mut obs) = self.observer {
@@ -2232,7 +2252,7 @@ impl NativeTestCase {
                 }
                 _ => None,
             },
-            |rng| {
+            |rng, _| {
                 let idx = rng.random_range(0..sorted.len());
                 Ok(BigInt::from(sorted[idx]))
             },
@@ -2288,7 +2308,7 @@ impl NativeTestCase {
                 ChoiceValue::Float(f) if kind.validate(*f) => Some(*f),
                 _ => None,
             },
-            |rng| biased_float_sample(&kind, rng),
+            |rng, _| biased_float_sample(&kind, rng),
         )?;
 
         self.nodes.push(ChoiceNode::float(kind, v, was_forced));
@@ -2315,7 +2335,7 @@ impl NativeTestCase {
                 ChoiceValue::Bytes(b) if kind.validate(b) => Some(b.clone()),
                 _ => None,
             },
-            |rng| biased_bytes_sample(&kind, rng),
+            |rng, _| biased_bytes_sample(&kind, rng),
         )?;
 
         self.nodes
@@ -2355,7 +2375,7 @@ impl NativeTestCase {
                 ChoiceValue::String(s) if kind.validate(s) => Some(s.clone()),
                 _ => None,
             },
-            |rng| biased_string_sample(&kind, rng),
+            |rng, _| biased_string_sample(&kind, rng),
         )?;
 
         self.nodes
@@ -2411,7 +2431,7 @@ impl NativeTestCase {
                     ChoiceValue::Boolean(b) => Some(*b),
                     _ => None,
                 },
-                |rng| Ok(sample(p, rng)),
+                |rng, _| Ok(sample(p, rng)),
             )?
         };
 
@@ -2444,13 +2464,15 @@ impl NativeTestCase {
     /// replay hands back a value proven to fit the draw. A prefix value
     /// that doesn't fit puns exactly as before: to the draw's `simplest()`
     /// when the stale value was its original kind's simplest, and to
-    /// `unit()` otherwise.
+    /// `unit()` otherwise. `random` samples from the stream's RNG under the
+    /// family's swarm parameters, which reach it only here: a replayed draw
+    /// never needs them.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
         unit: impl FnOnce() -> Result<V, InternalError>,
         from_prefix: impl FnOnce(&ChoiceValue) -> Option<V>,
-        random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
+        random: impl FnOnce(&mut EngineRng, &GenerationParameters) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
@@ -2482,11 +2504,11 @@ impl NativeTestCase {
             return Ok((value, false));
         }
 
-        let rng = hegel_internal_unwrap!(
-            self.rng.as_mut(),
+        let (rng, params) = hegel_internal_unwrap!(
+            self.rng()?,
             "resolve_choice: no RNG available for random generation"
         );
-        Ok((random(rng)?, false))
+        Ok((random(rng, params)?, false))
     }
 }
 
