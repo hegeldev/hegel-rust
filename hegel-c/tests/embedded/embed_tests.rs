@@ -420,13 +420,14 @@ fn data_source_for_blob_rejects_an_undecodable_blob() {
 fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budget() {
     use crate::native::blob::{NdReproState, encode_nd_failure};
     use crate::native::core::ChoiceValue;
-    use crate::native::graph::{Graph, Run, Step};
+    use crate::native::draws::LABEL_BOOLEAN;
+    use crate::native::graph::{DRAW_LABEL, Graph, Run, Step};
     use crate::settings::{Output, Verbosity};
     use std::sync::{Arc, Mutex};
     let state = NdReproState {
         graph: Graph::from_run(&Run {
             steps: alloc::vec![Step {
-                addr: alloc::vec![(28, 0)],
+                addr: alloc::vec![(LABEL_BOOLEAN, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Boolean(true),
             }],
         }),
