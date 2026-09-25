@@ -8,14 +8,14 @@ relative to `hegel-c/src/native/`.
 
 ## The problem
 
-Property-based testing rests on one invariant: given the same choice
+Classically, Hegel requires a key invariant: given the same choice
 sequence, the test does the same thing. Everything downstream assumes it —
 the shrinker judges a candidate by one execution, the database replays a
 stored example once and deletes it on a miss, the final replay reports
 the example it just re-ran, and a stored reproduce blob is expected to
 reproduce on the first attempt.
 
-Tests break the invariant in two distinct ways:
+Tests can break this invariant in two distinct ways:
 
 - **Outcome nondeterminism**: the same realized choice sequence passes
   once and fails once (a race, a timing window, an outside service).
@@ -29,9 +29,11 @@ Tests break the invariant in two distinct ways:
 
 Before this work either kind aborted the run as flaky, and concurrent
 state-machine tests were handled by a separate degraded regime with no
-shrinking, persistence, or blobs. The engine now handles both kinds for
-tests that fail at least around 10% of the time when replayed; that
-target sizes every budget below.
+shrinking, persistence, or blobs. The engine now handles both kinds,
+aiming to get good behaviour for tests that fail at least around
+10% of the time when replayed (which determines various budgets we set).
+Tests that fail less reliably than that may still work, but are hard
+to handle well and will often see much worse behaviour.
 
 ## Detection and the run's mode
 
@@ -58,7 +60,7 @@ for it:
   replayed.
 
 A stored database entry that no longer matches the test is staleness,
-never nondeterminism evidence: the engine only compares executions
+not nondeterminism evidence: the engine only compares executions
 within one run.
 
 The `nondeterminism_strictness` setting decides the reaction: `quiet`
