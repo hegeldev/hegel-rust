@@ -351,19 +351,18 @@ fn serialize_any_integer(buf: &mut Vec<u8>, v: &BigInt) {
 }
 
 /// The length-prefixed shortest little-endian two's-complement encoding of
-/// `v`: its native bytes with every top byte dropped that only repeats the
-/// sign of the byte below it, which is exactly what
-/// [`BigInt::to_signed_bytes_le`] produces.
+/// `v`, which is exactly what [`BigInt::to_signed_bytes_le`] produces: the
+/// bits below the run of sign copies, plus one sign bit, rounded up to
+/// whole bytes.
 fn serialize_native_integer(buf: &mut Vec<u8>, v: i128) {
-    let bytes = v.to_le_bytes();
-    let negative = v < 0;
-    let extension = if negative { 0xFF } else { 0x00 };
-    let mut len = bytes.len();
-    while len > 1 && bytes[len - 1] == extension && (bytes[len - 2] & 0x80 != 0) == negative {
-        len -= 1;
-    }
+    let significant = if v < 0 {
+        i128::BITS - v.leading_ones()
+    } else {
+        i128::BITS - v.leading_zeros()
+    };
+    let len = (significant / 8 + 1) as usize;
     buf.extend_from_slice(&(len as u32).to_le_bytes());
-    buf.extend_from_slice(&bytes[..len]);
+    buf.extend_from_slice(&v.to_le_bytes()[..len]);
 }
 
 /// Inverse of [`serialize_any_integer`]. Returns the decoded `BigInt` and the
