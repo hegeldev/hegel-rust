@@ -12,6 +12,7 @@ use crate::unicodedata;
 
 /// Character-alphabet constraints for a text draw, as accepted at the
 /// `hegel_string_generator_text` API surface.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TextAlphabet {
     /// Restrict to a codec's range: `"ascii"`, `"latin-1"` / `"iso-8859-1"`,
     /// or `"utf-8"` (the default full-Unicode range).
@@ -44,11 +45,39 @@ impl Default for TextAlphabet {
     }
 }
 
+/// How many distinct alphabets [`build_intervals`] keeps built sets for.
+/// Once full, the cache is emptied rather than evicting one at a time: a
+/// program with more live alphabets than this is building them from drawn
+/// values, and gets the uncached cost it had before.
+const ALPHABET_CACHE_LIMIT: usize = 64;
+
+/// The effective character alphabet for a text draw, shared between every
+/// generator built with the same constraints. Building a set is the
+/// expensive part of constructing a text generator (category scans, set
+/// algebra, and the per-alphabet memo the string draw keeps on the set), and
+/// tests that build their generators inside the test body construct one per
+/// test case; the cache makes the second construction a lookup.
+pub fn build_intervals(alphabet: &TextAlphabet) -> Result<Arc<IntervalSet>, EngineError> {
+    static CACHE: Lazy<Mutex<HashMap<TextAlphabet, Arc<IntervalSet>>>> =
+        Lazy::new(|| Mutex::new(HashMap::default()));
+
+    if let Some(cached) = CACHE.lock().get(alphabet) {
+        return Ok(Arc::clone(cached));
+    }
+    let intervals = Arc::new(compute_intervals(alphabet)?);
+    let mut cache = CACHE.lock();
+    if cache.len() >= ALPHABET_CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(alphabet.clone(), Arc::clone(&intervals));
+    Ok(intervals)
+}
+
 /// Build the effective character alphabet for a text draw. Mirrors
 /// Hypothesis's `charmap` handling: codec/codepoint bounds intersect,
 /// surrogates are always removed, category constraints apply over the whole
 /// codespace, and include/exclude character sets are applied last.
-pub fn build_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineError> {
+fn compute_intervals(alphabet: &TextAlphabet) -> Result<IntervalSet, EngineError> {
     let codec = alphabet.codec.as_deref();
     let (codec_min, codec_max): (u32, u32) = match codec {
         Some("ascii") => (0, 127),

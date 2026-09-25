@@ -279,7 +279,7 @@ impl StringSpec {
             ));
         }
         Ok(StringSpec::Text {
-            intervals: Arc::new(intervals),
+            intervals,
             min_size,
             max_size,
         })
