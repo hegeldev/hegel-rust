@@ -1,6 +1,7 @@
 //! Embedded tests for `src/native/graph.rs`.
 
 use super::*;
+use crate::native::HashSet;
 use crate::native::bignum::BigInt;
 use crate::native::core::choices::{BooleanChoice, IntegerChoice, RealizedStream};
 use crate::native::core::{CloneRecord, MAX_CLONE_DEPTH};
@@ -70,11 +71,52 @@ fn draw_addresses_follow_open_spans_with_sibling_ordinals() {
     assert_eq!(
         draw_addresses(&spans, 3),
         vec![
-            vec![(1, 0), (17, 0)],
-            vec![(1, 0), (17, 1)],
-            vec![(1, 1), (18, 0)],
+            vec![(1, 0), (17, 0), (DRAW_LABEL, 0)],
+            vec![(1, 0), (17, 1), (DRAW_LABEL, 0)],
+            vec![(1, 1), (18, 0), (DRAW_LABEL, 0)],
         ]
     );
+}
+
+/// Draws that open no span of their own — a collection's continue/stop
+/// booleans around its spanned elements — are told apart by the draw
+/// frame, which counts only the draws made directly in the innermost
+/// span, so the run's own graph walks it whole.
+#[test]
+fn bare_draws_in_one_span_get_distinct_addresses() {
+    let spans = vec![
+        span(0, 5, 1, None),
+        span(1, 2, 17, Some(0)),
+        span(3, 4, 17, Some(0)),
+    ];
+    let addrs = draw_addresses(&spans, 6);
+    assert_eq!(
+        addrs,
+        vec![
+            vec![(1, 0), (DRAW_LABEL, 0)],
+            vec![(1, 0), (17, 0), (DRAW_LABEL, 0)],
+            vec![(1, 0), (DRAW_LABEL, 1)],
+            vec![(1, 0), (17, 1), (DRAW_LABEL, 0)],
+            vec![(1, 0), (DRAW_LABEL, 2)],
+            vec![(DRAW_LABEL, 0)],
+        ]
+    );
+    let values = [
+        ChoiceValue::Boolean(true),
+        int(5),
+        ChoiceValue::Boolean(true),
+        int(6),
+        ChoiceValue::Boolean(false),
+        int(7),
+    ];
+    let r = run(addrs
+        .into_iter()
+        .zip(values)
+        .map(|(addr, value)| step(&addr, value))
+        .collect());
+    assert_eq!(r.idents().len(), 6);
+    assert_eq!(r.idents().iter().collect::<HashSet<_>>().len(), 6);
+    assert_eq!(Graph::from_run(&r).walk_verdict(&r), Walked::Whole);
 }
 
 #[test]
@@ -96,8 +138,8 @@ fn run_from_nodes_pairs_values_with_addresses() {
     assert_eq!(
         r,
         run(vec![
-            step(&[(20, 0)], ChoiceValue::Boolean(true)),
-            step(&[(17, 0)], int(4)),
+            step(&[(20, 0), (DRAW_LABEL, 0)], ChoiceValue::Boolean(true)),
+            step(&[(17, 0), (DRAW_LABEL, 0)], int(4)),
         ])
     );
     assert_eq!(r.values(), vec![ChoiceValue::Boolean(true), int(4)]);
@@ -598,6 +640,6 @@ fn run_from_nodes_leaves_out_forced_draws() {
     ];
     let r = Run::from_nodes(&nodes, &[span(1, 2, 17, None)]);
     assert_eq!(r.values(), vec![int(4)]);
-    assert_eq!(r.steps[0].addr, vec![(17, 0)]);
+    assert_eq!(r.steps[0].addr, vec![(17, 0), (DRAW_LABEL, 0)]);
     assert_eq!(r.idents(), vec![Ident::End]);
 }

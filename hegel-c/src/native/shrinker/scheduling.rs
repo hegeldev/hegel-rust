@@ -39,7 +39,7 @@ pub type ShrinkPassFn<'a> = Box<
 /// of the underlying pass and let the scheduler decide whether to call
 /// it again.
 pub struct ShrinkPass<'a> {
-    /// Display name. Read by `fixate_shrink_passes` for the per-pass
+    /// Display name.  Read by `fixate_shrink_passes` for the per-pass
     /// "Trying shrink pass: <name>" debug line and by
     /// `Shrinker::shrink`'s end-of-run profile report.
     pub name: &'static str,

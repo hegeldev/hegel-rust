@@ -12,6 +12,7 @@
 use super::*;
 use crate::native::core::BUFFER_SIZE;
 use crate::native::core::choices::BooleanChoice;
+use crate::native::graph::DRAW_LABEL;
 use alloc::vec;
 
 use crate::backend::{DataSource, Failure, TestCaseResult};
@@ -1034,14 +1035,18 @@ fn kind_label(value: &ChoiceValue) -> Option<u64> {
 }
 
 /// The address the engine gives a top-level draw of `value`'s kind: its
-/// kind span with the ordinal among same-label siblings.
+/// kind span with the ordinal among same-label siblings, then the draw
+/// frame — the first draw in its kind span, or the next bare top-level
+/// draw for a value without a kind span.
 fn draw_addr(value: &ChoiceValue, ordinals: &mut HashMap<u64, usize>) -> Vec<(u64, usize)> {
     let Some(label) = kind_label(value) else {
-        return Vec::new();
+        let bare = ordinals.entry(DRAW_LABEL).or_insert(0);
+        *bare += 1;
+        return vec![(DRAW_LABEL, *bare - 1)];
     };
     let ordinal = ordinals.entry(label).or_insert(0);
     *ordinal += 1;
-    vec![(label, *ordinal - 1)]
+    vec![(label, *ordinal - 1), (DRAW_LABEL, 0)]
 }
 
 /// The spans the engine records for top-level draws realizing `nodes`:
@@ -3349,11 +3354,11 @@ fn the_evidence_batch_replays_the_graph_it_grafts_into() {
             let raw = Arc::new(Graph::from_run(&Run {
                 steps: vec![
                     crate::native::graph::Step {
-                        addr: vec![(boolean, 0)],
+                        addr: vec![(boolean, 0), (DRAW_LABEL, 0)],
                         value: ChoiceValue::Boolean(true),
                     },
                     crate::native::graph::Step {
-                        addr: vec![(1001, 0), (boolean, 0)],
+                        addr: vec![(1001, 0), (boolean, 0), (DRAW_LABEL, 0)],
                         value: ChoiceValue::Boolean(true),
                     },
                 ],
@@ -5674,19 +5679,19 @@ fn branch_s() -> Run {
     Run {
         steps: vec![
             crate::native::graph::Step {
-                addr: vec![(BOOL, 0)],
+                addr: vec![(BOOL, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (BOOL, 0)],
+                addr: vec![(1, 0), (BOOL, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (BOOL, 1)],
+                addr: vec![(1, 0), (BOOL, 1), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(1, 0), (INT, 0)],
+                addr: vec![(1, 0), (INT, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Integer(BigInt::from(42)),
             },
         ],
@@ -5699,15 +5704,15 @@ fn branch_t() -> Run {
     Run {
         steps: vec![
             crate::native::graph::Step {
-                addr: vec![(BOOL, 0)],
+                addr: vec![(BOOL, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Boolean(true),
             },
             crate::native::graph::Step {
-                addr: vec![(2, 0), (INT, 0)],
+                addr: vec![(2, 0), (INT, 0), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Integer(BigInt::from(7)),
             },
             crate::native::graph::Step {
-                addr: vec![(2, 0), (INT, 1)],
+                addr: vec![(2, 0), (INT, 1), (DRAW_LABEL, 0)],
                 value: ChoiceValue::Integer(BigInt::from(9)),
             },
         ],

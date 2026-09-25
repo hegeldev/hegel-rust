@@ -130,7 +130,7 @@ impl NativeDataSource {
         self.aborted.load(Ordering::Relaxed)
     }
 
-    /// Acquire the test-case state under the abort guard. Returns
+    /// Acquire the test-case state under the abort guard.  Returns
     /// `DataSourceError::StopTest` immediately if a previous call has already
     /// aborted the test case so subsequent draws short-circuit without
     /// touching the stream.

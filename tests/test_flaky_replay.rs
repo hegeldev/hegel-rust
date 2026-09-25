@@ -111,3 +111,36 @@ fn a_confirmed_but_dry_failure_prints_its_confirmation_capture() {
         "the caveat must name the dry final replay:\n{text}"
     );
 }
+
+static VEC_COIN: AtomicUsize = AtomicUsize::new(0);
+
+/// A flaky test over a collection. The collection's continue/stop draws
+/// open no span of their own, so the counterexample graph must tell them
+/// apart by their position in the collection's span: merged into one
+/// state, a replay would be served the wrong one and the failure would
+/// never confirm.
+fn flaky_over_a_vec(tc: TestCase) {
+    let v = tc.draw(gs::vecs(gs::integers::<u8>()));
+    if v.len() >= 2 && VEC_COIN.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
+        panic!("boom: v = {v:?}");
+    }
+}
+
+#[test]
+fn a_flaky_failure_over_a_collection_is_confirmed_and_shrunk() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(flaky_over_a_vec)
+            .settings(Settings::new().database(None).seed(Some(3)))
+            .run();
+    });
+    result.expect_err("the failure is reported");
+    let text = lines.join("\n");
+    assert!(
+        text.contains("note: nondeterministic failure, confirmed:"),
+        "the failure must confirm by replay:\n{text}"
+    );
+    assert!(
+        text.contains("let draw_1 = vec![0, 0];"),
+        "the collection must shrink to the two elements the failure needs:\n{text}"
+    );
+}

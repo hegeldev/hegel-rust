@@ -4,7 +4,7 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::{CloneRecord, NativeTestCase};
-use crate::native::graph::{Run, Step};
+use crate::native::graph::{DRAW_LABEL, Run, Step, draw_addresses};
 use crate::native::rng::EngineRng;
 use alloc::vec;
 
@@ -25,7 +25,7 @@ fn run(steps: &[(u64, ChoiceValue)]) -> Run {
         steps: steps
             .iter()
             .map(|(label, value)| Step {
-                addr: vec![(*label, 0)],
+                addr: vec![(*label, 0), (DRAW_LABEL, 0)],
                 value: value.clone(),
             })
             .collect(),
@@ -137,6 +137,63 @@ fn the_empty_graph_diverges_at_the_first_draw() {
     in_span(&mut tc, 1, draw_int);
     assert_eq!(tc.divergence(), diverged_at(vec![], 0));
     assert!(!tc.ended_on_end());
+}
+
+/// A run of two booleans drawn outside any span — a collection's
+/// continue/stop draws — is walked in order: the draw frame the engine
+/// reports at each tells the two apart, so the second is served `false`
+/// rather than the first edge's `true` again.
+#[test]
+fn consecutive_bare_draws_are_served_in_order() {
+    let g = graph(&[Run {
+        steps: vec![
+            Step {
+                addr: vec![(DRAW_LABEL, 0)],
+                value: boolean(true),
+            },
+            Step {
+                addr: vec![(DRAW_LABEL, 1)],
+                value: boolean(false),
+            },
+        ],
+    }]);
+    let mut tc = walk(&g);
+    assert_eq!(tc.draw_address(), vec![(DRAW_LABEL, 0)]);
+    assert!(draw_bool(&mut tc));
+    assert_eq!(tc.draw_address(), vec![(DRAW_LABEL, 1)]);
+    assert!(!draw_bool(&mut tc));
+    assert_eq!(tc.divergence(), None);
+    assert!(tc.ended_on_end());
+}
+
+/// The draw frame counts the draws made directly in the innermost open
+/// span: a closed child span's draws are not its parent's, and a span
+/// that closes hands its ordinal count back to the parent's.
+#[test]
+fn the_draw_frame_counts_direct_draws_of_the_innermost_span() {
+    let mut tc = walk(&Arc::new(Graph::new()));
+    draw_int(&mut tc);
+    tc.start_span(7);
+    assert_eq!(tc.draw_address(), vec![(7, 0), (DRAW_LABEL, 0)]);
+    draw_int(&mut tc);
+    in_span(&mut tc, 9, draw_int);
+    in_span(&mut tc, 9, |tc| {
+        draw_int(tc);
+        draw_int(tc);
+    });
+    assert_eq!(tc.draw_address(), vec![(7, 0), (DRAW_LABEL, 1)]);
+    tc.stop_span(false);
+    assert_eq!(tc.draw_address(), vec![(DRAW_LABEL, 1)]);
+    in_span(&mut tc, 7, |tc| {
+        assert_eq!(tc.draw_address(), vec![(7, 1), (DRAW_LABEL, 0)])
+    });
+    let addrs = draw_addresses(&tc.spans, tc.nodes.len());
+    assert_eq!(addrs.len(), 5);
+    assert_eq!(addrs[0], vec![(DRAW_LABEL, 0)]);
+    assert_eq!(addrs[1], vec![(7, 0), (DRAW_LABEL, 0)]);
+    assert_eq!(addrs[2], vec![(7, 0), (9, 0), (DRAW_LABEL, 0)]);
+    assert_eq!(addrs[3], vec![(7, 0), (9, 1), (DRAW_LABEL, 0)]);
+    assert_eq!(addrs[4], vec![(7, 0), (9, 1), (DRAW_LABEL, 1)]);
 }
 
 /// A clone whose record decides which span follows.

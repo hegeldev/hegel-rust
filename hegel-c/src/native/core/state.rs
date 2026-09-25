@@ -39,6 +39,7 @@ use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
 };
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
+use crate::native::graph::DRAW_LABEL;
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -1432,8 +1433,8 @@ impl Spans {
     }
 
     /// True iff every non-forced choice inside the span at `span_idx` is at
-    /// its kind's simplest value. A forced choice can't be lowered further,
-    /// so it counts as trivial for this purpose. Out-of-range `span_idx`
+    /// its kind's simplest value.  A forced choice can't be lowered further,
+    /// so it counts as trivial for this purpose.  Out-of-range `span_idx`
     /// returns `false`.
     pub fn trivial(&self, span_idx: usize, nodes: &[ChoiceNode]) -> Result<bool, InternalError> {
         let Some(span) = self.inner.get(span_idx) else {
@@ -1491,7 +1492,7 @@ impl core::ops::Index<usize> for Spans {
 }
 
 /// Observer hook called by [`NativeTestCase`] after each draw and on
-/// conclusion. All methods have default no-op implementations so
+/// conclusion.  All methods have default no-op implementations so
 /// concrete observers only need to override the callbacks they care
 /// about.
 pub trait DataObserver: Send {
@@ -1663,6 +1664,18 @@ pub struct NativeTestCase {
     /// Each entry was pushed by `start_span` and is awaiting a matching
     /// `stop_span` call.
     pub span_stack: Vec<usize>,
+    /// Per span, the number of earlier siblings under the same parent with
+    /// the same label: its frame ordinal in a draw's address. Computed at
+    /// `start_span` from `sibling_counts` so an address costs one lookup
+    /// per open span rather than a scan of every earlier span.
+    span_ordinals: Vec<usize>,
+    sibling_counts: HashMap<(Option<usize>, u64), usize>,
+    /// Per span, the number of draws inside its closed children, so the
+    /// draws made directly in it are `nodes.len() - start - child_nodes`
+    /// while it is the innermost open span. `top_child_nodes` is the same
+    /// count for draws outside every span.
+    child_nodes: Vec<usize>,
+    top_child_nodes: usize,
     /// True iff any `stop_span(discard=true)` has been observed during this test
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
@@ -1703,7 +1716,7 @@ impl NativeTestCase {
     /// `trailing` if set.
     ///
     /// `max_size` is the upper bound on the total number of choices the test
-    /// case will make. It is floored to `choices.len()` so a too-tight value
+    /// case will make.  It is floored to `choices.len()` so a too-tight value
     /// can never truncate the explicit prefix.
     pub fn for_choices_and_template(
         choices: &[ChoiceValue],
@@ -1828,6 +1841,10 @@ impl NativeTestCase {
             clone_children: Vec::new(),
             spans: Spans::new(),
             span_stack: Vec::new(),
+            span_ordinals: Vec::new(),
+            sibling_counts: HashMap::default(),
+            child_nodes: Vec::new(),
+            top_child_nodes: 0,
             has_discards: false,
             observer,
             trailing_template,
@@ -1870,7 +1887,7 @@ impl NativeTestCase {
         Self::for_choices_and_template(prefix, None, None, max_size, None).with_random(rng)
     }
 
-    /// Attach an RNG for post-prefix random draws. Internal builder used by
+    /// Attach an RNG for post-prefix random draws.  Internal builder used by
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
@@ -1959,7 +1976,7 @@ impl NativeTestCase {
         let idx = self.nodes.len();
         let child_replay = self
             .replay
-            .clone_child(&self.clone_id, idx, || self.open_span_frames());
+            .clone_child(&self.clone_id, idx, || self.draw_address());
         let child_rng = self.rng.as_mut().map(EngineRng::spawn);
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
@@ -2017,7 +2034,7 @@ impl NativeTestCase {
 
     /// Open a new span at the current choice position, labelled with `label`.
     ///
-    /// Returns the index assigned to the span in `self.spans`. The span's
+    /// Returns the index assigned to the span in `self.spans`.  The span's
     /// `end` is set to `self.nodes.len()` as a placeholder and overwritten
     /// when [`Self::stop_span`] is called.
     ///
@@ -2038,6 +2055,10 @@ impl NativeTestCase {
             parent,
             discarded: false,
         });
+        let siblings = self.sibling_counts.entry((parent, label)).or_insert(0);
+        self.span_ordinals.push(*siblings);
+        *siblings += 1;
+        self.child_nodes.push(0);
         self.span_stack.push(idx);
         if depth + 1 > MAX_DEPTH {
             self.conclude(Status::Invalid, None);
@@ -2051,20 +2072,25 @@ impl NativeTestCase {
         self.span_stack.len()
     }
 
-    /// The structural address of the next draw: the open
-    /// spans outermost first, each as its label and the number of earlier
-    /// siblings under the same parent with that label.
-    pub fn open_span_frames(&self) -> Vec<(u64, usize)> {
+    /// The structural address of the next draw: the open spans outermost
+    /// first, each as its label and the number of earlier siblings under
+    /// the same parent with that label, then a [`DRAW_LABEL`] frame whose
+    /// ordinal counts the earlier draws made directly in the innermost
+    /// open span. That last frame is what makes two draws never share an
+    /// address: the engine's own bookkeeping draws — a collection's
+    /// continue/stop booleans, a state machine's round and rule choices —
+    /// open no span of their own, and a counterexample graph that merged
+    /// them into one state could serve the wrong one. Agrees with
+    /// `graph::draw_addresses` over the recorded spans.
+    pub fn draw_address(&self) -> Vec<(u64, usize)> {
+        let direct = match self.span_stack.last() {
+            Some(&idx) => self.nodes.len() - self.spans[idx].start - self.child_nodes[idx],
+            None => self.nodes.len() - self.top_child_nodes,
+        };
         self.span_stack
             .iter()
-            .map(|&idx| {
-                let span = &self.spans[idx];
-                let ordinal = self.spans.as_slice()[..idx]
-                    .iter()
-                    .filter(|s| s.parent == span.parent && s.label == span.label)
-                    .count();
-                (span.label, ordinal)
-            })
+            .map(|&idx| (self.spans[idx].label, self.span_ordinals[idx]))
+            .chain(core::iter::once((DRAW_LABEL, direct)))
             .collect()
     }
 
@@ -2077,12 +2103,26 @@ impl NativeTestCase {
             return;
         };
         let end = self.nodes.len();
+        self.close_span(idx, end);
         if let Some(span) = self.spans.get_mut(idx) {
-            span.end = end;
             span.discarded = discard;
         }
         if discard {
             self.has_discards = true;
+        }
+    }
+
+    /// Set the span's end and credit its draws to its parent's closed
+    /// children, for [`Self::draw_address`].
+    fn close_span(&mut self, idx: usize, end: usize) {
+        let Some(span) = self.spans.get_mut(idx) else {
+            return;
+        };
+        span.end = end;
+        let inside = end - span.start;
+        match span.parent {
+            Some(parent) => self.child_nodes[parent] += inside,
+            None => self.top_child_nodes += inside,
         }
     }
 
@@ -2102,9 +2142,7 @@ impl NativeTestCase {
         self.frozen = true;
         let end = self.nodes.len();
         while let Some(idx) = self.span_stack.pop() {
-            if let Some(span) = self.spans.get_mut(idx) {
-                span.end = end;
-            }
+            self.close_span(idx, end);
         }
         self.conclude(Status::Valid, None);
         if let Some(ref mut obs) = self.observer {
@@ -2623,7 +2661,7 @@ impl NativeTestCase {
 
         match self
             .replay
-            .resolve(&self.clone_id, idx, || self.open_span_frames(), from_prefix)
+            .resolve(&self.clone_id, idx, || self.draw_address(), from_prefix)
         {
             Resolved::Served(v) => return Ok((v, false)),
             Resolved::Misfit(stored, timeline) => {

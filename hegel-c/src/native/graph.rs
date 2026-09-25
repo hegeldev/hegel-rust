@@ -9,7 +9,9 @@
 //!
 //! A draw's **address** is the spans open at it, outermost first, each as
 //! `(label, ordinal)`, the ordinal counting the earlier same-label siblings
-//! under the same parent. A state's **identity** is the prefix of the next
+//! under the same parent, ending in a [`DRAW_LABEL`] frame that counts the
+//! earlier draws made directly in the innermost of them, so that no two
+//! draws of a run share an address. A state's **identity** is the prefix of the next
 //! draw's address through its first frame that was not open at the previous
 //! draw — the first span the run enters after the last one it left — with
 //! [`Ident::Start`] before the first draw and [`Ident::End`] after the last.
@@ -29,10 +31,18 @@ use crate::native::HashMap;
 use crate::native::bignum::ToPrimitive;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, float_to_index};
 use crate::native::database::{deserialize_choices_exact, serialize_choices};
+use crate::native::labels::label_from_name;
 
 /// One open span at a draw: its label and the number of earlier siblings
 /// under the same parent with that label.
 pub(crate) type Frame = (u64, usize);
+
+/// Label of the frame ending every address: its ordinal counts the earlier
+/// draws made directly in the innermost open span. The engine's own
+/// bookkeeping draws open no span of their own, so without it a
+/// collection's continue/stop booleans would all share one address and
+/// the walk could serve the wrong one.
+pub(crate) const DRAW_LABEL: u64 = label_from_name("hegel.draw");
 
 /// A draw's address: the frames of the spans open at it, outermost first.
 pub(crate) type Addr = Vec<Frame>;
@@ -74,13 +84,14 @@ fn span_frames(spans: &[Span]) -> Vec<Frame> {
 }
 
 /// The address of each of `count` draws under `spans`: the frames of the
-/// spans containing it, outermost first. Agrees with what
-/// `NativeTestCase::open_span_frames` reported at the draw, since a span
-/// open at a draw is exactly one that contains it and sibling ordinals only
-/// grow.
+/// spans containing it, outermost first, then the [`DRAW_LABEL`] frame.
+/// Agrees with what `NativeTestCase::draw_address` reported at the draw,
+/// since a span open at a draw is exactly one that contains it and sibling
+/// ordinals only grow.
 pub(crate) fn draw_addresses(spans: &[Span], count: usize) -> Vec<Addr> {
     let frames = span_frames(spans);
     let mut open: Vec<usize> = Vec::new();
+    let mut direct: HashMap<Option<usize>, usize> = HashMap::default();
     let mut next = 0;
     (0..count)
         .map(|i| {
@@ -91,7 +102,10 @@ pub(crate) fn draw_addresses(spans: &[Span], count: usize) -> Vec<Addr> {
                 next += 1;
             }
             open.retain(|&s| spans[s].end > i);
-            open.iter().map(|&s| frames[s]).collect()
+            let ordinal = direct.entry(open.last().copied()).or_insert(0);
+            let draw = (DRAW_LABEL, *ordinal);
+            *ordinal += 1;
+            open.iter().map(|&s| frames[s]).chain([draw]).collect()
         })
         .collect()
 }
@@ -141,8 +155,8 @@ fn common_prefix(a: &[Frame], b: &[Frame]) -> usize {
 
 /// The identity of the state between a draw at `prev` and one at `next`:
 /// the prefix of `next` through its first frame not open at `prev`. Two
-/// draws never share an address (the engine wraps every draw in its own
-/// kind span), so the prefix is proper; a bare address is its own identity.
+/// draws never share an address (each ends in its own [`DRAW_LABEL`]
+/// frame), so the prefix is proper.
 pub(crate) fn ident_after(prev: &[Frame], next: &[Frame]) -> Ident {
     let shared = common_prefix(prev, next);
     Ident::At(next[..(shared + 1).min(next.len())].to_vec())

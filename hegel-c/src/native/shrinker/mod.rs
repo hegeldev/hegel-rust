@@ -114,7 +114,7 @@ where
 }
 
 /// A callback for shrinker debug output (per-pass-step lines and the
-/// end-of-shrink profiling report). Wired only at `Verbosity::Debug`.
+/// end-of-shrink profiling report).  Wired only at `Verbosity::Debug`.
 pub type DebugFn<'a> = dyn FnMut(&str) + Send + 'a;
 
 /// Signal that ends the whole shrink early.
@@ -202,7 +202,7 @@ pub(crate) fn absorb_stop<T>(result: ShrinkResult<T>) -> Result<(), RunError> {
 pub struct Shrinker<'a> {
     test_fn: Box<dyn ShrinkProbe + Send + 'a>,
     pub current_nodes: Vec<ChoiceNode>,
-    /// Spans recorded by the run that produced `current_nodes`. Updated whenever
+    /// Spans recorded by the run that produced `current_nodes`.  Updated whenever
     /// `consider` accepts a smaller candidate so span-aware passes (try_trivial_spans,
     /// pass_to_descendant, reorder_spans, remove_discarded) can interrogate the
     /// current shrink target's structure.
@@ -232,7 +232,7 @@ pub struct Shrinker<'a> {
     /// iteration gets a fresh stall window, so calls burned by the
     /// stochastic passes in one iteration cannot silently gate the
     /// deterministic passes' candidates in the next and fake a fixed
-    /// point. See `max_stall`.
+    /// point.  See `max_stall`.
     pub calls_at_last_shrink: usize,
     /// Once `calls - calls_at_last_shrink >= max_stall`, further
     /// `consider` / `probe` invocations short-circuit. Grows on every
@@ -247,7 +247,7 @@ pub struct Shrinker<'a> {
     /// shrinks and stalls on a sub-minimal target.
     pub max_stall: usize,
     /// Snapshot of `current_nodes` at the last call to
-    /// [`Shrinker::clear_change_tracking`] (or construction). Each `consider`
+    /// [`Shrinker::clear_change_tracking`] (or construction).  Each `consider`
     /// improvement diffs against this baseline so [`Shrinker::changed_nodes`]
     /// reports node indices whose `(kind, value)` differs.
     last_checkpoint_nodes: Vec<ChoiceNode>,
@@ -325,9 +325,9 @@ impl<'a> Shrinker<'a> {
         false
     }
 
-    /// Install a debug callback. Each emitted message corresponds to
+    /// Install a debug callback.  Each emitted message corresponds to
     /// either the start of a pass step (`"Trying shrink pass: <name>"`)
-    /// or one line of the end-of-shrink profiling report. Wired by the
+    /// or one line of the end-of-shrink profiling report.  Wired by the
     /// test runner at `Verbosity::Debug`.
     pub fn set_debug<F: FnMut(&str) + Send + 'a>(&mut self, f: F) {
         self.debug = Some(Box::new(f));
@@ -616,7 +616,7 @@ impl<'a> Shrinker<'a> {
             });
             for (name, calls, shrinks, deletions) in buckets {
                 self.debug_msg(&format!(
-                    " * {name} made {calls} call{} of which {shrinks} shrank, \
+                    "  * {name} made {calls} call{} of which {shrinks} shrank, \
                      deleting {deletions} choice{}.",
                     s(*calls),
                     s(*deletions),

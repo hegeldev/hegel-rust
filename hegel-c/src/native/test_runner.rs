@@ -59,7 +59,7 @@ use crate::settings::{
 
 /// One run's worth of results: status, the realised choice nodes and
 /// spans, and (for `Status::Interesting`) the opaque origin string
-/// identifying *where* the panic happened. The origin is supplied by
+/// identifying *where* the panic happened.  The origin is supplied by
 /// [`crate::run_lifecycle::run_test_case`] from the captured panic
 /// `file:line:col`; per-origin shrinking and database storage key on it.
 #[derive(Clone)]
@@ -1146,7 +1146,7 @@ pub(crate) fn slow_shrink_warning() -> String {
 /// rate is below `r`.
 ///
 /// ```text
-/// base = ceil(log(1 - c) / log(1 - r)) - 1
+/// base    = ceil(log(1 - c) / log(1 - r)) - 1
 /// per_valid = ceil(1 / r)
 /// ```
 fn invalid_thresholds(r: f64, c: f64) -> (u64, u64) {

@@ -114,14 +114,15 @@ const WARM_UP_GRAFTS: u32 = 8;
 /// governs is usually the nearest.
 const COUNT_LOWERINGS: u32 = 3;
 
-/// The spans of a run — every frame prefix of a draw's address — each
-/// with the index of its first draw, last-starting first and, at one
-/// start, outermost first: the order deletions are proposed in, so that a
-/// deletion never renumbers a span still to be proposed.
+/// The spans of a run — every proper frame prefix of a draw's address,
+/// the draw frame itself being no span — each with the index of its first
+/// draw, last-starting first and, at one start, outermost first: the
+/// order deletions are proposed in, so that a deletion never renumbers a
+/// span still to be proposed.
 fn spans_of(run: &Run) -> Vec<(Addr, usize)> {
     let mut seen: HashMap<Addr, usize> = HashMap::default();
     for (i, step) in run.steps.iter().enumerate() {
-        for d in 1..=step.addr.len() {
+        for d in 1..step.addr.len() {
             seen.entry(step.addr[..d].to_vec()).or_insert(i);
         }
     }

@@ -4,6 +4,7 @@
 use super::*;
 use crate::native::bignum::BigInt;
 use crate::native::core::{CloneRecord, NativeTestCase, Status};
+use crate::native::graph::DRAW_LABEL;
 use crate::native::rng::EngineRng;
 use alloc::vec;
 
@@ -322,10 +323,10 @@ fn an_external_resolver_is_told_the_open_spans_and_their_sibling_ordinals() {
     assert_eq!(
         *frames.lock(),
         vec![
-            vec![(7, 0)],
-            vec![(7, 1), (9, 0)],
-            vec![(7, 1), (9, 1)],
-            vec![(7, 1), (9, 1)],
+            vec![(7, 0), (DRAW_LABEL, 0)],
+            vec![(7, 1), (9, 0), (DRAW_LABEL, 0)],
+            vec![(7, 1), (9, 1), (DRAW_LABEL, 0)],
+            vec![(7, 1), (9, 1), (DRAW_LABEL, 1)],
         ]
     );
 }

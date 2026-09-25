@@ -4,7 +4,7 @@
 use super::*;
 use crate::exchange::drive_no_yield;
 use crate::native::core::{CloneRecord, EngineError, NativeTestCase, RealizedStream, Span, Status};
-use crate::native::graph::{START, Step};
+use crate::native::graph::{DRAW_LABEL, START, Step};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::rng::EngineRng;
 use alloc::vec;
@@ -108,13 +108,25 @@ impl GraphProbe for Probe {
     }
 }
 
+/// The address of the first draw made directly in `spans`.
+fn addr(spans: &[(u64, usize)]) -> Addr {
+    spans.iter().copied().chain([(DRAW_LABEL, 0)]).collect()
+}
+
+/// A run from `(open spans, value)` pairs; the draw frame the engine
+/// would report — the count of earlier draws in the same spans — is
+/// appended.
 fn run(steps: &[(&[(u64, usize)], ChoiceValue)]) -> Run {
     Run {
         steps: steps
             .iter()
-            .map(|(addr, value)| Step {
-                addr: addr.to_vec(),
-                value: value.clone(),
+            .enumerate()
+            .map(|(i, (addr, value))| {
+                let direct = steps[..i].iter().filter(|(a, _)| a == addr).count();
+                Step {
+                    addr: addr.iter().copied().chain([(DRAW_LABEL, direct)]).collect(),
+                    value: value.clone(),
+                }
             })
             .collect(),
     }
@@ -215,7 +227,7 @@ fn a_hidden_coins_arms_shrink_together_and_the_tie_survives() {
     assert_eq!(graph.edge_count(), 4);
     for n in graph.reachable() {
         for e in &graph.nodes()[n].edges {
-            if e.addr != A {
+            if e.addr != addr(A) {
                 assert_eq!(e.value, value(3));
             }
         }
@@ -437,12 +449,12 @@ fn a_value_edit_for_a_draw_the_graph_no_longer_has_is_skipped() {
     let (mut shrinker, mut probe) = start(two_ints, &[run(&[(A, value(7)), (B, value(8))])], 0.5);
     let data = shrinker
         .constraints
-        .get(&(Ident::Start, A.to_vec()))
+        .get(&(Ident::Start, addr(A)))
         .unwrap()
         .clone();
     let mut key = EdgeKey {
         from: Ident::At(C.to_vec()),
-        addr: A.to_vec(),
+        addr: addr(A),
         value: value(7),
         to: Ident::End,
     };
@@ -554,7 +566,7 @@ fn deleting_a_span_renumbers_the_siblings_after_it() {
     assert_eq!(ints(shrinker.witness().0), vec![1, 0, 10]);
     let (nodes, spans) = shrinker.witness();
     let run = Run::from_nodes(nodes, spans);
-    assert_eq!(run.steps[2].addr, vec![(5, 0), (3, 0)]);
+    assert_eq!(run.steps[2].addr, vec![(5, 0), (3, 0), (DRAW_LABEL, 0)]);
 }
 
 fn four_ints(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
@@ -615,11 +627,11 @@ fn spans_are_ordered_last_starting_first_then_outermost_first() {
     );
     let shorter = without_span(&r, &[(5, 0)]);
     assert_eq!(shorter.steps.len(), 2);
-    assert_eq!(shorter.steps[1].addr, vec![(5, 0), (2, 0)]);
+    assert_eq!(shorter.steps[1].addr, addr(&[(5, 0), (2, 0)]));
     let inner = without_span(&r, &[(5, 0), (2, 0)]);
     assert_eq!(inner.steps.len(), 3);
-    assert_eq!(inner.steps[1].addr, vec![(5, 0), (3, 0)]);
-    assert_eq!(inner.steps[2].addr, vec![(5, 1), (2, 0)]);
+    assert_eq!(inner.steps[1].addr, addr(&[(5, 0), (3, 0)]));
+    assert_eq!(inner.steps[2].addr, addr(&[(5, 1), (2, 0)]));
 }
 
 fn wrapped_then_tail(tc: &mut NativeTestCase, lcg: &mut Lcg) -> Option<bool> {
@@ -647,7 +659,7 @@ fn a_span_the_test_stops_drawing_is_deleted_outright_and_its_inner_span_skipped(
     assert_eq!(ints(shrinker.witness().0), vec![7]);
     let graph = shrinker.graph();
     assert_eq!(graph.edge_count(), 1);
-    assert_eq!(graph.nodes()[START].edges[0].addr, C.to_vec());
+    assert_eq!(graph.nodes()[START].edges[0].addr, addr(C));
     assert_eq!(probe.adopted.len(), 1);
     assert_eq!(probe.adopted[0].0, 1);
 }

@@ -4,7 +4,7 @@ use super::*;
 use crate::native::HashMap;
 use crate::native::bignum::BigInt;
 use crate::native::core::{ChoiceValue, Status};
-use crate::native::graph::{Frame, Step, Walked};
+use crate::native::graph::{DRAW_LABEL, Step, Walked};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -101,8 +101,8 @@ fn the_incumbent_run_addresses_its_draws_by_the_spans() {
     let mut c = Counterexample::default();
     c.adopt(vec![int_node(1), int_node(2)], vec![span(7, 1, 2)]);
     let run = c.incumbent_run().unwrap();
-    assert_eq!(run.steps[0].addr, Vec::<Frame>::new());
-    assert_eq!(run.steps[1].addr, vec![(7, 0)]);
+    assert_eq!(run.steps[0].addr, vec![(DRAW_LABEL, 0)]);
+    assert_eq!(run.steps[1].addr, vec![(7, 0), (DRAW_LABEL, 0)]);
 }
 
 #[test]
@@ -166,8 +166,11 @@ fn confirmation_drops_the_history() {
     let entries = c.history().entries();
     assert_eq!(entries.len(), 2, "deduplicated by choices");
     assert!(entries[0].accept);
-    assert_eq!(entries[0].run().steps[0].addr, vec![(5, 0)]);
-    assert!(entries[1].run().steps[0].addr.is_empty());
+    assert_eq!(
+        entries[0].run().steps[0].addr,
+        vec![(5, 0), (DRAW_LABEL, 0)]
+    );
+    assert_eq!(entries[1].run().steps[0].addr, vec![(DRAW_LABEL, 0)]);
     c.confirm(0.4, None, graph_of(&[3]), 1, (4, 9)).unwrap();
     assert!(c.history().is_empty());
 }

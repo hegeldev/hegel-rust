@@ -14,7 +14,7 @@
 //!
 //! where the `prefix_byte` selects the payload's meaning and storage:
 //!
-//! - `0` (`PREFIX_RAW`): `payload` is the raw [`serialize_choices`] bytes of
+//! - `0` (`PREFIX_RAW`):  `payload` is the raw [`serialize_choices`] bytes of
 //!   one choice sequence.
 //! - `1` (`PREFIX_ZLIB`): `payload` is the zlib compression of those bytes.
 //! - `2` (`PREFIX_ND_RAW`) / `3` (`PREFIX_ND_ZLIB`): `payload` is the raw /

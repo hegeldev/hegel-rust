@@ -2422,7 +2422,7 @@ hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
 
  The engine stores the text verbatim: pass the full rendered form of the
  comment, in the comment syntax of the language being printed (e.g.
- `" // like this"` or `" (* like this *)"`), including any separating
+ `"  // like this"` or `"  (* like this *)"`), including any separating
  whitespace.
 
  `text` follows the same rules as `hegel_printer_text` (UTF-8, no
