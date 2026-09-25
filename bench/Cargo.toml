@@ -3,7 +3,6 @@ name = "hegel-bench"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Deterministic (instruction-count) and walltime benchmarks of hegeltest and libhegel"
 
 [workspace]
 
@@ -12,8 +11,10 @@ name = "hegel-bench"
 path = "src/main.rs"
 
 [dependencies]
-hegel = { package = "hegeltest", path = "..", features = ["static-engine"] }
-libc = "0.2"
+hegeltest = { path = "..", features = ["static-engine"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["use-libc"] }
 
 [profile.release]
-debug = 1
+debug = true

@@ -62,7 +62,7 @@ name = "hegel-bench"
 version = "0.0.0"
 dependencies = [
  "hegeltest",
- "libc",
+ "rustix",
 ]
 
 [[package]]
