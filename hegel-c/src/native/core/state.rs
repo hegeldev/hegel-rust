@@ -2607,7 +2607,7 @@ mod float_sample {
         /// or `(127, 23)`, from which its landmarks follow: `MIN_POSITIVE` is
         /// `2^(1 - e)`, the smallest subnormal `2^(1 - e - m)`, the largest exact
         /// integer `2^(m + 1)`, and `1.0` has the bit pattern `e << m`.
-        fn layout(self) -> (i32, i32) {
+        pub(super) fn layout(self) -> (i32, i32) {
             match self {
                 FloatWidth::F64 => (1023, 52),
                 FloatWidth::F32 => (127, 23),
@@ -2615,7 +2615,7 @@ mod float_sample {
         }
 
         /// `MAX` of the width.
-        fn max(self) -> f64 {
+        pub(super) fn max(self) -> f64 {
             match self {
                 FloatWidth::F64 => f64::MAX,
                 FloatWidth::F32 => f64::from(f32::MAX),
@@ -2625,7 +2625,7 @@ mod float_sample {
         /// The width's bit patterns for the positive finite magnitudes in
         /// `[lo, hi]`, as a closed interval: an `f32` interval rounds inward, and
         /// comes out empty (`lo > hi`) when no `f32` lies between the bounds.
-        fn bit_range(self, lo: f64, hi: f64) -> (u64, u64) {
+        pub(super) fn bit_range(self, lo: f64, hi: f64) -> (u64, u64) {
             match self {
                 FloatWidth::F64 => (lo.to_bits(), hi.to_bits()),
                 FloatWidth::F32 => {
@@ -2638,7 +2638,7 @@ mod float_sample {
         }
 
         /// The float of this width with bit pattern `bits`, as an `f64`.
-        fn to_float(self, bits: u64) -> f64 {
+        pub(super) fn to_float(self, bits: u64) -> f64 {
             match self {
                 FloatWidth::F64 => f64::from_bits(bits),
                 FloatWidth::F32 => f64::from(f32::from_bits(bits as u32)),
@@ -2664,7 +2664,7 @@ mod float_sample {
 
     /// Tries `f` on the two options in a coin-flipped order: either is equally
     /// likely when both produce a value, and the other is used when one has none.
-    fn coin_flip_first<T: Copy, R>(
+    pub(super) fn coin_flip_first<T: Copy, R>(
         options: [T; 2],
         rng: &mut EngineRng,
         mut f: impl FnMut(T, &mut EngineRng) -> Option<R>,
@@ -2678,7 +2678,7 @@ mod float_sample {
     /// interval `[lo, hi]` of positive finite floats. A sign the range rules out,
     /// or on which `sample` has nothing to offer, yields to the other sign; `None`
     /// when neither sign works.
-    fn signed_magnitude_sample(
+    pub(super) fn signed_magnitude_sample(
         fc: &FloatChoice,
         rng: &mut EngineRng,
         sample: impl Fn(f64, f64, &mut EngineRng) -> Option<f64>,
@@ -2722,7 +2722,7 @@ mod float_sample {
     /// A value whose magnitude lies in `band`: a coin-flipped sign, then
     /// [`log_uniform_magnitude`] over the band's intersection with the admitted
     /// magnitudes. `None` when the band does not meet the range.
-    fn banded_magnitude_sample(
+    pub(super) fn banded_magnitude_sample(
         fc: &FloatChoice,
         band: (f64, f64),
         rng: &mut EngineRng,
@@ -2736,7 +2736,7 @@ mod float_sample {
     /// One of `candidates`, uniformly among those valid for `fc` and bit-distinct
     /// (so `min + 1` coinciding with `max`, say, is not double-weighted). `None`
     /// when none is valid.
-    fn pick_valid<const N: usize>(
+    pub(super) fn pick_valid<const N: usize>(
         fc: &FloatChoice,
         candidates: [f64; N],
         rng: &mut EngineRng,
