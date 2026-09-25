@@ -135,6 +135,34 @@ pub enum Verbosity {
     Debug,
 }
 
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NondeterminismStrictness {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are reported or shrunk. The default.
+    Quiet,
+    /// Switch as under `Quiet`, printing a one-line notice once per run.
+    Warn,
+    /// Abort the run with a flaky-test / nondeterminism error, for suites
+    /// that use determinism as a lint.
+    Error,
+}
+
+impl NondeterminismStrictness {
+    /// The vocabulary shared by the `nondeterminism_strictness` profile key
+    /// and the `HEGEL_NONDETERMINISM_STRICTNESS` variable: `quiet`, `warn`
+    /// or `error`.
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        match s {
+            "quiet" => Some(Self::Quiet),
+            "warn" => Some(Self::Warn),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -176,6 +204,11 @@ pub struct Settings {
     /// Whether test cases may make any number of choices. See
     /// [`Settings::unbounded_choices`].
     pub(crate) unbounded_choices: bool,
+    pub(crate) nondeterminism_strictness: NondeterminismStrictness,
+    /// Test-only: start the run in nondeterministic handling instead of
+    /// waiting for a detection flip, so tests exercise the ND machinery
+    /// deterministically. Not reachable from any public API.
+    pub(crate) nd_force: bool,
 }
 
 impl Settings {
@@ -212,6 +245,8 @@ impl Settings {
             backend: Backend::Default,
             config_path: None,
             unbounded_choices: false,
+            nondeterminism_strictness: NondeterminismStrictness::Quiet,
+            nd_force: false,
         }
     }
 
@@ -266,6 +301,13 @@ impl Settings {
     /// Set the verbosity level.
     pub fn verbosity(mut self, verbosity: Verbosity) -> Self {
         self.verbosity = verbosity;
+        self
+    }
+
+    /// Set how the run reacts when it detects nondeterministic test
+    /// behavior. Defaults to [`NondeterminismStrictness::Quiet`].
+    pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
+        self.nondeterminism_strictness = strictness;
         self
     }
 
@@ -371,8 +413,9 @@ impl Settings {
 
     /// Apply the settings environment variables, read through `env`, over
     /// these settings: `HEGEL_TEST_CASES`, `HEGEL_DATABASE`,
-    /// `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE` and
-    /// `HEGEL_PRINT_BLOB`. Profile resolution calls this last, so the
+    /// `HEGEL_STATISTICS`, `HEGEL_SEED`, `HEGEL_DERANDOMIZE`,
+    /// `HEGEL_PRINT_BLOB` and `HEGEL_NONDETERMINISM_STRICTNESS`. Profile
+    /// resolution calls this last, so the
     /// variables win over every profile and `hegel.toml`, while a setter
     /// called on the resulting handle still wins over them. An unset or
     /// empty variable leaves its setting alone; a malformed one is an
@@ -422,6 +465,16 @@ impl Settings {
         }
         if let Some(b) = env_bool(&env, "HEGEL_PRINT_BLOB")? {
             self.print_blob = b;
+        }
+        if let Some(value) = env_value(&env, "HEGEL_NONDETERMINISM_STRICTNESS") {
+            self.nondeterminism_strictness = match NondeterminismStrictness::parse(&value) {
+                Some(s) => s,
+                None => {
+                    return Err(format!(
+                        "HEGEL_NONDETERMINISM_STRICTNESS must be quiet, warn or error, got {value:?}"
+                    ));
+                }
+            };
         }
         Ok(self)
     }

@@ -65,6 +65,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                     ds.mark_complete(&TestCaseResult::Interesting(Failure {
                         origin: "n >= 1_000_000".to_string(),
                         reproduce_blob: None,
+                        caveat: None,
                     }));
                 } else {
                     ds.mark_complete(&TestCaseResult::Valid);
@@ -98,6 +99,7 @@ fn run_native_replays_persisted_failure_on_second_run() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    caveat: None,
                 }));
                 return;
             }
@@ -166,6 +168,7 @@ fn mark_above_million(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
             ds.mark_complete(&TestCaseResult::Interesting(Failure {
                 origin: "n >= 1_000_000".to_string(),
                 reproduce_blob: None,
+                caveat: None,
             }));
             return;
         }
@@ -234,6 +237,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    caveat: None,
                 }));
                 return;
             }
@@ -258,6 +262,7 @@ fn run_native_replays_persisted_failure_with_unbounded_int_schema() {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    caveat: None,
                 }));
                 return;
             }
@@ -294,6 +299,7 @@ fn mark_large_interesting(ds: &(dyn crate::backend::DataSource + Send + Sync)) {
                 ds.mark_complete(&TestCaseResult::Interesting(Failure {
                     origin: "n >= 1_000_000".to_string(),
                     reproduce_blob: None,
+                    caveat: None,
                 }));
             } else {
                 ds.mark_complete(&TestCaseResult::Valid);
@@ -366,6 +372,7 @@ fn drive_counter_machine(ds: &(dyn crate::backend::DataSource + Send + Sync)) ->
         ds.mark_complete(&TestCaseResult::Interesting(Failure {
             origin: "counter exceeded threshold".to_string(),
             reproduce_blob: None,
+            caveat: None,
         }));
     } else {
         ds.mark_complete(&TestCaseResult::Valid);
@@ -407,4 +414,47 @@ fn data_source_for_blob_logs_at_debug_verbosity() {
 #[test]
 fn data_source_for_blob_rejects_an_undecodable_blob() {
     assert!(data_source_for_blob(&quiet_settings(1), "not-a-valid-blob").is_none());
+}
+
+#[test]
+fn data_source_for_blob_replays_nondeterministic_state_with_a_continuation_budget() {
+    use crate::native::blob::{NdReproState, encode_nd_failure};
+    use crate::native::core::ChoiceValue;
+    use crate::native::draws::LABEL_BOOLEAN;
+    use crate::native::graph::{DRAW_LABEL, Graph, Run, Step};
+    use crate::settings::{Output, Verbosity};
+    use std::sync::{Arc, Mutex};
+    let state = NdReproState {
+        graph: Graph::from_run(&Run {
+            steps: alloc::vec![Step {
+                addr: alloc::vec![(LABEL_BOOLEAN, 0), (DRAW_LABEL, 0)],
+                value: ChoiceValue::Boolean(true),
+            }],
+        }),
+        entropy: 7,
+        longest: 1,
+    };
+    let blob = encode_nd_failure(&state).unwrap();
+    let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&lines);
+    let settings = quiet_settings(1)
+        .verbosity(Verbosity::Debug)
+        .output(Output::callback(move |line| {
+            sink.lock().unwrap().push(line.to_string());
+        }));
+    let ds = data_source_for_blob(&settings, &blob).unwrap();
+    assert!(
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("replaying nondeterministic failure blob")),
+        "debug verbosity names the replay"
+    );
+    assert!(
+        ds.generate_boolean(0.5, None).unwrap(),
+        "the stored graph serves the draw"
+    );
+    ds.generate_boolean(0.5, None).unwrap();
+    ds.mark_complete(&TestCaseResult::Valid);
 }

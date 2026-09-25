@@ -46,7 +46,7 @@ fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
 }
 
 #[test]
-fn tree_exhausted_filter_too_much_fires_on_tiny_filtered_domain() {
+fn duplicate_stopped_filter_too_much_fires_on_tiny_filtered_domain() {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};
     let result = std::panic::catch_unwind(|| {
@@ -599,7 +599,7 @@ mod override_captures_run_output {
     }
 
     #[test]
-    fn engine_shrink_and_blob_replay_lines_reach_the_sink() {
+    fn engine_shrink_lines_reach_the_sink() {
         let lines = collect_with(settings(Verbosity::Debug), |tc| {
             let _ = tc.draw(gs::integers::<i64>());
             panic!("always fails");
@@ -607,12 +607,6 @@ mod override_captures_run_output {
         assert!(
             lines.iter().any(|l| l.starts_with("Shrinking:")),
             "expected the engine's shrink progress in the sink, got {lines:?}"
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("replaying failure blob:")),
-            "expected the final replay's blob trace in the sink, got {lines:?}"
         );
     }
 

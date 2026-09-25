@@ -1,4 +1,4 @@
-//! The flat replacements for the data tree (experiment 010): a two-tier
+//! The flat replacements for the data tree: a two-tier
 //! execution cache and a choice-kind ledger.
 //!
 //! The cache keys every executed conclusion on its realized choice values —
@@ -101,6 +101,9 @@ pub(crate) struct Recorded {
     pub(crate) duplicate: bool,
     /// It had, and concluded with a different status or origin.
     pub(crate) verdict_mismatch: bool,
+    /// On a verdict mismatch, the failure the two conclusions disagree
+    /// about: the origin of whichever of them was interesting.
+    pub(crate) mismatched_origin: Option<String>,
 }
 
 #[derive(Default)]
@@ -139,6 +142,7 @@ impl ExecCache {
             Some(v) => Recorded {
                 duplicate: true,
                 verdict_mismatch: v.status != status || v.origin.as_deref() != origin,
+                mismatched_origin: v.origin.clone().or_else(|| origin.map(String::from)),
             },
             None => {
                 self.verdicts.insert(
@@ -151,6 +155,7 @@ impl ExecCache {
                 Recorded {
                     duplicate: false,
                     verdict_mismatch: false,
+                    mismatched_origin: None,
                 }
             }
         };

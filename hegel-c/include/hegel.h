@@ -23,10 +23,12 @@
  *   same test case, each with its own choice sequence.
  * - Span: a labeled grouping of draws that tells the shrinker which draws
  *   belong to one unit.
- * - Reproduce blob: a base64 string encoding a test case's choice sequence,
- *   which can be replayed later to reproduce it exactly. It is only
- *   guaranteed to reproduce the failure in the version of Hegel in which it
- *   was generated.
+ * - Reproduce blob: a base64 string from which a failure can be replayed
+ *   later — a test case's choice sequence or, for a nondeterministic
+ *   failure, a self-identifying entry carrying its replay state, replayed
+ *   until failure under a bounded budget. It is only guaranteed to
+ *   reproduce the failure in the version of Hegel in which it was
+ *   generated.
  *
  * Calling convention
  * ------------------
@@ -61,6 +63,7 @@
  *     hegel_context_new          ->  hegel_context_free
  *     hegel_settings_new         ->  hegel_settings_free
  *     hegel_run_start            ->  hegel_run_free
+ *     hegel_run_start_blob       ->  hegel_run_free
  *     hegel_test_case_from_blob  ->  hegel_test_case_free
  *     hegel_next_test_case       ->  hegel_test_case_free
  *     hegel_test_case_clone      ->  hegel_test_case_free
@@ -227,7 +230,33 @@ typedef enum {
 } hegel_backend_t;
 
 /*
+ How a run reacts when it detects nondeterministic test behavior — a test
+ whose structure or outcome changes when the same choices are replayed.
+ Set via `hegel_settings_set_nondeterminism_strictness`.
+ */
+typedef enum {
+    /*
+     Switch to nondeterministic handling silently: failures are confirmed
+     by repeated replay before they are reported or shrunk. The default.
+     */
+    HEGEL_NONDETERMINISM_QUIET = 0,
+    /*
+     Switch as under quiet, printing a one-line notice once per run.
+     */
+    HEGEL_NONDETERMINISM_WARN = 1,
+    /*
+     Abort the run with a flaky-test / nondeterminism error, for suites
+     that use determinism as a lint.
+     */
+    HEGEL_NONDETERMINISM_ERROR = 2,
+} hegel_nondeterminism_strictness_t;
+
+/*
  Aggregate outcome of a finished run, read via `hegel_run_result_status`.
+
+ Value 3 (`HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`, removed in the
+ 0.35 ABI break) is retired and must never be reused for a new meaning:
+ bindings built against the old header may still compare against it.
  */
 typedef enum {
     /*
@@ -240,22 +269,18 @@ typedef enum {
     HEGEL_RUN_STATUS_FAILED = 1,
     /*
      The run itself failed — a failed health check, a nondeterminism
-     mismatch, a violated engine invariant — and produced no verdict on
-     the property. There are no failures to inspect; read the message with
-     `hegel_run_result_error`.
+     abort under `error` strictness, a violated engine invariant — and
+     produced no verdict on the property. There are no failures to
+     inspect; read the message with `hegel_run_result_error`.
+
+     A failing nondeterministic run reports plain
+     `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
+     (`hegel_failure_caveat`) and, when confirmed, a reproduce blob. A
+     blobless failure is reported from what the caller captured while
+     running the stamped test cases (see
+     `hegel_test_case_should_capture`).
      */
     HEGEL_RUN_STATUS_ERROR = 2,
-    /*
-     The property failed on a run that was declared nondeterministic (a
-     test case created a state machine with `max_concurrency > 1`). The
-     failures carry no reproduce blob — there was no shrinking and there
-     is no final replay — so the caller should report the bug from
-     whatever it captured while running the discovering test case (the
-     engine stamps every case of such a run nondeterministic up front,
-     see `hegel_test_case_is_nondeterministic`, precisely so the caller
-     captures each case's output as it runs).
-     */
-    HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC = 3,
 } hegel_run_status_t;
 
 /*
@@ -280,8 +305,9 @@ typedef enum {
      */
     HEGEL_PHASE_GENERATE = (1 << 2),
     /*
-     Apply hill-climbing toward observed `hegel_target` scores between
-     generation rounds.
+     Optimise toward observed `hegel_target` scores between generation
+     rounds: hill-climbing on deterministic runs, a measured race under
+     nondeterministic handling.
      */
     HEGEL_PHASE_TARGET = (1 << 3),
     /*
@@ -376,8 +402,8 @@ typedef struct hegel_context_t hegel_context_t;
  independent of the result and run it came from.
 
  A failure carries the origin `libhegel` grouped on and the reproduce blob.
- The caller replays the blob (via `hegel_test_case_from_blob`) to produce
- the diagnostic and re-raise the test's own failure.
+ The diagnostic comes from the stamped final-replay capture; the blob is
+ for reproducing the failure later via `hegel_run_start_blob`.
  */
 typedef struct hegel_failure_t hegel_failure_t;
 
@@ -514,7 +540,9 @@ typedef struct hegel_run_t hegel_run_t;
  A failed run produced counterexamples to the property. An errored run
  produced no verdict on the property at all, so it has no failures to
  inspect. A run errors on a failed health check, a nondeterminism
- mismatch, or a violated internal invariant of libhegel.
+ mismatch under `error` strictness (the other strictness levels handle
+ the nondeterminism instead), or a violated internal invariant of
+ libhegel.
  */
 typedef struct hegel_run_result_t hegel_run_result_t;
 
@@ -730,6 +758,8 @@ const char *hegel_context_last_error(const hegel_context_t *ctx);
  - `HEGEL_SEED`: an integer fixes the seed; `none` clears one.
  - `HEGEL_DERANDOMIZE` and `HEGEL_PRINT_BLOB`: `true`, `1` or `yes`, or
    `false`, `0` or `no`.
+ - `HEGEL_NONDETERMINISM_STRICTNESS`: `quiet`, `warn` or `error`, the
+   `nondeterminism_strictness` value.
 
  An empty variable is ignored. A malformed one makes this function (and
  `hegel_settings_new_for_profile`) fail with `HEGEL_E_INVALID_ARG` and a
@@ -799,6 +829,17 @@ hegel_result_t hegel_settings_set_test_cases(hegel_context_t *ctx, hegel_setting
  Returns `HEGEL_OK`.
  */
 hegel_result_t hegel_settings_set_verbosity(hegel_context_t *ctx, hegel_settings_t *s, uint32_t v);
+
+/*
+ Parameters:
+ `strictness`: How the run reacts when it detects nondeterministic test
+   behavior. See `hegel_nondeterminism_strictness_t`.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_set_nondeterminism_strictness(hegel_context_t *ctx,
+                                                            hegel_settings_t *s,
+                                                            uint32_t strictness);
 
 /*
  Parameters:
@@ -1141,6 +1182,16 @@ hegel_result_t hegel_settings_get_backend(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `out`: Receives the configured nondeterminism strictness.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_settings_get_nondeterminism_strictness(hegel_context_t *ctx,
+                                                            const hegel_settings_t *s,
+                                                            hegel_nondeterminism_strictness_t *out);
+
+/*
+ Parameters:
  `settings`: The settings for this run. The caller can free the
    settings after passing them in since libhegel copies the memory.
  `callback`: Where libhegel's output for this run goes. NULL leaves
@@ -1162,6 +1213,29 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
                                hegel_output_callback_t callback,
                                void *user_data,
                                hegel_run_t **out_run);
+
+/*
+ Like `hegel_run_start`, but the run replays a reproduce blob instead of
+ exploring. Both blob kinds replay until a replay fails, under a bounded
+ budget: a deterministic blob replays its choices up to 4 times, each
+ attempt allowed a bounded number of fresh draws past a divergence; a
+ nondeterministic blob replays its stored timelines with the same
+ replay-until-failure sequence database reuse uses. The caller
+ drives the run exactly like `hegel_run_start`: a reproducing replay is
+ the run's failure (with its caveat for a nondeterministic blob, and no
+ reproduce blob — the caller already holds it), a run with no failures
+ means the blob is stale, and an undecodable blob surfaces as the run's
+ error from `hegel_run_result`.
+
+ Parameters: as `hegel_run_start`, plus
+ `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
+ */
+hegel_result_t hegel_run_start_blob(hegel_context_t *ctx,
+                                    const hegel_settings_t *settings,
+                                    const char *blob,
+                                    hegel_output_callback_t callback,
+                                    void *user_data,
+                                    hegel_run_t **out_run);
 
 /*
  Parameters:
@@ -1226,7 +1300,9 @@ hegel_result_t hegel_run_free(hegel_context_t *ctx, hegel_run_t *run);
  returned test case with the usual per-test-case primitives, concludes it
  with `hegel_mark_complete`, and decides for itself whether the blob
  reproduced the failure (the property failed again) or is stale/flaky (it
- passed).
+ passed). A nondeterministic blob replays here as a single attempt —
+ its stored timelines may need several tries to fail, so prefer
+ `hegel_run_start_blob`, which replays until a replay fails.
 
  Parameters:
  `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
@@ -1265,12 +1341,21 @@ hegel_result_t hegel_test_case_from_blob(hegel_context_t *ctx,
 hegel_result_t hegel_test_case_free(hegel_context_t *ctx, hegel_test_case_t *tc);
 
 /*
- Returns whether this test case belongs to a run already known to be
- nondeterministic.
+ Returns whether the engine stamped this test case for capture: the
+ caller should buffer the case's output and, if it fails, its rendered
+ diagnostic, keyed by the failure's origin — a stamped failing
+ execution is the material for that origin's failure report. The
+ engine stamps the executions whose failures can become the report:
+ the report-time final replay and each generation-discovered failure's
+ first-check replays (both on deterministic runs too), every
+ `hegel_run_start_blob` replay, and, under nondeterministic handling,
+ confirmation batches, database-reuse replays, and generation-phase
+ cases (whose failing origins may be reported unconfirmed). Read the
+ stamp once at case start.
  */
-hegel_result_t hegel_test_case_is_nondeterministic(hegel_context_t *ctx,
-                                                   const hegel_test_case_t *tc,
-                                                   bool *out_is_nondeterministic);
+hegel_result_t hegel_test_case_should_capture(hegel_context_t *ctx,
+                                              const hegel_test_case_t *tc,
+                                              bool *out_should_capture);
 
 /*
  Parameters:
@@ -1694,27 +1779,12 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  up front, so the machine is fully constructed before any rule is
  requested.
 
- Creating a machine with `max_concurrency > 1` declares the run
- nondeterministic: thread scheduling is outside the engine's control, so
- nothing that assumes deterministic replay can be trusted. On a run not
- already known to be nondeterministic, the first such creation is
- rejected with `HEGEL_E_ASSUME` — the caller should abandon the body and
- report the case `HEGEL_STATUS_INVALID`, exactly as for a failed
- assumption — and the engine flips the run at that case's end. Every
- later test case is marked nondeterministic before it starts (so a
- frontend can capture its whole trace for the failure report, including
- draws made before the machine is created) and its creations succeed.
- From the flip on, the run reports failures faithfully from the
- discovering execution and skips data-tree recording (and with it
- novel-prefix generation and the nondeterminism mismatch check), span
- mutation, the verify and shrink pass (and with it the flakiness check —
- generation stops at the first bug, so at most one failure is reported),
- targeting, and database persistence and reuse. Failures from such a run
- carry no reproduce blob. A notice explaining this is printed once, on
- the run's output, unless verbosity is quiet. This applies even to test
- cases whose drawn concurrency level is 1: the declared bound is what
- counts. Standalone test cases — `hegel_test_case_from_blob` replays —
- are never rejected.
+ Concurrency alone does not mark the run nondeterministic: a properly
+ serialized concurrent machine can fail deterministically, so the engine
+ watches the run's observed behavior — verdict flips, replay misses —
+ exactly as it does for any other test, and switches into
+ nondeterministic handling (or aborts, under `error` strictness) only
+ when those observations fire.
 
  On success writes a caller-owned handle into `*out_state_machine` —
  pass it to subsequent `hegel_state_machine_next_group` /
@@ -1722,10 +1792,7 @@ hegel_result_t hegel_pool_free(hegel_context_t *ctx, hegel_pool_t *pool);
  calls (through any handle of the same test-case family) and release it
  with `hegel_state_machine_free` exactly once — writes the drawn
  concurrency level into `*out_concurrency`, and returns `HEGEL_OK`.
- Returns `HEGEL_E_ASSUME` for the run's first `max_concurrency > 1`
- creation (the caller should abort the body and call
- `hegel_mark_complete` with `HEGEL_STATUS_INVALID`; see above). Returns
- `HEGEL_E_STOP_TEST` when the engine's choice budget is
+ Returns `HEGEL_E_STOP_TEST` when the engine's choice budget is
  exhausted (the caller should abort the body and call
  `hegel_mark_complete` with `HEGEL_STATUS_OVERRUN`). Returns
  `HEGEL_E_INVALID_ARG` if `num_rules` is zero, an entry of `rule_groups`
@@ -2616,8 +2683,7 @@ hegel_result_t hegel_mark_complete(hegel_context_t *ctx,
 /*
  Parameters:
  `out_status`: Receives `HEGEL_RUN_STATUS_PASSED`,
-   `HEGEL_RUN_STATUS_FAILED`, `HEGEL_RUN_STATUS_ERROR`, or
-   `HEGEL_RUN_STATUS_FAILED_NONDETERMINISTIC`.
+   `HEGEL_RUN_STATUS_FAILED`, or `HEGEL_RUN_STATUS_ERROR`.
 
  Returns `HEGEL_OK`.
  */
@@ -2683,19 +2749,38 @@ hegel_result_t hegel_failure_origin(hegel_context_t *ctx,
 
 /*
  Parameters:
- `out_blob`: Receives a base64 reproduce blob encoding the minimal
-   counterexample's choice sequence, or NULL if libhegel produced none
-   for this failure. Valid until `hegel_failure_free`.
+ `out_blob`: Receives a base64 reproduce blob — the minimal
+   counterexample's choice sequence, or for a nondeterministic failure a
+   self-identifying entry carrying its replay state (timeline pool) — or
+   NULL if libhegel produced none for this failure. Valid until
+   `hegel_failure_free`.
 
  Returns `HEGEL_OK`.
 
- A blob can be replayed later via `hegel_test_case_from_blob` to
- reproduce the test case exactly. It is only guaranteed to reproduce the
- failure in the version of Hegel in which it was generated.
+ A choice-sequence blob can be replayed later via
+ `hegel_test_case_from_blob` to reproduce the test case exactly; a
+ nondeterministic state blob is replayed until failure under a bounded
+ budget via `hegel_run_start_blob`, which handles both kinds. A blob is
+ only guaranteed to reproduce the failure in the version of Hegel in
+ which it was generated.
  */
 hegel_result_t hegel_failure_reproduction_blob(hegel_context_t *ctx,
                                                const hegel_failure_t *f,
                                                const char **out_blob);
+
+/*
+ Parameters:
+ `out_caveat`: Receives the failure's confirmation caveat — its
+   standing under the run's nondeterministic handling, quoting the
+   run's own replay evidence — or NULL for a deterministic failure.
+   Valid until `hegel_failure_free`. Print it alongside the failure
+   report so the reader sees how reliably the failure reproduced.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_failure_caveat(hegel_context_t *ctx,
+                                    const hegel_failure_t *f,
+                                    const char **out_caveat);
 
 /*
  Parameters:

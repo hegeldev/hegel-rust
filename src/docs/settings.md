@@ -17,6 +17,7 @@ those places combine, and how the *profile* a run starts from is chosen.
 | `show_statistics` | boolean | `false` | Print the end-of-run statistics report for events recorded with [`TestCase::event`](crate::TestCase::event) and [`TestCase::event_value`](crate::TestCase::event_value). |
 | `print_blob` | boolean | `true` | On failure, print a copy-pasteable `#[hegel::reproduce_failure("…")]` line. |
 | `backend` | `default`, `urandom` | `default` | The source of randomness ([`Backend`](crate::Backend)): a seeded PRNG, or fresh bytes from `/dev/urandom` on every draw for Antithesis's fuzzer to control. |
+| `nondeterminism_strictness` | `quiet`, `warn`, `error` | `quiet` | How a run reacts when it detects nondeterministic test behavior ([`NondeterminismStrictness`](crate::NondeterminismStrictness)): switch to nondeterministic handling silently, switch with a one-line notice, or abort the run with a flaky-test error. |
 
 The "Values" column is the vocabulary `hegel.toml` and the command-line
 flags use. In Rust the same settings are the builder methods on
@@ -49,6 +50,7 @@ layers below it set and leaves the rest alone:
    | `HEGEL_SEED` | Sets `seed`: an integer is the seed, `none` clears one the profile set. |
    | `HEGEL_DERANDOMIZE` | Sets `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
    | `HEGEL_PRINT_BLOB` | Sets `print_blob`, with the same vocabulary. |
+   | `HEGEL_NONDETERMINISM_STRICTNESS` | Sets `nondeterminism_strictness`: `quiet`, `warn` or `error`. |
 
    An empty variable is ignored; any other malformed value is an error,
    raised when the `Settings` value is created. The variables do not
@@ -327,5 +329,6 @@ run first.
 | `HEGEL_SEED` | profile resolution | Sets `seed` over the resolved profile. |
 | `HEGEL_DERANDOMIZE` | profile resolution | Sets `derandomize` over the resolved profile. |
 | `HEGEL_PRINT_BLOB` | profile resolution | Sets `print_blob` over the resolved profile. |
+| `HEGEL_NONDETERMINISM_STRICTNESS` | profile resolution | Sets `nondeterminism_strictness` over the resolved profile. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |

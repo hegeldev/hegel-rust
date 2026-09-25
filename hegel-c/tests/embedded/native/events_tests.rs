@@ -88,3 +88,28 @@ fn p90_is_the_nearest_rank_below_an_outlying_maximum() {
         "  * n: count 10, min 1, median 5.5, mean 14.50, p90 9, max 100"
     );
 }
+
+#[test]
+fn measurement_replays_render_one_statistics_line() {
+    let mut stats = RunStatistics::default();
+    stats.record_measurement(true);
+    stats.record_measurement(false);
+    stats.record_measurement(true);
+    let lines = stats.render();
+    assert_eq!(
+        lines.last().unwrap(),
+        "  * nondeterministic handling: measurement replays 3, failing 2"
+    );
+    stats.record_case(&[value("n", 1.0)]);
+    let lines = stats.render();
+    assert_eq!(
+        lines.last().unwrap(),
+        "  * nondeterministic handling: measurement replays 3, failing 2"
+    );
+}
+
+#[test]
+fn a_run_without_measurement_replays_renders_no_measurement_line() {
+    let stats = RunStatistics::default();
+    assert!(!stats.render().iter().any(|l| l.contains("measurement")));
+}

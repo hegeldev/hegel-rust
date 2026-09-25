@@ -245,6 +245,7 @@ pub fn generate_boolean(
 /// `hegel_string_generator_t` handle. Built once via the smart constructors
 /// (which report invalid parameters immediately), then drawn from any number
 /// of times with [`generate_string`].
+#[cfg_attr(feature = "__bench", allow(private_interfaces))]
 pub enum StringSpec {
     Text {
         intervals: Arc<IntervalSet>,
