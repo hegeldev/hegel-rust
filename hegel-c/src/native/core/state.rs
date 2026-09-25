@@ -1521,6 +1521,10 @@ pub struct NativeTestCase {
     rng: Option<EngineRng>,
     max_size: usize,
     pub nodes: Vec<ChoiceNode>,
+    /// The constraint of the most recent integer node, which the next
+    /// integer node shares when it is drawn under an equal constraint (see
+    /// [`Self::shared_integer_kind`]).
+    integer_kind: Option<Arc<IntegerChoice>>,
     /// Set to `true` by [`Self::freeze`] on the first call; subsequent calls
     /// are no-ops. A dedicated boolean (rather than checking the family's
     /// status) lets `conclude_test` conclude before calling `freeze()`
@@ -1534,8 +1538,11 @@ pub struct NativeTestCase {
     /// This stream's position in the clone tree: empty for the root, the
     /// parent's id plus the parent's clone counter for a cloned stream.
     clone_id: Vec<usize>,
-    /// Number of clones made from this stream so far.
-    clone_counter: usize,
+    /// Number of clones made from this stream so far. A `u32` so that it
+    /// packs with the flags: a stream is allocated for every test case and
+    /// every shrink attempt, and another word would move it into a larger
+    /// allocator size class.
+    clone_counter: u32,
     /// Streams cloned from this one, each with the index of its clone node
     /// in [`Self::nodes`]. Drained by [`Self::reassemble`].
     clone_children: Vec<(usize, NativeTestCaseHandle)>,
@@ -1649,6 +1656,7 @@ impl NativeTestCase {
             rng,
             max_size,
             nodes: Vec::new(),
+            integer_kind: None,
             frozen: false,
             is_nondeterministic,
             family,
@@ -1800,7 +1808,7 @@ impl NativeTestCase {
             child_prefix.len()
         };
         let mut child_id = self.clone_id.clone();
-        child_id.push(self.clone_counter);
+        child_id.push(self.clone_counter as usize);
         self.clone_counter += 1;
 
         let child = Self::new_stream(
@@ -2058,10 +2066,28 @@ impl NativeTestCase {
             obs.draw_integer(&v, was_forced);
         }
 
+        let kind = self.shared_integer_kind(kind);
         self.nodes
-            .push(ChoiceNode::integer(kind.clone(), v.clone(), was_forced));
+            .push(ChoiceNode::integer_shared(kind, v.clone(), was_forced));
 
         Ok(v)
+    }
+
+    /// The constraint an integer node records, shared with the previous
+    /// integer node when that was drawn under an equal one. A generator
+    /// drawn from repeatedly — a vector's elements, a rule's key, a
+    /// recursive tree's leaves — otherwise allocates a fresh constraint per
+    /// node and frees it again when the node, and the kind ledger's record
+    /// of it, are dropped.
+    fn shared_integer_kind(&mut self, kind: &IntegerChoice) -> Arc<IntegerChoice> {
+        match &self.integer_kind {
+            Some(shared) if **shared == *kind => Arc::clone(shared),
+            _ => {
+                let shared = Arc::new(kind.clone());
+                self.integer_kind = Some(Arc::clone(&shared));
+                shared
+            }
+        }
     }
 
     /// Record a forced integer draw in `[min_value, max_value]`.
@@ -2094,7 +2120,8 @@ impl NativeTestCase {
             obs.draw_integer(&v, true);
         }
 
-        self.nodes.push(ChoiceNode::integer(kind, v, true));
+        let kind = self.shared_integer_kind(&kind);
+        self.nodes.push(ChoiceNode::integer_shared(kind, v, true));
 
         Ok(())
     }

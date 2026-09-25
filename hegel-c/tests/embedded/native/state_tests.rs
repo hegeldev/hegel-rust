@@ -1750,3 +1750,18 @@ fn draw_index_weighted_simplest_is_zero() {
     let mut ntc = NativeTestCase::for_simplest(8).unwrap();
     assert_eq!(ntc.draw_index_weighted(&[0.0, 1.0, 1.0]).unwrap(), 0);
 }
+
+#[test]
+fn consecutive_integer_nodes_under_one_constraint_share_it() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    tc.draw_integer(BigInt::from(0), BigInt::from(10)).unwrap();
+    tc.draw_integer(BigInt::from(0), BigInt::from(10)).unwrap();
+    tc.draw_integer(BigInt::from(0), BigInt::from(20)).unwrap();
+    tc.draw_integer_forced(0, 20, 5).unwrap();
+    let kind = |i: usize| tc.nodes[i].data.as_integer().unwrap().0;
+    assert!(core::ptr::eq(kind(0), kind(1)));
+    assert!(!core::ptr::eq(kind(1), kind(2)));
+    assert!(core::ptr::eq(kind(2), kind(3)));
+    assert_eq!(kind(0).max_value, BigInt::from(10));
+    assert_eq!(kind(2).max_value, BigInt::from(20));
+}
