@@ -1,0 +1,17 @@
+[package]
+name = "hegel-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "hegel-bench"
+path = "src/main.rs"
+
+[dependencies]
+hegeltest = { path = "..", features = ["static-engine"] }
+
+[profile.release]
+debug = true
