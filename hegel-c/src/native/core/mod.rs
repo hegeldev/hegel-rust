@@ -63,19 +63,9 @@ pub const DIRICHLET_ALPHA_DIFFUSE: f64 = 0.12;
 pub const DIRICHLET_ALPHA_MIDDLE: f64 = 2.2;
 
 /// The float categories' Dirichlet concentrations, one per field of
-/// `FloatGenerationParameters`. The special categories have low concentrations
-/// and the total is small (about 7.5), so a case's weights are lumpy: most sit
-/// near zero while one or two spike, the way the integer set's do, and a run
-/// of a hundred cases visits a hundred distinct mixtures rather than a hundred
-/// near-copies of the mean. The point categories — NaN, `±∞`, `±MAX`,
-/// `±2^53` and `±0`, a handful of distinct values each — sit at half the
-/// concentration of the band categories, whose values are all different, so a
-/// draw is not spent on the same few landmarks as often. The default draw — a coin flip
-/// between the continuous uniform and a log-uniform over the range's binades,
-/// which every ruled-out category also falls through to — carries as much
-/// concentration as the specials together, so its mean weight is one half and
-/// it stays the bulk of most cases. A new float category needs a concentration
-/// here, a field on `FloatGenerationParameters`, and a slot in its `ALPHAS`.
+/// `FloatGenerationParameters`. It is intentionally lumpy.
+/// Point categories are drawn half as often. The default draw is a coin flip
+/// between the continuous uniform and a log-uniform over the range's binades.
 pub const DIRICHLET_ALPHA_FLOAT_ENDPOINT: f64 = 0.25;
 pub const DIRICHLET_ALPHA_FLOAT_NEAR_ZERO: f64 = 0.25;
 pub const DIRICHLET_ALPHA_FLOAT_SUBNORMAL: f64 = 0.25;
