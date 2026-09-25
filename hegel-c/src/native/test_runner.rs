@@ -990,6 +990,10 @@ pub(crate) struct Engine<'a> {
     /// Never fed between runs: a stored entry that stops reproducing is
     /// staleness, not nondeterminism.
     kind_ledger: KindLedger,
+    /// The executing case's serialized values: written by the kind ledger
+    /// as it observes them, then looked up by the execution cache. Kept
+    /// across executions so a run allocates it once.
+    key_scratch: Vec<u8>,
     /// Consecutive generation-phase conclusions whose realized values had
     /// been executed before. [`DUPLICATE_STOP`] of these ends generation
     /// while no valid case exists; a novel conclusion resets it. Frozen (at
@@ -1053,6 +1057,7 @@ impl<'a> Engine<'a> {
             persister: Persister::new(db, database_key),
             exec_cache: ExecCache::default(),
             kind_ledger: KindLedger::default(),
+            key_scratch: Vec::new(),
             consecutive_duplicates: 0,
             interesting: HashMap::default(),
             targeting: crate::native::targeting::TargetingState::new(),
@@ -1212,15 +1217,20 @@ impl<'a> Engine<'a> {
     /// counter (generation-window cases only) and, on a verdict change,
     /// reports the flake the tree could never see. The returned error is
     /// `NonDeterministic` for kind drift and `Flaky` for a verdict change.
+    /// The ledger serializes the values as it checks them, and that one
+    /// encoding is the cache's key.
     fn record_execution(&mut self, run: &RunResult) -> Result<Option<RunError>, InternalError> {
-        if let Some(msg) = self.kind_ledger.observe(&run.nodes)? {
+        if let Some(msg) = self
+            .kind_ledger
+            .observe(&run.nodes, &mut self.key_scratch)?
+        {
             return Ok(Some(RunError::NonDeterministic(msg)));
         }
         if run.status == Status::EarlyStop {
             return Ok(None);
         }
         let recorded = self.exec_cache.record(
-            serialize_executed_nodes(&run.nodes)?,
+            &self.key_scratch,
             run.status,
             run.origin.as_deref(),
             &run.nodes,
@@ -1304,14 +1314,16 @@ impl<'a> Engine<'a> {
     /// truncated-proposal overruns, pun resolution) are gone by measurement:
     /// serves were ≈ exact repeats (experiment 010). While the run is
     /// nondeterministic nothing is served: identical choices need not
-    /// produce identical outcomes, so every replay executes the body.
+    /// produce identical outcomes, so every replay executes the body. While
+    /// the cache holds no full entry (the whole generation phase) the key is
+    /// not even built.
     async fn cached_test_function(
         &mut self,
         choices: &[ChoiceValue],
         nodes: Option<&[ChoiceNode]>,
         extend: usize,
     ) -> Result<RunResult, RunError> {
-        if !self.nondeterministic {
+        if !self.nondeterministic && self.exec_cache.serves_anything() {
             let key = hegel_internal_unwrap!(
                 serialize_choices(choices),
                 "a replayed test case's clone values nest deeper than MAX_CLONE_DEPTH"

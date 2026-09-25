@@ -561,3 +561,32 @@ fn serialize_nodes_matches_serialize_choices_at_max_depth() {
 fn serialize_nodes_rejects_clone_nesting_beyond_max_depth() {
     assert!(serialize_nodes(&nested_clone_nodes(MAX_CLONE_DEPTH + 1)).is_none());
 }
+
+#[test]
+fn integers_serialize_to_the_bignum_encoding_whether_or_not_they_fit_i128() {
+    let mut values = vec![
+        BigInt::from(0),
+        BigInt::from(i128::MIN),
+        BigInt::from(i128::MAX),
+        BigInt::from(i128::MIN + 1),
+        BigInt::from(i128::MAX) + BigInt::from(1u8),
+        BigInt::from(i128::MIN) + BigInt::from(i128::MIN),
+    ];
+    for k in 0..127 {
+        let power = 1i128 << k;
+        for magnitude in [power - 1, power, power + 1] {
+            values.push(BigInt::from(magnitude));
+            values.push(BigInt::from(-magnitude));
+        }
+    }
+    for value in values {
+        let mut expected = vec![1, 0, 0, 0, 0, 10];
+        let bytes = value.to_signed_bytes_le();
+        expected.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&bytes);
+        let choices = vec![ChoiceValue::Integer(value)];
+        let encoded = serialize_choices(&choices).unwrap();
+        assert_eq!(encoded, expected, "{:?}", choices[0]);
+        assert_eq!(deserialize_choices(&encoded), Some(choices));
+    }
+}

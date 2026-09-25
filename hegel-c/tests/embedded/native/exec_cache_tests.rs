@@ -23,7 +23,7 @@ fn a_recorded_conclusion_is_served_on_exact_repeat() {
     let mut cache = ExecCache::default();
     let nodes = alloc::vec![bool_node(true)];
     let recorded = cache.record(
-        alloc::vec![1, 2, 3],
+        &[1, 2, 3],
         Status::Interesting,
         Some("origin"),
         &nodes,
@@ -42,10 +42,10 @@ fn a_recorded_conclusion_is_served_on_exact_repeat() {
 #[test]
 fn the_generation_tier_detects_duplicates_without_keeping_serving_entries() {
     let mut cache = ExecCache::default();
-    let first = cache.record(alloc::vec![7], Status::Valid, None, &[], &[], false);
+    let first = cache.record(&[7], Status::Valid, None, &[], &[], false);
     assert!(!first.duplicate);
     assert!(cache.serve(&[7]).is_none());
-    let repeat = cache.record(alloc::vec![7], Status::Valid, None, &[], &[], false);
+    let repeat = cache.record(&[7], Status::Valid, None, &[], &[], false);
     assert!(repeat.duplicate);
     assert!(!repeat.verdict_mismatch);
 }
@@ -53,15 +53,8 @@ fn the_generation_tier_detects_duplicates_without_keeping_serving_entries() {
 #[test]
 fn a_verdict_change_on_a_repeat_is_a_mismatch() {
     let mut cache = ExecCache::default();
-    cache.record(alloc::vec![7], Status::Valid, None, &[], &[], false);
-    let flipped = cache.record(
-        alloc::vec![7],
-        Status::Interesting,
-        Some("o"),
-        &[],
-        &[],
-        true,
-    );
+    cache.record(&[7], Status::Valid, None, &[], &[], false);
+    let flipped = cache.record(&[7], Status::Interesting, Some("o"), &[], &[], true);
     assert!(flipped.duplicate);
     assert!(flipped.verdict_mismatch);
     assert!(
@@ -73,22 +66,8 @@ fn a_verdict_change_on_a_repeat_is_a_mismatch() {
 #[test]
 fn an_origin_change_alone_is_a_mismatch() {
     let mut cache = ExecCache::default();
-    cache.record(
-        alloc::vec![7],
-        Status::Interesting,
-        Some("a"),
-        &[],
-        &[],
-        false,
-    );
-    let moved = cache.record(
-        alloc::vec![7],
-        Status::Interesting,
-        Some("b"),
-        &[],
-        &[],
-        false,
-    );
+    cache.record(&[7], Status::Interesting, Some("a"), &[], &[], false);
+    let moved = cache.record(&[7], Status::Interesting, Some("b"), &[], &[], false);
     assert!(moved.verdict_mismatch);
 }
 
@@ -96,7 +75,7 @@ fn an_origin_change_alone_is_a_mismatch() {
 fn the_execution_cache_is_bounded() {
     let mut cache = ExecCache::with_full_tier_bound(1);
     let key: Vec<u8> = (0..100).collect();
-    cache.record(key.clone(), Status::Valid, None, &[], &[], true);
+    cache.record(&key, Status::Valid, None, &[], &[], true);
     assert!(
         cache.serve(&key).is_none(),
         "an entry over the whole budget is evicted immediately"
@@ -109,9 +88,9 @@ fn eviction_drops_the_oldest_entry_first() {
     let entry_cost = 100 + core::mem::size_of::<CachedRun>();
     let mut cache = ExecCache::with_full_tier_bound(2 * entry_cost);
     let key = |tag: u8| -> Vec<u8> { core::iter::repeat_n(tag, 100).collect() };
-    cache.record(key(1), Status::Valid, None, &[], &[], true);
-    cache.record(key(2), Status::Valid, None, &[], &[], true);
-    cache.record(key(3), Status::Valid, None, &[], &[], true);
+    cache.record(&key(1), Status::Valid, None, &[], &[], true);
+    cache.record(&key(2), Status::Valid, None, &[], &[], true);
+    cache.record(&key(3), Status::Valid, None, &[], &[], true);
     assert!(cache.serve(&key(1)).is_none());
     assert!(cache.serve(&key(2)).is_some());
     assert!(cache.serve(&key(3)).is_some());
@@ -120,36 +99,70 @@ fn eviction_drops_the_oldest_entry_first() {
 #[test]
 fn clear_drops_both_tiers() {
     let mut cache = ExecCache::default();
-    cache.record(alloc::vec![7], Status::Valid, None, &[], &[], true);
+    cache.record(&[7], Status::Valid, None, &[], &[], true);
     cache.clear();
     assert!(cache.serve(&[7]).is_none());
-    let again = cache.record(
-        alloc::vec![7],
-        Status::Interesting,
-        Some("o"),
-        &[],
-        &[],
-        true,
-    );
+    let again = cache.record(&[7], Status::Interesting, Some("o"), &[], &[], true);
     assert!(!again.duplicate);
     assert!(!again.verdict_mismatch);
+}
+
+#[test]
+fn the_full_tier_reports_whether_it_can_serve() {
+    let mut cache = ExecCache::default();
+    assert!(!cache.serves_anything());
+    cache.record(&[7], Status::Valid, None, &[], &[], false);
+    assert!(
+        !cache.serves_anything(),
+        "digest-only recording serves nothing"
+    );
+    cache.record(&[8], Status::Valid, None, &[], &[], true);
+    assert!(cache.serves_anything());
+    cache.clear();
+    assert!(!cache.serves_anything());
+}
+
+#[test]
+fn the_kind_ledger_writes_the_serialized_values_as_it_observes_them() {
+    let mut ledger = KindLedger::default();
+    let nodes = alloc::vec![int_node(0, 5), bool_node(true), int_node(0, -7)];
+    let mut key = alloc::vec![9, 9, 9];
+    assert!(ledger.observe(&nodes, &mut key).unwrap().is_none());
+    assert_eq!(
+        key,
+        crate::native::database::serialize_nodes(&nodes).unwrap(),
+        "the key is the whole sequence's encoding, replacing the buffer's old contents"
+    );
 }
 
 #[test]
 fn the_kind_ledger_accepts_consistent_reexecution() {
     let mut ledger = KindLedger::default();
     let nodes = alloc::vec![int_node(0, 5), bool_node(true)];
-    assert!(ledger.observe(&nodes).unwrap().is_none());
-    assert!(ledger.observe(&nodes).unwrap().is_none());
+    assert!(ledger.observe(&nodes, &mut Vec::new()).unwrap().is_none());
+    assert!(ledger.observe(&nodes, &mut Vec::new()).unwrap().is_none());
     let other_values = alloc::vec![int_node(0, 6), bool_node(false)];
-    assert!(ledger.observe(&other_values).unwrap().is_none());
+    assert!(
+        ledger
+            .observe(&other_values, &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
 fn the_kind_ledger_reports_kind_drift_at_a_shared_prefix() {
     let mut ledger = KindLedger::default();
-    assert!(ledger.observe(&[bool_node(true)]).unwrap().is_none());
-    let msg = ledger.observe(&[int_node(0, 5)]).unwrap().unwrap();
+    assert!(
+        ledger
+            .observe(&[bool_node(true)], &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
+    let msg = ledger
+        .observe(&[int_node(0, 5)], &mut Vec::new())
+        .unwrap()
+        .unwrap();
     assert!(msg.contains("choice kind changed from"), "{msg}");
     assert!(msg.contains("global mutable state"), "{msg}");
 }
@@ -157,8 +170,18 @@ fn the_kind_ledger_reports_kind_drift_at_a_shared_prefix() {
 #[test]
 fn the_kind_ledger_treats_a_constraint_change_as_kind_drift() {
     let mut ledger = KindLedger::default();
-    assert!(ledger.observe(&[int_node(0, 5)]).unwrap().is_none());
-    assert!(ledger.observe(&[int_node(1, 5)]).unwrap().is_some());
+    assert!(
+        ledger
+            .observe(&[int_node(0, 5)], &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ledger
+            .observe(&[int_node(1, 5)], &mut Vec::new())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -166,20 +189,20 @@ fn kind_drift_is_scoped_to_the_value_prefix() {
     let mut ledger = KindLedger::default();
     assert!(
         ledger
-            .observe(&[bool_node(true), int_node(0, 5)])
+            .observe(&[bool_node(true), int_node(0, 5)], &mut Vec::new())
             .unwrap()
             .is_none()
     );
     assert!(
         ledger
-            .observe(&[bool_node(false), bool_node(true)])
+            .observe(&[bool_node(false), bool_node(true)], &mut Vec::new())
             .unwrap()
             .is_none(),
         "a different position-0 value opens an independent prefix"
     );
     assert!(
         ledger
-            .observe(&[bool_node(true), bool_node(true)])
+            .observe(&[bool_node(true), bool_node(true)], &mut Vec::new())
             .unwrap()
             .is_some(),
         "the same position-0 value must reuse the recorded prefix"
@@ -190,9 +213,19 @@ fn kind_drift_is_scoped_to_the_value_prefix() {
 fn the_kind_ledger_stops_learning_at_its_cap_but_keeps_checking() {
     let mut ledger = KindLedger::default();
     let long: Vec<ChoiceNode> = (0..KIND_LEDGER_CAP + 10).map(|_| bool_node(true)).collect();
-    assert!(ledger.observe(&long).unwrap().is_none());
+    assert!(ledger.observe(&long, &mut Vec::new()).unwrap().is_none());
     assert_eq!(ledger.entries.len(), KIND_LEDGER_CAP);
-    assert!(ledger.observe(&[int_node(0, 5)]).unwrap().is_some());
+    assert!(
+        ledger
+            .observe(&[int_node(0, 5)], &mut Vec::new())
+            .unwrap()
+            .is_some()
+    );
     ledger.clear();
-    assert!(ledger.observe(&[int_node(0, 5)]).unwrap().is_none());
+    assert!(
+        ledger
+            .observe(&[int_node(0, 5)], &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
 }

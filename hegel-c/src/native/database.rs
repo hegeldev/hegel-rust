@@ -269,11 +269,19 @@ fn serialize_choice_list<'a>(
     if depth > MAX_CLONE_DEPTH {
         return None;
     }
-    buf.extend_from_slice(&(count as u32).to_le_bytes());
+    serialize_choice_count(buf, count);
     for choice in choices {
         serialize_one_choice_at(buf, choice, depth)?;
     }
     Some(())
+}
+
+/// The count prefix of a choice list: the first bytes of the
+/// [`serialize_choices`] encoding, ahead of the values. A caller assembling
+/// the encoding one top-level value at a time with [`serialize_one_choice`]
+/// writes this first.
+pub(crate) fn serialize_choice_count(buf: &mut Vec<u8>, count: usize) {
+    buf.extend_from_slice(&(count as u32).to_le_bytes());
 }
 
 /// Serialize one top-level value with its type tag — the per-position unit
@@ -326,11 +334,36 @@ fn serialize_one_choice_at(
 
 /// Encode a [`BigInt`] as sub-tag 10 followed by a length-prefixed
 /// two's-complement little-endian byte sequence (see [`serialize_choices`]).
+/// A value that fits an `i128` — every integer the engine's own generators
+/// draw — is encoded straight from its native bytes, without the
+/// intermediate allocation [`BigInt::to_signed_bytes_le`] makes; the two
+/// paths produce identical bytes.
 fn serialize_any_integer(buf: &mut Vec<u8>, v: &BigInt) {
     buf.push(10);
-    let mag = v.to_signed_bytes_le();
-    buf.extend_from_slice(&(mag.len() as u32).to_le_bytes());
-    buf.extend_from_slice(&mag);
+    match i128::try_from(v) {
+        Ok(native) => serialize_native_integer(buf, native),
+        Err(()) => {
+            let mag = v.to_signed_bytes_le();
+            buf.extend_from_slice(&(mag.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&mag);
+        }
+    }
+}
+
+/// The length-prefixed shortest little-endian two's-complement encoding of
+/// `v`: its native bytes with every top byte dropped that only repeats the
+/// sign of the byte below it, which is exactly what
+/// [`BigInt::to_signed_bytes_le`] produces.
+fn serialize_native_integer(buf: &mut Vec<u8>, v: i128) {
+    let bytes = v.to_le_bytes();
+    let negative = v < 0;
+    let extension = if negative { 0xFF } else { 0x00 };
+    let mut len = bytes.len();
+    while len > 1 && bytes[len - 1] == extension && (bytes[len - 2] & 0x80 != 0) == negative {
+        len -= 1;
+    }
+    buf.extend_from_slice(&(len as u32).to_le_bytes());
+    buf.extend_from_slice(&bytes[..len]);
 }
 
 /// Inverse of [`serialize_any_integer`]. Returns the decoded `BigInt` and the

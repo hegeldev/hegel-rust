@@ -124,17 +124,19 @@ impl ExecCache {
     /// Record one executed conclusion under its serialized-values `key`,
     /// keeping a full serving entry only when `keep_full` (the generation
     /// phase keeps digests only: its duplicates must execute — they are the
-    /// duplicate-stop signal — so serving entries would go unread).
+    /// duplicate-stop signal — so serving entries would go unread). The key
+    /// is borrowed and copied only into a kept entry, so a caller may reuse
+    /// its buffer across executions.
     pub(crate) fn record(
         &mut self,
-        key: Vec<u8>,
+        key: &[u8],
         status: Status,
         origin: Option<&str>,
         nodes: &[ChoiceNode],
         spans: &[Span],
         keep_full: bool,
     ) -> Recorded {
-        let digest = Digest::of(&key);
+        let digest = Digest::of(key);
         let recorded = match self.verdicts.get(&digest) {
             Some(v) => Recorded {
                 duplicate: true,
@@ -154,7 +156,7 @@ impl ExecCache {
                 }
             }
         };
-        if keep_full && !recorded.verdict_mismatch && !self.full.contains_key(&key) {
+        if keep_full && !recorded.verdict_mismatch && !self.full.contains_key(key) {
             let entry = CachedRun {
                 status,
                 origin: origin.map(String::from),
@@ -162,8 +164,8 @@ impl ExecCache {
                 spans: spans.to_vec(),
             };
             self.full_bytes += entry.cost(key.len());
-            self.full_order.push_back(key.clone());
-            self.full.insert(key, entry);
+            self.full_order.push_back(key.to_vec());
+            self.full.insert(key.to_vec(), entry);
             let bound = self.max_full_bytes.unwrap_or(FULL_TIER_MAX_BYTES);
             while self.full_bytes > bound && !self.full_order.is_empty() {
                 let oldest = self.full_order.pop_front().unwrap_or_default();
@@ -173,6 +175,13 @@ impl ExecCache {
             }
         }
         recorded
+    }
+
+    /// Whether the full tier holds any entry at all. While it is empty —
+    /// the whole generation phase, which records digests only — a caller
+    /// can skip building the key that [`Self::serve`] would look up.
+    pub(crate) fn serves_anything(&self) -> bool {
+        !self.full.is_empty()
     }
 
     /// The full entry for `key`, if one survives: an exact repeat of an
@@ -212,12 +221,22 @@ impl KindLedger {
     /// tree's kind-mismatch diagnostic on the first contradiction. The engine
     /// bounds clone nesting at `MAX_CLONE_DEPTH` as a case runs, so the
     /// serializer refusing an executed node is a violated internal invariant.
+    ///
+    /// The ledger hashes each node's serialized value, so it writes the
+    /// whole sequence's [`serialize_nodes`] encoding into `key` (replacing
+    /// its contents) as it goes: the caller's execution-cache key, produced
+    /// without a second pass over the nodes. On a contradiction `key` holds
+    /// the values up to the offending node.
+    ///
+    /// [`serialize_nodes`]: crate::native::database::serialize_nodes
     pub(crate) fn observe(
         &mut self,
         nodes: &[ChoiceNode],
+        key: &mut Vec<u8>,
     ) -> Result<Option<String>, InternalError> {
         let mut prefix = Digest::new();
-        let mut scratch = Vec::new();
+        key.clear();
+        crate::native::database::serialize_choice_count(key, nodes.len());
         for node in nodes {
             let kind = node.kind();
             match self.entries.get(&prefix) {
@@ -234,12 +253,12 @@ impl KindLedger {
                 }
                 _ => {}
             }
-            scratch.clear();
+            let start = key.len();
             hegel_internal_unwrap!(
-                crate::native::database::serialize_one_choice(&mut scratch, node.data.value_ref()),
+                crate::native::database::serialize_one_choice(key, node.data.value_ref()),
                 "an executed test case's clone values nest deeper than MAX_CLONE_DEPTH"
             );
-            prefix.update(&scratch);
+            prefix.update(&key[start..]);
         }
         Ok(None)
     }
