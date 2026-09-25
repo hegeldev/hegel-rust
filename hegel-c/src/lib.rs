@@ -498,8 +498,9 @@ struct FamilyShared {
     /// deterministically the moment the handle is cloned. Family-wide so the
     /// client can keep appending to — and finally read — the document after
     /// the case completes. Each handle writes into its own region of it; see
-    /// [`HegelTestCase::print_target`].
-    printer: Arc<Mutex<Printer>>,
+    /// [`HegelTestCase::print_target`]. A printer handle fetched from a
+    /// test-case handle reaches it through the family ([`PrinterDoc`]).
+    printer: Mutex<Printer>,
     /// Whether an explicit `max_width` has been configured through
     /// `hegel_test_case_printer` options. The first explicit configuration
     /// wins; later conflicting ones error. Only read and written under the
@@ -2326,9 +2327,7 @@ fn new_family(
     Arc::new(FamilyShared {
         ds,
         completed: AtomicBool::new(false),
-        printer: Arc::new(Mutex::new(Printer::new(size_arg(
-            DEFAULT_PRINTER_MAX_WIDTH,
-        )))),
+        printer: Mutex::new(Printer::new(size_arg(DEFAULT_PRINTER_MAX_WIDTH))),
         printer_width_configured: AtomicBool::new(false),
         started: crate::sys::Instant::now(),
         reporter,
@@ -4914,8 +4913,26 @@ unsafe fn event_observation(
 ///
 /// Every handle — including those returned by `hegel_printer_deferred` —
 /// must be released with `hegel_printer_free`.
+/// The document a printer handle writes into: a test-case family's, reached
+/// through the family so the family allocates no document of its own, or a
+/// standalone one from `hegel_printer_new`.
+#[derive(Clone)]
+enum PrinterDoc {
+    Family(Arc<FamilyShared>),
+    Standalone(Arc<Mutex<Printer>>),
+}
+
+impl PrinterDoc {
+    fn lock(&self) -> MutexGuard<'_, Printer> {
+        match self {
+            PrinterDoc::Family(family) => family.printer.lock(),
+            PrinterDoc::Standalone(printer) => printer.lock(),
+        }
+    }
+}
+
 pub struct HegelPrinter {
-    inner: Arc<Mutex<Printer>>,
+    inner: PrinterDoc,
     target: PrinterTarget,
     /// Whether some thread is mid-operation on this handle. Handles are
     /// single-owner — see the concurrent-use contract on the struct docs —
@@ -5163,7 +5180,7 @@ pub unsafe extern "C" fn hegel_printer_new(
     }
     let max_width = HegelPrinterOptions::resolve_max_width(unsafe { options.as_ref() });
     let handle = HegelPrinter {
-        inner: Arc::new(Mutex::new(Printer::new(size_arg(max_width)))),
+        inner: PrinterDoc::Standalone(Arc::new(Mutex::new(Printer::new(size_arg(max_width))))),
         target: PrinterTarget::Main,
         busy: AtomicBool::new(false),
         attribution: None,
@@ -5466,7 +5483,7 @@ pub unsafe extern "C" fn hegel_printer_deferred(
     match handle.inner.lock().deferred(handle.target) {
         Ok(slot) => {
             let child = HegelPrinter {
-                inner: Arc::clone(&handle.inner),
+                inner: handle.inner.clone(),
                 target: PrinterTarget::Slot(slot),
                 busy: AtomicBool::new(false),
                 attribution: handle.attribution.clone(),
@@ -5740,7 +5757,7 @@ pub unsafe extern "C" fn hegel_test_case_printer(
         return HEGEL_E_INVALID_ARG;
     }
     let options = unsafe { options.as_ref() };
-    let inner = Arc::clone(&tc.family.printer);
+    let inner = PrinterDoc::Family(Arc::clone(&tc.family));
     if let Some(requested) = options.and_then(|o| o.max_width) {
         let mut printer = inner.lock();
         if !tc.family.printer_width_configured.load(Ordering::Acquire) {

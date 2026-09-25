@@ -100,6 +100,7 @@ pub(crate) fn raise_for_rc(rc: hegel_c::hegel_result_t) -> ! {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct TestCaseGlobalData {
     /// Whether drawn-value records and notes are surfaced for this test case
     /// (true on the final replay of a failure — unless quiet — or when
@@ -237,7 +238,7 @@ pub(crate) struct TestCaseLocalData {
 /// `handle.join().unwrap()`, which resumes the panic on the main thread
 /// so Hegel's runner can observe it.
 pub struct TestCase {
-    global: Arc<TestCaseGlobalData>,
+    global: TestCaseGlobalData,
     local: RefCell<TestCaseLocalData>,
     /// This instance's libhegel handle, shared through the `Arc` with the
     /// lifecycle that created it, so a `TestCase` that escapes its test
@@ -273,7 +274,7 @@ pub struct TestCase {
 impl Clone for TestCase {
     fn clone(&self) -> Self {
         TestCase {
-            global: self.global.clone(),
+            global: self.global,
             local: RefCell::new(self.local.borrow().clone()),
             handle: RefCell::new(Arc::new(self.handle.borrow().clone_handle())),
             printer: RefCell::new(None),
@@ -446,7 +447,7 @@ impl TestCase {
             Arc::clone(SILENT.get_or_init(|| Arc::new(|_| {})))
         };
         TestCase {
-            global: Arc::new(TestCaseGlobalData { emit }),
+            global: TestCaseGlobalData { emit },
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
                 printing_depth: 0,
@@ -852,7 +853,7 @@ impl TestCase {
         let local = self.local.borrow();
         let block = self.handle.borrow().block_handle(extra_indent as u64);
         TestCase {
-            global: self.global.clone(),
+            global: self.global,
             local: RefCell::new(TestCaseLocalData {
                 span_depth: 0,
                 printing_depth: 0,
