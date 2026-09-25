@@ -2678,4 +2678,135 @@ mod float_categories {
         assert_eq!(float_below(float_pow2(513)), float_pow2(513).next_down());
         assert!(float_below(f64::MIN_POSITIVE).is_subnormal());
     }
+
+    #[test]
+    fn float_pow2_is_the_exact_power_of_two() {
+        assert_eq!(float_pow2(0), 1.0);
+        assert_eq!(float_pow2(10), 1024.0);
+        assert_eq!(float_pow2(-3), 0.125);
+        assert_eq!(float_pow2(1023), 2.0f64.powi(1023));
+        assert_eq!(float_pow2(-1022), f64::MIN_POSITIVE);
+        assert_eq!(float_pow2(-1023), f64::MIN_POSITIVE / 2.0);
+        assert_eq!(float_pow2(-1074), 5e-324);
+        assert_eq!(float_pow2(-126), F32_MIN_POSITIVE);
+    }
+
+    #[test]
+    fn float_width_layout_gives_the_exponent_bias_and_mantissa_bits() {
+        assert_eq!(FloatWidth::F64.layout(), (1023, 52));
+        assert_eq!(FloatWidth::F32.layout(), (127, 23));
+        let (e, m) = FloatWidth::F64.layout();
+        assert_eq!(float_pow2(1 - e), f64::MIN_POSITIVE);
+        assert_eq!(float_pow2(m + 1), TWO_53);
+        let (e, m) = FloatWidth::F32.layout();
+        assert_eq!(float_pow2(1 - e), F32_MIN_POSITIVE);
+        assert_eq!(float_pow2(m + 1), TWO_24);
+    }
+
+    #[test]
+    fn float_width_max_is_the_widths_largest_finite() {
+        assert_eq!(FloatWidth::F64.max(), f64::MAX);
+        assert_eq!(FloatWidth::F32.max(), F32_MAX);
+    }
+
+    #[test]
+    fn float_width_bit_range_rounds_f32_bounds_inward() {
+        assert_eq!(
+            FloatWidth::F64.bit_range(1.0, 2.0),
+            (1.0f64.to_bits(), 2.0f64.to_bits())
+        );
+        assert_eq!(
+            FloatWidth::F32.bit_range(1.0, 2.0),
+            (u64::from(1.0f32.to_bits()), u64::from(2.0f32.to_bits()))
+        );
+        let (lo, hi) = FloatWidth::F32.bit_range(1.0f64.next_up(), 2.0f64.next_down());
+        assert_eq!(lo, u64::from(1.0f32.next_up().to_bits()));
+        assert_eq!(hi, u64::from(2.0f32.next_down().to_bits()));
+        let (lo, hi) = FloatWidth::F32.bit_range(1.0f64.next_up(), 1.0f64.next_up().next_up());
+        assert!(lo > hi, "{lo} <= {hi}");
+    }
+
+    #[test]
+    fn float_width_to_float_decodes_the_widths_bit_pattern() {
+        assert_eq!(FloatWidth::F64.to_float(1.0f64.to_bits()), 1.0);
+        assert_eq!(FloatWidth::F64.to_float(1), 5e-324);
+        assert_eq!(FloatWidth::F32.to_float(u64::from(1.0f32.to_bits())), 1.0);
+        assert_eq!(FloatWidth::F32.to_float(1), f64::from(f32::from_bits(1)));
+    }
+
+    #[test]
+    fn coin_flip_first_uses_whichever_option_has_a_value() {
+        let mut rng = EngineRng::seeded(42);
+        let positive = |x: i32, _: &mut EngineRng| (x > 0).then_some(x);
+        let both: Vec<i32> = (0..200)
+            .map(|_| coin_flip_first([1, 2], &mut rng, positive).unwrap())
+            .collect();
+        assert!(both.contains(&1) && both.contains(&2));
+        for _ in 0..50 {
+            assert_eq!(coin_flip_first([0, 2], &mut rng, positive), Some(2));
+            assert_eq!(coin_flip_first([1, 0], &mut rng, positive), Some(1));
+            assert_eq!(coin_flip_first([0, 0], &mut rng, positive), None);
+        }
+    }
+
+    #[test]
+    fn signed_magnitude_sample_applies_a_sign_the_range_admits() {
+        let smallest = |lo: f64, _: f64, _: &mut EngineRng| Some(lo);
+        let mut rng = EngineRng::seeded(42);
+        let vs: Vec<f64> = (0..200)
+            .map(|_| signed_magnitude_sample(&unbounded(), &mut rng, smallest).unwrap())
+            .collect();
+        assert_exactly_set(&vs, &[5e-324, -5e-324]);
+        for _ in 0..50 {
+            assert_eq!(
+                signed_magnitude_sample(&choice(100.0, 200.0), &mut rng, smallest),
+                Some(100.0)
+            );
+            assert_eq!(
+                signed_magnitude_sample(&choice(-200.0, -100.0), &mut rng, smallest),
+                Some(-100.0)
+            );
+            assert_eq!(
+                signed_magnitude_sample(&with_snm(choice(-1.0, 1.0), 0.25), &mut rng, smallest)
+                    .map(f64::abs),
+                Some(0.25)
+            );
+            assert_eq!(
+                signed_magnitude_sample(&choice(-0.0, 0.0), &mut rng, smallest),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn banded_magnitude_sample_stays_inside_the_band_and_the_range() {
+        let mut rng = EngineRng::seeded(42);
+        let band = (1.0, 8.0);
+        let vs: Vec<f64> = (0..500)
+            .map(|_| banded_magnitude_sample(&unbounded(), band, &mut rng).unwrap())
+            .collect();
+        assert!(vs.iter().all(|&v| in_band(v, band)), "{vs:?}");
+        assert!(vs.iter().any(|&v| v < 0.0) && vs.iter().any(|&v| v > 0.0));
+        for _ in 0..100 {
+            let v = banded_magnitude_sample(&choice(0.0, 2.0), band, &mut rng).unwrap();
+            assert!((1.0..=2.0).contains(&v), "{v}");
+            assert_eq!(
+                banded_magnitude_sample(&choice(0.0, 0.5), band, &mut rng),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn pick_valid_draws_only_valid_candidates_without_double_counting() {
+        let fc = choice(0.0, 1.0);
+        let mut rng = EngineRng::seeded(42);
+        let vs: Vec<f64> = (0..2000)
+            .map(|_| pick_valid(&fc, [-1.0, 0.5, 0.5, 2.0, 1.0], &mut rng).unwrap())
+            .collect();
+        assert_exactly_set(&vs, &[0.5, 1.0]);
+        let halves = vs.iter().filter(|&&v| v == 0.5).count();
+        assert!((900..1100).contains(&halves), "{halves}");
+        assert_eq!(pick_valid(&fc, [-1.0, 2.0], &mut rng), None);
+    }
 }
