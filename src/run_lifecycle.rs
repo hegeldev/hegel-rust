@@ -529,26 +529,31 @@ pub(crate) fn drive<F>(
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut stash: Option<NondetStash> = None;
     while let Some(c_tc) = run.next_test_case() {
-        let buffer: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let buffer: Option<Arc<std::sync::Mutex<Vec<String>>>> = (!quiet).then(Arc::default);
         let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
-        let case_sink: Option<crate::test_case::OutputSink> = if quiet {
-            None
-        } else {
-            let buffer = Arc::clone(&buffer);
-            Some(Arc::new(move |line: &str| {
-                if let Some(live) = &live {
-                    live.line(line);
-                }
-                buffer
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(line.to_string());
-            }))
+        let case_sink: Option<crate::test_case::OutputSink> = match &buffer {
+            None => None,
+            Some(buffer) => {
+                let buffer = Arc::clone(buffer);
+                Some(Arc::new(move |line: &str| {
+                    if let Some(live) = &live {
+                        live.line(line);
+                    }
+                    buffer
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(line.to_string());
+                }))
+            }
         };
         let (tc_result, payload, diagnostic) =
             run_test_case(c_tc, &mut test_fn, false, verbosity, &output, case_sink);
         if matches!(tc_result, TestCaseResult::Interesting(_)) {
-            let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
+            let records = buffer
+                .map(|buffer| {
+                    std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()))
+                })
+                .unwrap_or_default();
             stash = Some(NondetStash {
                 lines: records,
                 diagnostic,

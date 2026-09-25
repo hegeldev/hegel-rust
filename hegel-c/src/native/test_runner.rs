@@ -1258,7 +1258,9 @@ impl<'a> Engine<'a> {
     /// [`NativeDataSource::take_outcome`]).
     async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
         let (data_source, handle) = NativeDataSource::new(ntc);
-        self.exchange.offer(Box::new(data_source)).await;
+        self.exchange
+            .offer(alloc::sync::Arc::new(data_source))
+            .await;
         let nodes = NativeDataSource::take_nodes(&handle);
         let spans = NativeDataSource::take_spans(&handle);
         let target_observations = NativeDataSource::take_target_observations(&handle);
@@ -1403,6 +1405,14 @@ impl<'a> Engine<'a> {
         nodes: &[ChoiceNode],
         spans: &[Span],
     ) -> Result<(), RunError> {
+        let mut labelled: Vec<(u64, usize, usize)> =
+            spans.iter().map(|s| (s.label, s.start, s.end)).collect();
+        labelled.sort_unstable();
+        labelled.dedup();
+        if !labelled.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Ok(());
+        }
+
         let mut by_label: crate::native::HashMap<u64, crate::native::HashSet<(usize, usize)>> =
             crate::native::HashMap::default();
         for span in spans.iter() {

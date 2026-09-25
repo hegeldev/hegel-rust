@@ -16,14 +16,14 @@
 use crate::backend::{DataSource, RunError, TestRunResult};
 use crate::exchange::CaseExchange;
 use crate::settings::{Settings, Verbosity};
-use alloc::boxed::Box;
 use alloc::format;
+use alloc::sync::Arc;
 
 /// Synchronous driver for [`run_native_async`], retained for tests: runs the
 /// whole exploration on the calling thread, invoking `run_case` once per
 /// test case the engine wants to run.
 ///
-/// `run_case` receives a boxed [`DataSource`](crate::backend::DataSource)
+/// `run_case` receives a shared [`DataSource`](crate::backend::DataSource)
 /// for the test case; the callback uses this to generate values, open spans,
 /// observe targets, and ultimately call
 /// [`DataSource::mark_complete`](crate::backend::DataSource::mark_complete)
@@ -34,7 +34,7 @@ use alloc::format;
 pub(crate) fn run_native(
     settings: &Settings,
     database_key: Option<&str>,
-    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+    run_case: impl FnMut(Arc<dyn DataSource + Send + Sync>),
 ) -> Result<TestRunResult, RunError> {
     let exchange = CaseExchange::new();
     let run = run_native_async(settings, database_key, &exchange);
@@ -77,7 +77,7 @@ pub(crate) async fn run_native_async(
 pub fn data_source_for_blob(
     settings: &Settings,
     blob: &str,
-) -> Option<Box<dyn DataSource + Send + Sync>> {
+) -> Option<Arc<dyn DataSource + Send + Sync>> {
     let choices = crate::native::blob::decode_failure(blob)?;
     if settings.verbosity == Verbosity::Debug {
         settings.output.line(&format!(
@@ -87,7 +87,7 @@ pub fn data_source_for_blob(
     }
     let ntc = crate::native::core::NativeTestCase::for_choices(&choices, None, None);
     let (data_source, _handle) = crate::native::data_source::NativeDataSource::new(ntc);
-    Some(Box::new(data_source))
+    Some(Arc::new(data_source))
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]

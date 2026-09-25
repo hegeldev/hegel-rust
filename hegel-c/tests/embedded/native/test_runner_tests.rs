@@ -12,6 +12,7 @@
 use super::*;
 use crate::native::core::BUFFER_SIZE;
 use crate::native::core::choices::BooleanChoice;
+use alloc::sync::Arc;
 use alloc::vec;
 
 use crate::backend::{DataSource, DataSourceError, Failure, TestCaseResult};
@@ -146,7 +147,7 @@ where
 fn run_main_sync(
     settings: &Settings,
     key: Option<&str>,
-    run_case: impl FnMut(Box<dyn DataSource + Send + Sync>),
+    run_case: impl FnMut(Arc<dyn DataSource + Send + Sync>),
     too_slow_threshold: Duration,
     shrink_budget: Duration,
 ) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
@@ -525,7 +526,7 @@ fn tiny_invalid_run(
     u64,
 ) {
     let execs = Cell::new(0u64);
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         execs.set(execs.get() + 1);
         let result = match rbool(&*ds) {
             Ok(_) => body_status.clone(),
@@ -590,7 +591,7 @@ fn duplicate_stop_stays_active_under_health_check_suppression() {
 #[test]
 fn duplicate_stop_is_disabled_for_a_nondeterministic_run() {
     let execs = Cell::new(0u64);
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         execs.set(execs.get() + 1);
         let result = if let Err(result) = concurrent_machine(&*ds) {
             result
@@ -876,7 +877,7 @@ fn run_main_with_urandom_backend_generates_and_passes() {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -901,7 +902,7 @@ fn run_main_with_urandom_backend_finds_counterexample() {
         Ok(_) => boom("always fails"),
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -957,7 +958,7 @@ fn run_main_stops_shrinking_when_budget_is_exhausted() {
             TestCaseResult::Valid
         }
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -994,7 +995,7 @@ fn a_passing_run_executes_a_seed_pinned_count() {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         execs.set(execs.get() + 1);
         let result = body(&*ds);
         ds.mark_complete(&result);
@@ -1035,7 +1036,7 @@ fn a_deterministic_shrink_stays_within_the_tree_era_execution_budget() {
             TestCaseResult::Valid
         }
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         execs.set(execs.get() + 1);
         let result = body(&*ds);
         ds.mark_complete(&result);
@@ -1062,7 +1063,7 @@ fn run_main_reports_too_slow_at_call_site() {
         Ok(_) => TestCaseResult::Valid,
         Err(()) => TestCaseResult::Overrun,
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -1092,7 +1093,7 @@ fn run_main_reports_too_slow_at_call_site() {
 #[test]
 fn run_main_reports_unsatisfiable_for_trivial_always_invalid_test() {
     let mut calls = 0usize;
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         calls += 1;
         ds.mark_complete(&TestCaseResult::Invalid);
     };
@@ -1206,7 +1207,7 @@ fn reuse_run<F>(
 where
     F: FnMut(&dyn DataSource) -> TestCaseResult,
 {
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -1918,7 +1919,7 @@ fn derandomize_is_keyed_by_test_identity() {
     let draw_with_key = |key: Option<&str>| {
         let mut drawn: Vec<u64> = Vec::new();
         {
-            let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+            let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
                 for _ in 0..4 {
                     if let Ok(n) = ru64(&*ds) {
                         drawn.push(n);
@@ -1960,7 +1961,7 @@ fn run_main_shrinks_a_cloned_stream_failure_to_the_minimal_tree() {
             Err(()) => TestCaseResult::Overrun,
         }
     };
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = body(&*ds);
         ds.mark_complete(&result);
     };
@@ -2200,7 +2201,7 @@ fn superseding_a_reused_run_start_entry_demotes_it_to_secondary() {
     .unwrap();
     db.save(b"k", &run_start);
     db.save(b"k", &misaligned);
-    let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
+    let mut run_case = |ds: Arc<dyn DataSource + Send + Sync>| {
         let result = match rint(&*ds, 0, 100) {
             Ok(v) if v >= 50 => boom("bug"),
             Ok(_) => TestCaseResult::Valid,

@@ -17,7 +17,7 @@
 //! resumes the engine, which immediately reads the case's outcome off its
 //! handle.
 
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -26,12 +26,13 @@ use crate::backend::DataSource;
 use crate::control::{InternalError, hegel_internal_unwrap};
 use crate::sys::sync::Mutex;
 
-/// A data source handed across the exchange, one per test case.
-pub(crate) type BoxedDataSource = Box<dyn DataSource + Send + Sync>;
+/// A data source handed across the exchange, one per test case. Shared
+/// rather than boxed because the driver holds it in an `Arc` anyway.
+pub(crate) type SharedDataSource = Arc<dyn DataSource + Send + Sync>;
 
 /// One engine-to-driver handoff slot. See the module docs for the protocol.
 pub(crate) struct CaseExchange {
-    slot: Mutex<Option<BoxedDataSource>>,
+    slot: Mutex<Option<SharedDataSource>>,
 }
 
 impl CaseExchange {
@@ -44,7 +45,7 @@ impl CaseExchange {
     /// Yield `ds` to the driver. The returned future stores `ds` in the
     /// exchange and suspends; by the alternation protocol it resolves on the
     /// next poll, which the driver performs only once the case is complete.
-    pub(crate) fn offer(&self, ds: BoxedDataSource) -> Offer<'_> {
+    pub(crate) fn offer(&self, ds: SharedDataSource) -> Offer<'_> {
         Offer {
             exchange: self,
             ds: Some(ds),
@@ -55,7 +56,7 @@ impl CaseExchange {
     /// without offering one, which the alternation protocol rules out — a
     /// bug in the engine, surfaced by the driver as a run-level error
     /// instead of a panic.
-    pub(crate) fn take(&self) -> Result<BoxedDataSource, InternalError> {
+    pub(crate) fn take(&self) -> Result<SharedDataSource, InternalError> {
         let taken = self.slot.lock().take();
         Ok(hegel_internal_unwrap!(
             taken,
@@ -74,7 +75,7 @@ impl Default for CaseExchange {
 /// returns `Pending` on the first poll, `Ready` on the next.
 pub(crate) struct Offer<'a> {
     exchange: &'a CaseExchange,
-    ds: Option<BoxedDataSource>,
+    ds: Option<SharedDataSource>,
 }
 
 impl Future for Offer<'_> {
@@ -101,7 +102,7 @@ impl Future for Offer<'_> {
 pub(crate) fn drive<F: Future>(
     exchange: &CaseExchange,
     fut: F,
-    mut run_case: impl FnMut(BoxedDataSource),
+    mut run_case: impl FnMut(SharedDataSource),
 ) -> F::Output {
     let mut fut = core::pin::pin!(fut);
     let mut cx = Context::from_waker(core::task::Waker::noop());

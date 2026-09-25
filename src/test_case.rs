@@ -439,10 +439,11 @@ impl TestCase {
     /// from the thread-local override so that a test case created here and
     /// then driven from another thread still prints to the right place.
     pub(crate) fn new(handle: Arc<CTestCase>, emit: bool, sink: Option<OutputSink>) -> Self {
+        static SILENT: std::sync::OnceLock<OutputSink> = std::sync::OnceLock::new();
         let on_draw: OutputSink = if emit {
             sink.unwrap_or_else(|| Arc::new(|msg| eprintln!("{}", msg)))
         } else {
-            Arc::new(|_| {})
+            Arc::clone(SILENT.get_or_init(|| Arc::new(|_| {})))
         };
         TestCase {
             global: Arc::new(TestCaseGlobalData { emit }),

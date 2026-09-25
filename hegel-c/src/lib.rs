@@ -2320,11 +2320,11 @@ pub unsafe extern "C" fn hegel_test_case_set_worker(
 /// Allocate a fresh family from a data source, reporting its completion to
 /// Antithesis through `reporter` when given (see [`FamilyShared::reporter`]).
 fn new_family(
-    ds: Box<dyn DataSource + Send + Sync>,
+    ds: Arc<dyn DataSource + Send + Sync>,
     reporter: Option<Reporter>,
 ) -> Arc<FamilyShared> {
     Arc::new(FamilyShared {
-        ds: Arc::from(ds),
+        ds,
         completed: AtomicBool::new(false),
         printer: Arc::new(Mutex::new(Printer::new(size_arg(
             DEFAULT_PRINTER_MAX_WIDTH,

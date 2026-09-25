@@ -49,15 +49,32 @@ impl NativeDataSource {
     /// Reassembles first, so once the family has concluded every clone node
     /// carries its stream's realized record and the returned sequence is the
     /// self-contained pieced-together choice sequence of the whole family.
+    ///
+    /// Once the engine's handle is the last one (the driver has released
+    /// the run-owned handle and every clone), the nodes are moved out
+    /// rather than copied; nothing can observe the test case afterwards.
     pub fn take_nodes(handle: &NativeTestCaseHandle) -> Vec<ChoiceNode> {
+        let sole_owner = Arc::strong_count(handle) == 1;
         let mut ntc = handle.lock();
         ntc.reassemble();
-        ntc.nodes.clone()
+        if sole_owner {
+            core::mem::take(&mut ntc.nodes)
+        } else {
+            ntc.nodes.clone()
+        }
     }
 
-    /// Convenience: extract spans from a handle after a test case.
+    /// Convenience: extract spans from a handle after a test case, moving
+    /// them out when the engine's handle is the last one as
+    /// [`Self::take_nodes`] does.
     pub fn take_spans(handle: &NativeTestCaseHandle) -> Vec<Span> {
-        handle.lock().spans.clone().into_vec()
+        let sole_owner = Arc::strong_count(handle) == 1;
+        let mut ntc = handle.lock();
+        if sole_owner {
+            core::mem::take(&mut ntc.spans).into_vec()
+        } else {
+            ntc.spans.clone().into_vec()
+        }
     }
 
     /// Read the `tc.target()` observations the test body recorded.
