@@ -1,0 +1,7 @@
+RELEASE_TYPE: patch
+
+This patch improves float generation, so tests on floats reach overflow, underflow, cancellation and special-value bugs far more often. Building on the per-case integer mixture from 0.33.1, each test case now draws its own mixture of float categories — range endpoints, values near zero and near `±1`, subnormals, integers and half-integers, magnitudes whose sum or product overflows or underflows, NaN, `±∞`, `±0` and a handful of others — and every float in that case is drawn from it. A case that leans on one category correlates its draws, so `x + y` overflows or `x * y` underflows in a meaningful share of cases rather than almost never.
+
+The default draw now gives every power-of-two scale the range touches an equal share, so a bounded range such as `0.0..=10.0` reaches the tiny magnitudes where cancellation bugs live instead of spending nearly every draw within a factor of a thousand of the top bound. Draws for `f32` are steered toward `f32`'s own landmarks (`f32::MAX`, `2^24`, its subnormals) rather than `f64`'s. Only fresh generation changes: the recorded choice sequence, replay and stored failures are untouched.
+
+This patch also improves shrinking of a size drawn twice — the rows and columns of a square matrix. It is now lowered while the values it governs still vary, so the shrinker reaches the smallest failing square instead of zeroing the values first and stopping at a larger one.
