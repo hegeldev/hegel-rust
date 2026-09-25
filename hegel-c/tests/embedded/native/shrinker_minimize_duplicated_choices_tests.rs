@@ -348,6 +348,53 @@ fn shrink_duplicates_outer_skips_group_truncated_by_prior_group() {
     assert_eq!(shrinker.current_nodes.len(), 1);
 }
 
+/// A square matrix drawn as `rows`, `columns` and `rows × columns` entries,
+/// interesting when it is not symmetric. Its two dimensions are a duplicated
+/// size parameter: zeroing the entries first leaves an all-zero matrix with a
+/// single `1` in its last row, from which no smaller square stays
+/// asymmetric, so the full shrink has to lower the dimensions while the
+/// entries still vary to reach the two-by-two minimum.
+#[test]
+fn shrink_lowers_a_duplicated_size_before_zeroing_what_it_governs() {
+    let entries: [i128; 25] = [
+        187, 9999, 187, 905, 9999, 6955, 308, 494, 1982, 6883, 128, 9999, 101, 86, 1180, 1061,
+        10000, 7, 488, 239, 206, 385, 9999, 9499, 488,
+    ];
+    let mut initial = vec![integer_node(5, 1, 10), integer_node(5, 1, 10)];
+    initial.extend(entries.iter().map(|&v| integer_node(v, 0, 10000)));
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let dim = |node: &ChoiceNode| match node.value() {
+                    ChoiceValue::Integer(v) => usize::try_from(i128::try_from(v).unwrap()).unwrap(),
+                    _ => unreachable!(),
+                };
+                if nodes.len() < 2 {
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                let (rows, columns) = (dim(&nodes[0]), dim(&nodes[1]));
+                let used = 2 + rows * columns;
+                if nodes.len() < used {
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                let entry = |i: usize, j: usize| nodes[2 + i * columns + j].value();
+                let asymmetric = rows == columns
+                    && (0..rows).any(|i| (i + 1..rows).any(|j| entry(i, j) != entry(j, i)));
+                (asymmetric, nodes[..used].to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.shrink()).unwrap();
+    let values: Vec<ChoiceValue> = shrinker.current_nodes.iter().map(|n| n.value()).collect();
+    assert_eq!(
+        values,
+        [2, 2, 0, 0, 1, 0].map(|v| ChoiceValue::Integer(BigInt::from(v)))
+    );
+}
+
 /// Interesting iff the first node is `2`, the second and fourth are equal
 /// and the third is non-zero: a tag, two labels that must match with a
 /// payload between them. Every value-`2` node is in one duplicate group,

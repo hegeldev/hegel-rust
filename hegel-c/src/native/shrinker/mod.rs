@@ -577,7 +577,10 @@ impl<'a> Shrinker<'a> {
     /// The pass order runs span-aware structural passes first (cheap when
     /// they apply), then deletion / zeroing, then the value-level
     /// minimization passes, finishing with the index-generic and
-    /// entropy-based passes.
+    /// entropy-based passes. `shrink_duplicates` sits among the structural
+    /// passes, ahead of the zeroing ones: a size parameter drawn twice must
+    /// be lowered while the values it governs still vary, since once they
+    /// are zeroed no smaller size keeps the case interesting.
     ///
     /// Returns an explicitly boxed future (rather than being an `async fn`)
     /// because `shrink` is recursive — `shrink_clone_streams` runs a full
@@ -599,6 +602,10 @@ impl<'a> Shrinker<'a> {
                 Box::new(|sh| boxed_pass(async move { sh.remove_discarded().await.map(|_| ()) })),
             ),
             ShrinkPass::new("delete_spans", Box::new(|sh| boxed_pass(sh.delete_spans()))),
+            ShrinkPass::new(
+                "shrink_duplicates",
+                Box::new(|sh| boxed_pass(sh.shrink_duplicates())),
+            ),
             ShrinkPass::new(
                 "try_trivial_spans",
                 Box::new(|sh| boxed_pass(sh.try_trivial_spans())),
@@ -667,10 +674,6 @@ impl<'a> Shrinker<'a> {
             ShrinkPass::new(
                 "lower_integers_together",
                 Box::new(|sh| boxed_pass(sh.lower_integers_together())),
-            ),
-            ShrinkPass::new(
-                "shrink_duplicates",
-                Box::new(|sh| boxed_pass(sh.shrink_duplicates())),
             ),
             ShrinkPass::new("sort_values", Box::new(|sh| boxed_pass(sh.sort_values()))),
             ShrinkPass::new(

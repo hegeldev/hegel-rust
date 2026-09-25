@@ -394,7 +394,7 @@ impl<'a> Shrinker<'a> {
         }
     }
 
-    /// Try shrinking duplicate integer values simultaneously.
+    /// Try shrinking duplicate values simultaneously.
     ///
     /// For each group of nodes sharing `(ChoiceData discriminant,
     /// ChoiceValue)`, tries simultaneous shrinking — handling cases
@@ -403,7 +403,12 @@ impl<'a> Shrinker<'a> {
     ///
     /// All five choice kinds participate: every group tries the
     /// kind-simplest replacement, and integer groups additionally drive
-    /// a binary search across all members at once.
+    /// a binary search across all members at once. Groups are taken in
+    /// order of first appearance, each to completion: a size parameter drawn
+    /// twice (the rows and columns of a square matrix) is lowered while the
+    /// values it governs are still varied, rather than after the duplicated
+    /// values among them have been zeroed into a symmetric prefix that no
+    /// smaller size can keep interesting.
     pub(super) async fn shrink_duplicates(&mut self) -> ShrinkResult<()> {
         let mut groups: HashMap<(core::mem::Discriminant<ChoiceData>, ChoiceValue), Vec<usize>> =
             HashMap::default();
@@ -429,49 +434,29 @@ impl<'a> Shrinker<'a> {
             if valid.len() < 2 {
                 continue;
             }
+            if let ChoiceData::Integer(ic, value) = &self.current_nodes[valid[0]].data {
+                let (ic, value) = (alloc::sync::Arc::clone(ic), value.clone());
+                absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
+                if self.int_value_bigint(valid[0]).as_ref() != Some(&value) {
+                    continue;
+                }
+                let members: Vec<(usize, alloc::sync::Arc<IntegerChoice>)> = valid
+                    .iter()
+                    .filter_map(|&i| {
+                        let (ic, _) = self.current_nodes.get(i)?.data.as_integer()?;
+                        Some((i, alloc::sync::Arc::new(ic.clone())))
+                    })
+                    .collect();
+                self.shrink_stalled_duplicate_subgroups(&value, &members)
+                    .await?;
+                continue;
+            }
             let simplest = self.current_nodes[valid[0]].data.simplest_value()?;
             if simplest != *group_value {
                 let replacements: HashMap<usize, ChoiceValue> =
                     valid.iter().map(|&i| (i, simplest.clone())).collect();
                 self.replace(&replacements).await?;
             }
-        }
-        let mut groups: HashMap<BigInt, Vec<usize>> = HashMap::default();
-        for (i, node) in self.current_nodes.iter().enumerate() {
-            if let Some((_, v)) = node.data.as_integer() {
-                groups.entry(v.clone()).or_default().push(i);
-            }
-        }
-        let mut ordered_groups: Vec<_> = groups.into_iter().collect();
-        ordered_groups.sort_by_key(|(_, indices)| indices[0]);
-
-        for (value, indices) in ordered_groups {
-            if indices.len() < 2 {
-                continue;
-            }
-
-            let members: Vec<(usize, alloc::sync::Arc<IntegerChoice>)> = indices
-                .iter()
-                .filter_map(|&i| match self.current_nodes.get(i).map(|n| &n.data) {
-                    Some(ChoiceData::Integer(ic, v)) if *v == value => {
-                        Some((i, alloc::sync::Arc::clone(ic)))
-                    }
-                    _ => None,
-                })
-                .collect();
-
-            if members.len() < 2 {
-                continue;
-            }
-            let valid: Vec<usize> = members.iter().map(|&(i, _)| i).collect();
-            let ic = alloc::sync::Arc::clone(&members[0].1);
-
-            absorb_node_gone(self.shrink_int_duplicate_group(&value, &valid, &ic).await)?;
-            if self.int_value_bigint(valid[0]) != Some(value.clone()) {
-                continue;
-            }
-            self.shrink_stalled_duplicate_subgroups(&value, &members)
-                .await?;
         }
         Ok(())
     }

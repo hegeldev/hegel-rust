@@ -20,16 +20,22 @@ use super::choices::{
     ChoiceValueRef, CloneValues, EngineError, FloatChoice, IntegerChoice, InterestingOrigin,
     RealizedStream, Status, StringChoice, flattened_len, flattened_values_len,
 };
-use super::float_index::index_to_float;
 use super::{
     BOUNDARY_PROBABILITY, CURATED_MIN_WIDTH, DIRICHLET_ALPHA_DIFFUSE, DIRICHLET_ALPHA_ENDPOINT,
-    DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
+    DIRICHLET_ALPHA_FLOAT_BINADE_EDGE, DIRICHLET_ALPHA_FLOAT_DEFAULT,
+    DIRICHLET_ALPHA_FLOAT_ENDPOINT, DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
+    DIRICHLET_ALPHA_FLOAT_INFINITY, DIRICHLET_ALPHA_FLOAT_INTEGER,
+    DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER, DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
+    DIRICHLET_ALPHA_FLOAT_NAN, DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
+    DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL, DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+    DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE, DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+    DIRICHLET_ALPHA_FLOAT_NON_DYADIC, DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+    DIRICHLET_ALPHA_FLOAT_SUBNORMAL, DIRICHLET_ALPHA_INTERESTING, DIRICHLET_ALPHA_MIDDLE,
 };
 use crate::control::{
     InternalError, hegel_internal_assert, hegel_internal_debug_assert, hegel_internal_unwrap,
 };
 use crate::native::bignum::{BigInt, BigUint, ToPrimitive, Zero};
-use crate::native::floats::{next_down, next_up};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::statistics::{
     Distribution, LogStudentTDistribution, PiecewiseDistribution, UniformDistribution,
@@ -415,10 +421,14 @@ fn sample_gamma(shape: f64, rng: &mut EngineRng) -> Result<f64, InternalError> {
     }
 }
 
-/// Draw a point on the 4-simplex from a Dirichlet with the given concentrations
-/// (via normalised independent Gamma variates). Returns weights that sum to 1.
-fn sample_dirichlet4(alphas: [f64; 4], rng: &mut EngineRng) -> Result<[f64; 4], InternalError> {
-    let mut g = [0.0f64; 4];
+/// Draw a point on the `N`-simplex from a Dirichlet with the given
+/// concentrations (via normalised independent Gamma variates). Returns weights
+/// that sum to 1.
+fn sample_dirichlet<const N: usize>(
+    alphas: [f64; N],
+    rng: &mut EngineRng,
+) -> Result<[f64; N], InternalError> {
+    let mut g = [0.0f64; N];
     for (slot, &alpha) in g.iter_mut().zip(alphas.iter()) {
         *slot = sample_gamma(alpha, rng)?;
     }
@@ -427,12 +437,12 @@ fn sample_dirichlet4(alphas: [f64; 4], rng: &mut EngineRng) -> Result<[f64; 4], 
 
 /// Normalise non-negative weights so they sum to 1. If every weight is zero
 /// (all Gammas underflowed — only possible when every concentration is below 1,
-/// which the caller's do not do), falls back to an even split rather than
+/// which the callers' do not do), falls back to an even split rather than
 /// dividing by zero.
-fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
+fn normalize_to_simplex<const N: usize>(mut g: [f64; N]) -> [f64; N] {
     let sum: f64 = g.iter().sum();
     if sum <= 0.0 {
-        return [0.25; 4];
+        return [1.0 / N as f64; N];
     }
     for slot in &mut g {
         *slot /= sum;
@@ -440,13 +450,187 @@ fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
     g
 }
 
-/// Per-test-case *swarm* parameters: the mixture weights of the four value
-/// categories a wide-range integer draw chooses between — endpoints, curated
-/// interesting values, the diffuse large-constant pool, and the ordinary middle
-/// distribution. Drawn once at the start of each generated test case (see
-/// [`Self::draw`]) and held constant across every draw and every clone-stream of
-/// that case. The middle weight is implicit: `1 - endpoint - interesting -
-/// diffuse`.
+/// The mean of [`sample_dirichlet`] with these concentrations: each over their
+/// total.
+fn dirichlet_mean<const N: usize>(alphas: [f64; N]) -> [f64; N] {
+    let total: f64 = alphas.iter().sum();
+    alphas.map(|alpha| alpha / total)
+}
+
+/// The mixture weights of the four value categories a wide-range integer draw
+/// chooses between — endpoints, curated interesting values, the diffuse
+/// large-constant pool, and the ordinary middle distribution. The middle weight
+/// is implicit: `1 - endpoint - interesting - diffuse`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntegerGenerationParameters {
+    /// Probability a wide-range draw returns a range endpoint (`min`, `max`,
+    /// `min + 1`, `max - 1`).
+    pub endpoint_probability: f64,
+    /// Probability a wide-range draw returns a curated `INTERESTING_INTEGERS`
+    /// value in range (zero, ±1, small magnitudes, powers of two, type limits).
+    pub interesting_probability: f64,
+    /// Probability a wide-range draw returns a diffuse large constant.
+    pub diffuse_probability: f64,
+}
+
+impl IntegerGenerationParameters {
+    /// Dirichlet concentrations, in the order the categories are destructured
+    /// by [`Self::draw`]: endpoint, interesting, diffuse, middle.
+    const ALPHAS: [f64; 4] = [
+        DIRICHLET_ALPHA_ENDPOINT,
+        DIRICHLET_ALPHA_INTERESTING,
+        DIRICHLET_ALPHA_DIFFUSE,
+        DIRICHLET_ALPHA_MIDDLE,
+    ];
+
+    /// Draw a fresh set of integer weights from the Dirichlet over the four
+    /// value categories.
+    pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
+        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet(Self::ALPHAS, rng)?;
+        Ok(IntegerGenerationParameters {
+            endpoint_probability: endpoint,
+            interesting_probability: interesting,
+            diffuse_probability: diffuse,
+        })
+    }
+}
+
+impl Default for IntegerGenerationParameters {
+    /// The mean of [`Self::draw`]; see [`GenerationParameters::default`].
+    fn default() -> Self {
+        let [endpoint, interesting, diffuse, _middle] = dirichlet_mean(Self::ALPHAS);
+        IntegerGenerationParameters {
+            endpoint_probability: endpoint,
+            interesting_probability: interesting,
+            diffuse_probability: diffuse,
+        }
+    }
+}
+
+/// The mixture weights of the value categories a float draw chooses between.
+/// Fields sum to 1. The last is the default draw
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatGenerationParameters {
+    /// A range endpoint (`min`, `max` and their neighbours).
+    pub endpoint_probability: f64,
+    /// A value in `(-0.1, 0.1)`, without over-weighting its larger magnitudes.
+    pub near_zero_probability: f64,
+    /// A subnormal: nonzero with magnitude below `MIN_POSITIVE`.
+    pub subnormal_probability: f64,
+    /// A value within a few ulps of `±1`.
+    pub near_one_probability: f64,
+    /// An integer-valued float, every binade of magnitude equally likely.
+    pub integer_probability: f64,
+    /// A half-integer (`0.5`, `1.5`, …), every binade of magnitude equally likely.
+    pub half_integer_probability: f64,
+    /// A magnitude in `[2^1023, MAX]`, so that adding two overflows.
+    pub near_max_for_add_probability: f64,
+    /// A magnitude near `sqrt(MAX)`, so that multiplying two overflows.
+    pub near_max_for_mul_probability: f64,
+    /// A magnitude near `sqrt(MIN_POSITIVE)`, so that multiplying two underflows.
+    pub near_sqrt_min_positive_probability: f64,
+    /// Any NaN.
+    pub nan_probability: f64,
+    /// `±INFINITY`.
+    pub infinity_probability: f64,
+    /// `±MAX`.
+    pub max_magnitude_probability: f64,
+    /// The largest exactly-representable integer, `±2^53`.
+    pub max_exact_integer_probability: f64,
+    /// `±0`.
+    pub signed_zero_probability: f64,
+    /// A power of two or its predecessor: the edges of a binade.
+    pub binade_edge_probability: f64,
+    /// A value with no finite binary expansion, such as `0.1`.
+    pub non_dyadic_probability: f64,
+    /// The default draw: a coin flip between the continuous uniform over the
+    /// range and a magnitude with every binade of the range equally likely. It
+    /// also takes the mass of any category the range rules out.
+    pub default_probability: f64,
+}
+
+impl FloatGenerationParameters {
+    /// Dirichlet concentrations, in the field order of the struct, which is also
+    /// the order [`Self::from_weights`] destructures.
+    const ALPHAS: [f64; 17] = [
+        DIRICHLET_ALPHA_FLOAT_ENDPOINT,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ZERO,
+        DIRICHLET_ALPHA_FLOAT_SUBNORMAL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_ONE,
+        DIRICHLET_ALPHA_FLOAT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_HALF_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_ADD,
+        DIRICHLET_ALPHA_FLOAT_NEAR_MAX_FOR_MUL,
+        DIRICHLET_ALPHA_FLOAT_NEAR_SQRT_MIN_POSITIVE,
+        DIRICHLET_ALPHA_FLOAT_NAN,
+        DIRICHLET_ALPHA_FLOAT_INFINITY,
+        DIRICHLET_ALPHA_FLOAT_MAX_MAGNITUDE,
+        DIRICHLET_ALPHA_FLOAT_MAX_EXACT_INTEGER,
+        DIRICHLET_ALPHA_FLOAT_SIGNED_ZERO,
+        DIRICHLET_ALPHA_FLOAT_BINADE_EDGE,
+        DIRICHLET_ALPHA_FLOAT_NON_DYADIC,
+        DIRICHLET_ALPHA_FLOAT_DEFAULT,
+    ];
+
+    /// Draw a fresh set of float weights from the Dirichlet over the float
+    /// value categories.
+    pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
+        Ok(Self::from_weights(sample_dirichlet(Self::ALPHAS, rng)?))
+    }
+
+    fn from_weights(weights: [f64; 17]) -> Self {
+        let [
+            endpoint,
+            near_zero,
+            subnormal,
+            near_one,
+            integer,
+            half_integer,
+            near_max_for_add,
+            near_max_for_mul,
+            near_sqrt_min_positive,
+            nan,
+            infinity,
+            max_magnitude,
+            max_exact_integer,
+            signed_zero,
+            binade_edge,
+            non_dyadic,
+            default,
+        ] = weights;
+        FloatGenerationParameters {
+            endpoint_probability: endpoint,
+            near_zero_probability: near_zero,
+            subnormal_probability: subnormal,
+            near_one_probability: near_one,
+            integer_probability: integer,
+            half_integer_probability: half_integer,
+            near_max_for_add_probability: near_max_for_add,
+            near_max_for_mul_probability: near_max_for_mul,
+            near_sqrt_min_positive_probability: near_sqrt_min_positive,
+            nan_probability: nan,
+            infinity_probability: infinity,
+            max_magnitude_probability: max_magnitude,
+            max_exact_integer_probability: max_exact_integer,
+            signed_zero_probability: signed_zero,
+            binade_edge_probability: binade_edge,
+            non_dyadic_probability: non_dyadic,
+            default_probability: default,
+        }
+    }
+}
+
+impl Default for FloatGenerationParameters {
+    /// The mean of [`Self::draw`]; see [`GenerationParameters::default`].
+    fn default() -> Self {
+        Self::from_weights(dirichlet_mean(Self::ALPHAS))
+    }
+}
+
+/// Per-test-case *swarm* parameters: one set of category weights for integer
+/// draws and one for float draws. Drawn once at the start of each generated
+/// test case (see [`Self::draw`]) and held constant across every draw and every
+/// clone-stream of that case.
 ///
 /// They only ever change *how likely* each category is, never *which* values are
 /// reachable. Because hegel records typed choice *values* and the samplers are
@@ -459,53 +643,28 @@ fn normalize_to_simplex(mut g: [f64; 4]) -> [f64; 4] {
 /// concentrates on one special category. An endpoint-heavy case draws both
 /// operands of `x + y` from `{min, max, …}`, so their sum overflows about half
 /// the time — the correlation a fixed per-value probability can't produce.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct GenerationParameters {
-    /// Probability a wide-range draw returns a range endpoint (`min`, `max`,
-    /// `min + 1`, `max - 1`).
-    pub endpoint_probability: f64,
-    /// Probability a wide-range draw returns a curated `INTERESTING_INTEGERS`
-    /// value in range (zero, ±1, small magnitudes, powers of two, type limits).
-    pub interesting_probability: f64,
-    /// Probability a wide-range draw returns a diffuse large constant.
-    pub diffuse_probability: f64,
+    /// Category weights for wide-range integer draws.
+    pub integer: IntegerGenerationParameters,
+    /// Category weights for float draws.
+    pub float: FloatGenerationParameters,
 }
 
 impl GenerationParameters {
-    /// Draw a fresh set of parameters for one test case from the Dirichlet over
-    /// the four value categories.
+    /// Draw a fresh set of parameters for one test case: independent Dirichlet
+    /// draws for the integer and float weights.
+    ///
+    /// [`Self::default`] is the fixed fallback used only when no test-case
+    /// parameters have been drawn (a replay-only test case never samples, so it
+    /// never consults these). Its values are the mean of this draw, so any
+    /// accidental use still produces a reasonable distribution rather than a
+    /// degenerate one.
     pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
-        let alphas = [
-            DIRICHLET_ALPHA_ENDPOINT,
-            DIRICHLET_ALPHA_INTERESTING,
-            DIRICHLET_ALPHA_DIFFUSE,
-            DIRICHLET_ALPHA_MIDDLE,
-        ];
-        let [endpoint, interesting, diffuse, _middle] = sample_dirichlet4(alphas, rng)?;
         Ok(GenerationParameters {
-            endpoint_probability: endpoint,
-            interesting_probability: interesting,
-            diffuse_probability: diffuse,
+            integer: IntegerGenerationParameters::draw(rng)?,
+            float: FloatGenerationParameters::draw(rng)?,
         })
-    }
-}
-
-impl Default for GenerationParameters {
-    /// The mean of [`Self::draw`]: each category's Dirichlet concentration
-    /// over their total. The engine always draws a test case's parameters
-    /// before it samples (see [`NativeTestCase::rng`]); this fixed set is
-    /// what the sampler microbenchmarks run under, so their timings do not
-    /// include a draw.
-    fn default() -> Self {
-        let total = DIRICHLET_ALPHA_ENDPOINT
-            + DIRICHLET_ALPHA_INTERESTING
-            + DIRICHLET_ALPHA_DIFFUSE
-            + DIRICHLET_ALPHA_MIDDLE;
-        GenerationParameters {
-            endpoint_probability: DIRICHLET_ALPHA_ENDPOINT / total,
-            interesting_probability: DIRICHLET_ALPHA_INTERESTING / total,
-            diffuse_probability: DIRICHLET_ALPHA_DIFFUSE / total,
-        }
     }
 }
 
@@ -522,7 +681,7 @@ impl Default for GenerationParameters {
 pub(crate) fn biased_integer_sample(
     ic: &IntegerChoice,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> Result<BigInt, InternalError> {
     Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
         (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng, params)?),
@@ -565,7 +724,7 @@ fn narrow_nasty_sample(
 /// Narrow ranges use [`narrow_nasty_sample`]. Wide ranges (width at least
 /// [`CURATED_MIN_WIDTH`], or wider than `i128`) choose one of four value
 /// categories from a single decision draw `u`, weighted by this case's
-/// [`GenerationParameters`]:
+/// [`IntegerGenerationParameters`]:
 ///
 ///   * *endpoints* — `{min, max, min + 1, max - 1}`;
 ///   * *interesting* — `INTERESTING_INTEGERS` in range;
@@ -578,7 +737,7 @@ fn biased_i128_sample(
     min_value: i128,
     max_value: i128,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> Result<i128, InternalError> {
     if min_value == max_value {
         return Ok(min_value);
@@ -644,13 +803,13 @@ fn biased_i128_sample(
 /// Boundary-biased sample for an integer range too wide for `i128` (a `BigInt`
 /// choice, or a `u128` range past `i128::MAX`). Uses the same four-category
 /// mixture as [`biased_i128_sample`] (endpoints, interesting, diffuse, middle),
-/// weighted by this case's [`GenerationParameters`]; the middle draws a
+/// weighted by this case's [`IntegerGenerationParameters`]; the middle draws a
 /// roughly-uniform value via rejection sampling over the span's bit length.
 fn biguint_sample_in_range(
     min: &BigInt,
     max: &BigInt,
     rng: &mut EngineRng,
-    params: GenerationParameters,
+    params: IntegerGenerationParameters,
 ) -> BigInt {
     if min == max {
         return min.clone();
@@ -746,66 +905,69 @@ fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
     }
 }
 
-/// Float counterpart of [`biased_integer_sample`]: draws boundary / "nasty"
-/// values (`0.0`, `-0.0`, `±1.0`, `±MAX`, `±INFINITY`, `MIN_POSITIVE`, NaN,
-/// plus the user's `min_value`/`max_value`) with probability proportional to
-/// `BOUNDARY_PROBABILITY × |nasty|`, falling back to a uniform-ish lex draw
-/// otherwise.
+/// Float counterpart of [`biased_integer_sample`]: one decision draw `u`
+/// selects a value category by the cumulative weights in this case's
+/// [`FloatGenerationParameters`], and that category's sampler produces the
+/// value. The categories, in weight order, are the fields of that struct,
+/// whose docs say what each offers; the remainder is the default draw.
+///
+/// Every category sampler restricts itself to the choice's valid values, so
+/// the weights are a pure reweighting of which valid values appear. A
+/// category the range rules out entirely (NaN when `allow_nan` is off, an
+/// integer in `(0.2, 0.8)`, …) returns `None`, and its mass goes to the
+/// default draw rather than to the neighbouring category, so the special
+/// categories keep exactly their own weight whatever the range. A
+/// [`FloatChoice`] carries no width, so `width` says separately which width's
+/// landmarks (`MAX`, `MIN_POSITIVE`, `2^53`, …) the samplers offer.
 pub(crate) fn biased_float_sample(
     fc: &FloatChoice,
+    width: FloatWidth,
     rng: &mut EngineRng,
+    params: FloatGenerationParameters,
 ) -> Result<f64, InternalError> {
-    const SIGNALING_NAN: f64 = f64::from_bits(0x7FF0_0000_0000_0001);
-    let candidates = [
-        fc.min_value,
-        fc.max_value,
-        next_up(fc.min_value),
-        fc.min_value + 1.0,
-        fc.max_value - 1.0,
-        next_down(fc.max_value),
-        0.0,
-        -0.0_f64,
-        1.0,
-        -1.0,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::NAN,
-        -f64::NAN,
-        SIGNALING_NAN,
-        -SIGNALING_NAN,
-        f64::MIN_POSITIVE,
-        fc.smallest_nonzero_magnitude,
-        -fc.smallest_nonzero_magnitude,
-        f64::MAX,
-        -f64::MAX,
+    type Category = fn(&FloatChoice, FloatWidth, &mut EngineRng) -> Option<f64>;
+    let categories: [(f64, Category); 16] = [
+        (params.endpoint_probability, float_endpoint_sample),
+        (params.near_zero_probability, float_near_zero_sample),
+        (params.subnormal_probability, float_subnormal_sample),
+        (params.near_one_probability, float_near_one_sample),
+        (params.integer_probability, float_integer_sample),
+        (params.half_integer_probability, float_half_integer_sample),
+        (
+            params.near_max_for_add_probability,
+            float_near_max_for_add_sample,
+        ),
+        (
+            params.near_max_for_mul_probability,
+            float_near_max_for_mul_sample,
+        ),
+        (
+            params.near_sqrt_min_positive_probability,
+            float_near_sqrt_min_positive_sample,
+        ),
+        (params.nan_probability, float_nan_sample),
+        (params.infinity_probability, float_infinity_sample),
+        (params.max_magnitude_probability, float_max_magnitude_sample),
+        (
+            params.max_exact_integer_probability,
+            float_max_exact_integer_sample,
+        ),
+        (params.signed_zero_probability, float_signed_zero_sample),
+        (params.binade_edge_probability, float_binade_edge_sample),
+        (params.non_dyadic_probability, float_non_dyadic_sample),
     ];
-    let valid_count = candidates.iter().filter(|&&v| fc.validate(v)).count();
-    let nasty_threshold = (valid_count as f64 * BOUNDARY_PROBABILITY).min(0.5);
-
-    if rng.random::<f64>() < nasty_threshold {
-        let idx = rng.random_range(0..valid_count);
-        let picked = candidates
-            .iter()
-            .copied()
-            .filter(|&v| fc.validate(v))
-            .nth(idx);
-        return Ok(hegel_internal_unwrap!(
-            picked,
-            "the second validate pass found fewer candidates than valid_count"
-        ));
+    let u = rng.random::<f64>();
+    let mut acc = 0.0;
+    for (weight, sample) in categories {
+        acc += weight;
+        if u < acc {
+            if let Some(v) = sample(fc, width, rng).filter(|&v| fc.validate(v)) {
+                return Ok(v);
+            }
+            break;
+        }
     }
-    let mag = index_to_float(rng.random::<u64>());
-    let raw = if rng.random::<u64>() & 1 == 1 {
-        -mag
-    } else {
-        mag
-    };
-    let f = if fc.validate(raw) {
-        raw
-    } else {
-        float_restrict_and_redraw(fc, raw)
-    };
-    if fc.validate(f) { Ok(f) } else { fc.simplest() }
+    float_default_sample(fc, rng)
 }
 
 /// Port of Hypothesis's `make_float_clamper`: remap an out-of-range draw
@@ -814,10 +976,9 @@ pub(crate) fn biased_float_sample(
 /// values, and re-routing around the `smallest_nonzero_magnitude` band.
 pub(crate) fn float_restrict_and_redraw(fc: &FloatChoice, raw: f64) -> f64 {
     let (min_value, max_value) = (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX));
-    const MANTISSA_MASK: u64 = (1u64 << 52) - 1;
     let range_size = (max_value - min_value).min(f64::MAX);
-    let mant = raw.abs().to_bits() & MANTISSA_MASK;
-    let mut f = min_value + range_size * (mant as f64 / MANTISSA_MASK as f64);
+    let mant = raw.abs().to_bits() & FLOAT_MANTISSA_MASK;
+    let mut f = min_value + range_size * (mant as f64 / FLOAT_MANTISSA_MASK as f64);
     if f != 0.0 && f.abs() < fc.smallest_nonzero_magnitude {
         f = fc.smallest_nonzero_magnitude;
         if fc.smallest_nonzero_magnitude > max_value {
@@ -2045,7 +2206,7 @@ impl NativeTestCase {
         };
 
         let v = self.draw_integer_from(&kind, |kind, rng, params| {
-            biased_integer_sample(kind, rng, *params)
+            biased_integer_sample(kind, rng, params.integer)
         })?;
 
         Ok(hegel_internal_unwrap!(
@@ -2336,9 +2497,12 @@ impl NativeTestCase {
     /// only when `allow_nan` is set; ±∞ only when `allow_infinity` is set and
     /// the relevant endpoint is unbounded. Magnitudes below
     /// `smallest_nonzero_magnitude` (other than zero itself) are never drawn;
-    /// pass `5e-324` for no restriction.
+    /// pass `5e-324` for no restriction. `width` only steers generation
+    /// toward that width's landmarks (see [`FloatWidth`]); the recorded choice
+    /// is the same for both.
     pub fn draw_float(
         &mut self,
+        width: FloatWidth,
         min_value: f64,
         max_value: f64,
         allow_nan: bool,
@@ -2360,7 +2524,7 @@ impl NativeTestCase {
                 ChoiceValueRef::Float(f) if kind.validate(f) => Some(f),
                 _ => None,
             },
-            |rng, _| biased_float_sample(&kind, rng),
+            |rng, params| biased_float_sample(&kind, width, rng, params.float),
         )?;
 
         self.nodes.push(ChoiceNode::float(kind, v, was_forced));
@@ -2557,6 +2721,470 @@ impl NativeTestCase {
             "resolve_choice: no RNG available for random generation"
         );
         Ok((random(rng, params)?, false))
+    }
+}
+
+pub use float_sample::FloatWidth;
+use float_sample::*;
+
+/// The category samplers of [`biased_float_sample`] and the helpers they share.
+mod float_sample {
+    use rand::RngExt;
+
+    use crate::control::InternalError;
+    use crate::native::core::choices::FloatChoice;
+    use crate::native::floats::{next_down, next_up};
+    use crate::native::rng::EngineRng;
+
+    /// The width of the float a draw is for. Used to share float
+    /// width between functions that generate them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FloatWidth {
+        F64,
+        F32,
+    }
+
+    impl FloatWidth {
+        /// The width's largest normal exponent and mantissa bit count, `(1023, 52)`
+        /// or `(127, 23)`, from which its landmarks follow: `MIN_POSITIVE` is
+        /// `2^(1 - e)`, the smallest subnormal `2^(1 - e - m)`, the largest exact
+        /// integer `2^(m + 1)`, and `1.0` has the bit pattern `e << m`.
+        pub(super) fn layout(self) -> (i32, i32) {
+            match self {
+                FloatWidth::F64 => (1023, 52),
+                FloatWidth::F32 => (127, 23),
+            }
+        }
+
+        /// `MAX` of the width.
+        pub(super) fn max(self) -> f64 {
+            match self {
+                FloatWidth::F64 => f64::MAX,
+                FloatWidth::F32 => f64::from(f32::MAX),
+            }
+        }
+
+        /// The width's bit patterns for the positive finite magnitudes in
+        /// `[lo, hi]`, as a closed interval: an `f32` interval rounds inward, and
+        /// comes out empty (`lo > hi`) when no `f32` lies between the bounds.
+        pub(super) fn bit_range(self, lo: f64, hi: f64) -> (u64, u64) {
+            match self {
+                FloatWidth::F64 => (lo.to_bits(), hi.to_bits()),
+                FloatWidth::F32 => {
+                    let (l, h) = (lo as f32, hi as f32);
+                    let l = if f64::from(l) < lo { l.next_up() } else { l };
+                    let h = if f64::from(h) > hi { h.next_down() } else { h };
+                    (u64::from(l.to_bits()), u64::from(h.to_bits()))
+                }
+            }
+        }
+
+        /// The float of this width with bit pattern `bits`, as an `f64`.
+        pub(super) fn to_float(self, bits: u64) -> f64 {
+            match self {
+                FloatWidth::F64 => f64::from_bits(bits),
+                FloatWidth::F32 => f64::from(f32::from_bits(bits as u32)),
+            }
+        }
+    }
+
+    pub(super) const FLOAT_MANTISSA_MASK: u64 = (1u64 << 52) - 1;
+
+    /// `2^exp` as an `f64`, for `exp` in `-1074..=1023`.
+    pub(super) const fn float_pow2(exp: i32) -> f64 {
+        if exp < -1022 {
+            f64::from_bits(1u64 << (exp + 1074))
+        } else {
+            f64::from_bits(((exp + 1023) as u64) << 52)
+        }
+    }
+
+    /// The finite float just below `v`, for positive finite `v`.
+    pub(super) const fn float_below(v: f64) -> f64 {
+        f64::from_bits(v.to_bits() - 1)
+    }
+
+    /// Tries `f` on both options in a coin-flipped order, taking the first value.
+    pub(super) fn coin_flip_first<T: Copy, R>(
+        options: [T; 2],
+        rng: &mut EngineRng,
+        mut f: impl FnMut(T, &mut EngineRng) -> Option<R>,
+    ) -> Option<R> {
+        let first = usize::from(rng.random::<bool>());
+        f(options[first], rng).or_else(|| f(options[1 - first], rng))
+    }
+
+    /// A coin-flipped sign with a magnitude from `sample` over the finite nonzero
+    /// magnitudes `[lo, hi]` `fc` admits on that sign; a dead sign yields to the other.
+    pub(super) fn signed_magnitude_sample(
+        fc: &FloatChoice,
+        rng: &mut EngineRng,
+        sample: impl Fn(f64, f64, &mut EngineRng) -> Option<f64>,
+    ) -> Option<f64> {
+        coin_flip_first([false, true], rng, |negative, rng| {
+            let (min, max) = if negative {
+                (-fc.max_value, -fc.min_value)
+            } else {
+                (fc.min_value, fc.max_value)
+            };
+            let lo = min.max(fc.smallest_nonzero_magnitude);
+            let hi = max.min(f64::MAX);
+            if lo > hi {
+                return None;
+            }
+            let mag = sample(lo, hi, rng)?;
+            Some(if negative { -mag } else { mag })
+        })
+    }
+
+    /// A magnitude in `[lo, hi]` (`0 < lo <= hi`, finite): a uniform binade, then a
+    /// uniform mantissa within it. The subnormals count as one binade.
+    pub(super) fn log_uniform_magnitude(lo: f64, hi: f64, rng: &mut EngineRng) -> f64 {
+        let (e_lo, e_hi) = (lo.to_bits() >> 52, hi.to_bits() >> 52);
+        let e = rng.random_range(e_lo..=e_hi);
+        let m_lo = if e == e_lo {
+            lo.to_bits() & FLOAT_MANTISSA_MASK
+        } else {
+            0
+        };
+        let m_hi = if e == e_hi {
+            hi.to_bits() & FLOAT_MANTISSA_MASK
+        } else {
+            FLOAT_MANTISSA_MASK
+        };
+        f64::from_bits((e << 52) | rng.random_range(m_lo..=m_hi))
+    }
+
+    /// [`signed_magnitude_sample`] with [`log_uniform_magnitude`] over `band`;
+    /// `None` when the band misses the range.
+    pub(super) fn banded_magnitude_sample(
+        fc: &FloatChoice,
+        band: (f64, f64),
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+            let (lo, hi) = (lo.max(band.0), hi.min(band.1));
+            (lo <= hi).then(|| log_uniform_magnitude(lo, hi, rng))
+        })
+    }
+
+    /// Uniformly one of the valid, bit-distinct `candidates`; `None` when none is valid.
+    pub(super) fn pick_valid<const N: usize>(
+        fc: &FloatChoice,
+        candidates: [f64; N],
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let mut valid = [0.0f64; N];
+        let mut n = 0usize;
+        for v in candidates {
+            if fc.validate(v) && !valid[..n].iter().any(|w| w.to_bits() == v.to_bits()) {
+                valid[n] = v;
+                n += 1;
+            }
+        }
+        (n > 0).then(|| valid[rng.random_range(0..n)])
+    }
+
+    /// The range edges and their neighbours: `min`, `max`, the next float of the
+    /// width inside each, and `min + 1` / `max - 1`.
+    pub(super) fn float_endpoint_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (above_min, below_max) = match width {
+            FloatWidth::F64 => (next_up(fc.min_value), next_down(fc.max_value)),
+            FloatWidth::F32 => (
+                f64::from((fc.min_value as f32).next_up()),
+                f64::from((fc.max_value as f32).next_down()),
+            ),
+        };
+        pick_valid(
+            fc,
+            [
+                fc.min_value,
+                fc.max_value,
+                above_min,
+                fc.min_value + 1.0,
+                fc.max_value - 1.0,
+                below_max,
+            ],
+            rng,
+        )
+    }
+
+    /// A normal magnitude below `0.1`, log-uniform over its binades so the
+    /// magnitudes just under `0.1` do not dominate.
+    pub(super) fn float_near_zero_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (e, _) = width.layout();
+        banded_magnitude_sample(fc, (float_pow2(1 - e), float_below(0.1)), rng)
+    }
+
+    /// A subnormal of the width: nonzero, below its `MIN_POSITIVE`.
+    pub(super) fn float_subnormal_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (e, m) = width.layout();
+        let smallest = float_pow2(1 - e - m);
+        banded_magnitude_sample(fc, (smallest, float_pow2(1 - e) - smallest), rng)
+    }
+
+    /// A value in `(1 - 2^-l, 1 + 2^-l)` of a coin-flipped sign, `l` uniform over the
+    /// width's mantissa bits, drawn as a bit pattern from a coin-flipped side of 1.
+    pub(super) fn float_near_one_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (e, m) = width.layout();
+        let one = (e as u64) << m;
+        signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+            let (lo, hi) = width.bit_range(lo, hi);
+            let l = rng.random_range(1..=m);
+            let span = 1u64 << (m - l);
+            let sides = [
+                (one.max(lo), (one + span - 1).min(hi)),
+                ((one - (2 * span - 1)).max(lo), (one - 1).min(hi)),
+            ];
+            coin_flip_first(sides, rng, |(a, b), rng| {
+                (a <= b).then(|| width.to_float(rng.random_range(a..=b)))
+            })
+        })
+    }
+
+    /// Integer counterpart of [`log_uniform_magnitude`]: a uniform binade of
+    /// `[lo, hi]`, then a uniform integer within it; `0` is a binade of its own.
+    pub(super) fn log_uniform_integer(lo: u64, hi: u64, rng: &mut EngineRng) -> u64 {
+        let bits = |v: u64| 64 - v.leading_zeros();
+        let b = rng.random_range(bits(lo)..=bits(hi));
+        let (first, last) = if b == 0 {
+            (0, 0)
+        } else {
+            (1u64 << (b - 1), (1u64 << b) - 1)
+        };
+        rng.random_range(first.max(lo)..=last.min(hi))
+    }
+
+    /// A nonzero integer of a coin-flipped sign via [`log_uniform_integer`], capped
+    /// at `±2^53` (`±2^24` for `f32`) where integers stop being exact.
+    pub(super) fn float_integer_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let limit = float_pow2(width.layout().1 + 1);
+        signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+            let lo = libm::ceil(lo).max(1.0);
+            let hi = libm::floor(hi).min(limit);
+            (lo <= hi).then(|| log_uniform_integer(lo as u64, hi as u64, rng) as f64)
+        })
+    }
+
+    /// A half-integer (`k + 0.5`) of a coin-flipped sign via [`log_uniform_integer`],
+    /// capped below `±2^52` (`±2^23` for `f32`) where `k + 0.5` stops being exact.
+    pub(super) fn float_half_integer_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let limit = float_pow2(width.layout().1) - 1.0;
+        signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+            let lo = libm::ceil(lo - 0.5).max(0.0);
+            let hi = libm::floor(hi - 0.5).min(limit);
+            (lo <= hi).then(|| log_uniform_integer(lo as u64, hi as u64, rng) as f64 + 0.5)
+        })
+    }
+
+    /// A magnitude in the top binade, `[2^1023, MAX]` (`[2^127, f32::MAX]`): the
+    /// sum of two such values of one sign overflows.
+    pub(super) fn float_near_max_for_add_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (e, _) = width.layout();
+        banded_magnitude_sample(fc, (float_pow2(e), width.max()), rng)
+    }
+
+    /// A magnitude within a binade of `sqrt(MAX)`, `[2^511, 2^513)` (`[2^63, 2^65)`):
+    /// the product of two such values overflows about half the time.
+    pub(super) fn float_near_max_for_mul_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let half = (width.layout().0 + 1) / 2;
+        let band = (float_pow2(half - 1), float_below(float_pow2(half + 1)));
+        banded_magnitude_sample(fc, band, rng)
+    }
+
+    /// A magnitude within a binade of `sqrt(MIN_POSITIVE)`, `[2^-513, 2^-510)`
+    /// (`[2^-65, 2^-62)`): the product of two such values underflows to a
+    /// subnormal about half the time.
+    pub(super) fn float_near_sqrt_min_positive_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let half = (1 - width.layout().0) / 2;
+        let band = (float_pow2(half - 2), float_below(float_pow2(half + 1)));
+        banded_magnitude_sample(fc, band, rng)
+    }
+
+    /// A NaN of random sign: the canonical quiet NaN or a random payload, half each.
+    pub(super) fn float_nan_sample(
+        fc: &FloatChoice,
+        _width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        if !fc.allow_nan {
+            return None;
+        }
+        let sign = u64::from(rng.random::<bool>()) << 63;
+        let payload = if rng.random::<bool>() {
+            1u64 << 51
+        } else {
+            rng.random_range(1..=FLOAT_MANTISSA_MASK)
+        };
+        Some(f64::from_bits(sign | (0x7FFu64 << 52) | payload))
+    }
+
+    pub(super) fn float_infinity_sample(
+        fc: &FloatChoice,
+        _width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        pick_valid(fc, [f64::INFINITY, f64::NEG_INFINITY], rng)
+    }
+
+    /// `±MAX` of the width.
+    pub(super) fn float_max_magnitude_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        pick_valid(fc, [width.max(), -width.max()], rng)
+    }
+
+    /// `±2^53` (`±2^24` for `f32`), past which not every integer is representable.
+    pub(super) fn float_max_exact_integer_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let limit = float_pow2(width.layout().1 + 1);
+        pick_valid(fc, [limit, -limit], rng)
+    }
+
+    pub(super) fn float_signed_zero_sample(
+        fc: &FloatChoice,
+        _width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        pick_valid(fc, [0.0, -0.0], rng)
+    }
+
+    /// A power of two of the width or its predecessor, straddling a binade boundary:
+    /// coin-flipped sign, uniform normal exponent, predecessor half the time if in range.
+    pub(super) fn float_binade_edge_sample(
+        fc: &FloatChoice,
+        width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let (_, m) = width.layout();
+        signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+            let (lo, hi) = width.bit_range(lo, hi);
+            if lo > hi {
+                return None;
+            }
+            let e_lo = lo >> m;
+            let k_lo = if e_lo == 0 || lo & ((1u64 << m) - 1) != 0 {
+                e_lo + 1
+            } else {
+                e_lo
+            };
+            let k_hi = hi >> m;
+            if k_lo > k_hi {
+                return None;
+            }
+            let power = rng.random_range(k_lo..=k_hi) << m;
+            let predecessor = power - 1;
+            Some(
+                width.to_float(if rng.random::<bool>() && predecessor >= lo {
+                    predecessor
+                } else {
+                    power
+                }),
+            )
+        })
+    }
+
+    /// A float that only approximates its intended value: the nearest float to a
+    /// short decimal (`n / 10^d` for `1..=8` digits `d`, `n` up to `100 × 10^d`
+    /// and `5 ∤ n`, so the reduced denominator keeps a factor of five) or to a
+    /// fraction with an odd denominator (`p / q` for odd `q` in `3..=1001`, `p`
+    /// in `1..=300` and `q ∤ p`). Neither has a finite binary expansion, unlike
+    /// the dyadic values every other category produces, so these carry
+    /// representation error. The candidate is small (magnitude at most about
+    /// `100`) with either sign; a finite range admitting neither sign instead gets
+    /// `min + (max - min) × p / q` for such a fraction in `(0, 1)`.
+    pub(super) fn float_non_dyadic_sample(
+        fc: &FloatChoice,
+        _width: FloatWidth,
+        rng: &mut EngineRng,
+    ) -> Option<f64> {
+        let odd = |rng: &mut EngineRng| 2 * rng.random_range(1..=500u64) + 1;
+        let mag = if rng.random::<bool>() {
+            let scale = 10u64.pow(rng.random_range(1..=8u32));
+            let mut n = rng.random_range(1..=scale * 100);
+            if n % 5 == 0 {
+                n += 1;
+            }
+            n as f64 / scale as f64
+        } else {
+            let q = odd(rng);
+            let mut p = rng.random_range(1..=300u64);
+            if p % q == 0 {
+                p += 1;
+            }
+            p as f64 / q as f64
+        };
+        coin_flip_first([mag, -mag], rng, |v, _| fc.validate(v).then_some(v)).or_else(|| {
+            let size = fc.max_value - fc.min_value;
+            size.is_finite().then(|| {
+                let q = odd(rng);
+                fc.min_value + size * (rng.random_range(1..q) as f64 / q as f64)
+            })
+        })
+    }
+
+    /// The default draw and the mixture's remainder: a coin flip between two
+    /// complementary spreads. The log-uniform gives every binade down to the
+    /// smallest admitted magnitude the same share
+    /// it yields to the uniform when the range admits no finite
+    /// nonzero magnitude. The uniform is `U(min, max)`
+    pub(super) fn float_default_sample(
+        fc: &FloatChoice,
+        rng: &mut EngineRng,
+    ) -> Result<f64, InternalError> {
+        if rng.random::<bool>() {
+            let v = signed_magnitude_sample(fc, rng, |lo, hi, rng| {
+                Some(log_uniform_magnitude(lo, hi, rng))
+            });
+            if let Some(v) = v {
+                return Ok(v);
+            }
+        }
+        let (min, max) = (fc.min_value.max(-f64::MAX), fc.max_value.min(f64::MAX));
+        let u = rng.random::<f64>();
+        let v = min * (1.0 - u) + max * u;
+        if fc.validate(v) { Ok(v) } else { fc.simplest() }
     }
 }
 

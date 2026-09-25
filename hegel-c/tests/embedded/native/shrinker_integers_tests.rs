@@ -8,7 +8,7 @@
 
 use crate::exchange::drive_no_yield;
 use crate::native::bignum::BigInt;
-use crate::native::core::choices::IntegerChoice;
+use crate::native::core::choices::{BooleanChoice, IntegerChoice};
 use crate::native::core::{ChoiceNode, ChoiceValue, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
@@ -134,6 +134,42 @@ fn lower_and_bump_accepts_relative_bump() {
     drive_no_yield(shrinker.lower_and_bump()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 4);
     assert_eq!(int_value(&shrinker.current_nodes[1]), 1);
+}
+
+fn bool_value(node: &ChoiceNode) -> bool {
+    match &node.value() {
+        ChoiceValue::Boolean(b) => *b,
+        _ => unreachable!(),
+    }
+}
+
+/// A `one_of` whose pair branch `(false, true)` is interesting has a shorter
+/// interesting branch, a lone `true`, but that branch needs the *second*
+/// value of the pair: bumping the branch index and zeroing what follows gives
+/// a lone `false`, so the pass must also try keeping the tail less the draw
+/// the new branch no longer makes.
+#[test]
+fn try_shortening_via_increment_keeps_a_later_value_the_shorter_branch_needs() {
+    let bool_node = |v: bool| ChoiceNode::boolean(BooleanChoice { p: 0.5 }, v, false);
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let used = if int_value(&nodes[0]) == 0 { 3 } else { 2 };
+                if nodes.len() < used {
+                    return (false, nodes.to_vec(), Spans::new());
+                }
+                let interesting = nodes[1..used].iter().any(bool_value);
+                (interesting, nodes[..used].to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node_st(0, 0, 1, 0), bool_node(false), bool_node(true)],
+        Spans::new(),
+    );
+    drive_no_yield(shrinker.try_shortening_via_increment()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 1);
+    assert_eq!(shrinker.current_nodes.len(), 2);
+    assert!(bool_value(&shrinker.current_nodes[1]));
 }
 
 #[test]

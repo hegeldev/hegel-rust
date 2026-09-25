@@ -8,7 +8,7 @@ pub mod text;
 use crate::control::hegel_internal_assert;
 use crate::native::bignum::BigInt;
 use crate::native::core::{
-    EngineError, FloatChoice, ManyState, NativeTestCase, RecursionState, Status,
+    EngineError, FloatChoice, FloatWidth, ManyState, NativeTestCase, RecursionState, Status,
     float_restrict_and_redraw,
 };
 use crate::native::intervalsets::IntervalSet;
@@ -130,8 +130,14 @@ pub fn generate_float(ntc: &mut NativeTestCase, spec: &FloatSpec) -> Result<f64,
              after exclusive-bound adjustment"
         )));
     }
+    let width = if spec.width == 32 {
+        FloatWidth::F32
+    } else {
+        FloatWidth::F64
+    };
     let v = spanned(ntc, LABEL_FLOAT, |ntc| {
         ntc.draw_float(
+            width,
             min_value,
             max_value,
             spec.allow_nan,
