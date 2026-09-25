@@ -4877,6 +4877,24 @@ unsafe fn event_observation(
     }
 }
 
+/// The document a printer handle writes into: a test-case family's, reached
+/// through the family so the family allocates no document of its own, or a
+/// standalone one from `hegel_printer_new`.
+#[derive(Clone)]
+enum PrinterDoc {
+    Family(Arc<FamilyShared>),
+    Standalone(Arc<Mutex<Printer>>),
+}
+
+impl PrinterDoc {
+    fn lock(&self) -> MutexGuard<'_, Printer> {
+        match self {
+            PrinterDoc::Family(family) => family.printer.lock(),
+            PrinterDoc::Standalone(printer) => printer.lock(),
+        }
+    }
+}
+
 /// A pretty-printer document.
 ///
 /// Built from three primitives: `hegel_printer_text` emits unbreakable text,
@@ -4913,24 +4931,6 @@ unsafe fn event_observation(
 ///
 /// Every handle — including those returned by `hegel_printer_deferred` —
 /// must be released with `hegel_printer_free`.
-/// The document a printer handle writes into: a test-case family's, reached
-/// through the family so the family allocates no document of its own, or a
-/// standalone one from `hegel_printer_new`.
-#[derive(Clone)]
-enum PrinterDoc {
-    Family(Arc<FamilyShared>),
-    Standalone(Arc<Mutex<Printer>>),
-}
-
-impl PrinterDoc {
-    fn lock(&self) -> MutexGuard<'_, Printer> {
-        match self {
-            PrinterDoc::Family(family) => family.printer.lock(),
-            PrinterDoc::Standalone(printer) => printer.lock(),
-        }
-    }
-}
-
 pub struct HegelPrinter {
     inner: PrinterDoc,
     target: PrinterTarget,
