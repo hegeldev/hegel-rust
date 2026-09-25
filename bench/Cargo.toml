@@ -1,0 +1,19 @@
+[package]
+name = "hegel-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Deterministic (instruction-count) and walltime benchmarks of hegeltest and libhegel"
+
+[workspace]
+
+[[bin]]
+name = "hegel-bench"
+path = "src/main.rs"
+
+[dependencies]
+hegel = { package = "hegeltest", path = "..", features = ["static-engine"] }
+libc = "0.2"
+
+[profile.release]
+debug = 1

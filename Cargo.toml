@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "hegel-macros", "hegel-c"]
+exclude = ["bench"]
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
