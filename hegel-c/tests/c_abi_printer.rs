@@ -13,11 +13,12 @@ use hegel_c::{
     hegel_printer_comment, hegel_printer_commit_speculative, hegel_printer_deferred,
     hegel_printer_end_group, hegel_printer_free, hegel_printer_hard_break, hegel_printer_if_break,
     hegel_printer_is_live, hegel_printer_new, hegel_printer_options_free,
-    hegel_printer_options_new, hegel_printer_options_set_max_width, hegel_printer_resolve,
-    hegel_printer_shift_indent, hegel_printer_text, hegel_printer_value,
-    hegel_printer_value_result_free, hegel_printer_value_result_t, hegel_run_free,
-    hegel_settings_free, hegel_status_t, hegel_test_case_block, hegel_test_case_clone,
-    hegel_test_case_free, hegel_test_case_printer, hegel_test_case_set_worker,
+    hegel_printer_options_new, hegel_printer_options_set_max_width, hegel_printer_reflow,
+    hegel_printer_resolve, hegel_printer_shift_indent, hegel_printer_text, hegel_printer_value,
+    hegel_printer_value_result_free, hegel_printer_value_result_t, hegel_reflow_options_free,
+    hegel_reflow_options_new, hegel_run_free, hegel_settings_free, hegel_status_t,
+    hegel_test_case_block, hegel_test_case_clone, hegel_test_case_free, hegel_test_case_printer,
+    hegel_test_case_set_worker,
 };
 use std::ptr;
 
@@ -747,6 +748,83 @@ fn null_options_lay_out_to_the_default_width_of_79() {
             assert_eq!(value(ctx, p).contains('\n'), expected_break);
             ok(hegel_printer_free(ctx, p));
         }
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn reflow_lays_out_a_flat_representation_through_the_groups() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let p = new_printer(ctx, 12);
+        text(ctx, p, "let p = ");
+        let repr = "Point { x: 100, y: 200 }";
+        ok(hegel_printer_reflow(
+            ctx,
+            p,
+            ptr::null(),
+            repr.as_ptr(),
+            repr.len(),
+        ));
+        text(ctx, p, ";");
+        assert_eq!(value(ctx, p), "let p = Point {\n    x: 100,\n    y: 200 };");
+        ok(hegel_printer_free(ctx, p));
+
+        let mut options: *mut hegel_c::HegelReflowOptions = ptr::null_mut();
+        ok(hegel_reflow_options_new(ctx, &mut options));
+        assert!(!options.is_null());
+        let p = new_printer(ctx, 79);
+        let repr = "line one\nline two";
+        ok(hegel_printer_reflow(
+            ctx,
+            p,
+            options,
+            repr.as_ptr(),
+            repr.len(),
+        ));
+        ok(hegel_printer_reflow(ctx, p, options, ptr::null(), 0));
+        assert_eq!(value(ctx, p), "line one\nline two");
+        ok(hegel_printer_free(ctx, p));
+        ok(hegel_reflow_options_free(ctx, options));
+        ok(hegel_reflow_options_free(ctx, ptr::null_mut()));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+#[test]
+fn reflow_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        assert_eq!(
+            hegel_reflow_options_new(ctx, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        assert_eq!(
+            hegel_printer_reflow(ctx, ptr::null_mut(), ptr::null(), "x".as_ptr(), 1),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let p = new_printer(ctx, 79);
+        assert_eq!(
+            hegel_printer_reflow(ctx, p, ptr::null(), [0xff_u8].as_ptr(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("not valid UTF-8"));
+        assert_eq!(
+            hegel_printer_reflow(ctx, p, ptr::null(), ptr::null(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("text is null"));
+
+        let mut slot: *mut HegelPrinter = ptr::null_mut();
+        ok(hegel_printer_deferred(ctx, p, &mut slot));
+        ok(hegel_printer_resolve(ctx, p));
+        assert_eq!(
+            hegel_printer_reflow(ctx, slot, ptr::null(), "[1, 2]".as_ptr(), 6),
+            HEGEL_E_INVALID_HANDLE
+        );
+        ok(hegel_printer_free(ctx, slot));
+        ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
     }
 }
