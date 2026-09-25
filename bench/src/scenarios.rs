@@ -122,6 +122,7 @@ fn one_of_text_regex(cfg: &Config) {
     });
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, DefaultGenerator)]
 struct Version {
     major: u64,

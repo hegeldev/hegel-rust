@@ -232,7 +232,7 @@ fn read_json(path: &str) -> BTreeMap<String, (String, u64, f64)> {
             let after = &rest[idx + key.len()..];
             let after = after.trim_start_matches([':', ' ', '"']);
             let end = after
-                .find(|c: char| c == ',' || c == '}' || c == '"')
+                .find([',', '}', '"'])
                 .unwrap_or(after.len());
             Some(after[..end].to_string())
         };
