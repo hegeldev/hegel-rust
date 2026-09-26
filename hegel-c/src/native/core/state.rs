@@ -1573,8 +1573,12 @@ pub struct FamilyCore {
     /// own means that which kinds a case draws weights for, and when, leaves
     /// the values its own RNG produces untouched. Unset for replay-only
     /// families, which never sample, and for a probe until it draws past its
-    /// prefix.
-    parameter_rng: OnceBox<Mutex<EngineRng>>,
+    /// prefix. Kept inline rather than boxed on first use: a case pays for the
+    /// spawn once, and a boxed RNG would be an allocation per test case.
+    parameter_rng: Mutex<Option<EngineRng>>,
+    /// Whether [`Self::parameter_rng`] has been spawned, so the draws that
+    /// follow the first need only a load to see that it has.
+    parameter_rng_spawned: AtomicBool,
     /// The integer category weights, drawn from [`Self::parameter_rng`] by the
     /// case's first fresh integer draw and shared by every clone-stream so the
     /// whole case has one consistent distribution. Unset until then, so a
@@ -1597,7 +1601,8 @@ impl FamilyCore {
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(FreshIds::default()),
-            parameter_rng: OnceBox::new(),
+            parameter_rng: Mutex::new(None),
+            parameter_rng_spawned: AtomicBool::new(false),
             integer_parameters: OnceBox::new(),
             float_parameters: OnceBox::new(),
         }
@@ -1632,15 +1637,22 @@ impl FamilyCore {
     /// Spawn the swarm parameters' RNG off `rng`, unless the family already
     /// has one.
     fn spawn_parameter_rng(&self, rng: &mut EngineRng) {
-        self.parameter_rng
-            .get_or_init(|| Box::new(Mutex::new(rng.spawn())));
+        if self.parameter_rng_spawned.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut slot = self.parameter_rng.lock();
+        if slot.is_none() {
+            *slot = Some(rng.spawn());
+        }
+        drop(slot);
+        self.parameter_rng_spawned.store(true, Ordering::Relaxed);
     }
 
     /// Whether the swarm parameters' RNG has been spawned: `false` for a
     /// replay-only family, or a probe still inside its prefix.
     #[cfg(test)]
     pub(crate) fn has_parameter_rng(&self) -> bool {
-        self.parameter_rng.get().is_some()
+        self.parameter_rng.lock().is_some()
     }
 
     /// The integer category weights, or `None` while no fresh integer draw
@@ -1679,11 +1691,12 @@ impl FamilyCore {
         draw: fn(&mut EngineRng) -> Result<P, InternalError>,
     ) -> Result<&'a P, InternalError> {
         slot.get_or_try_init(|| {
+            let mut rng = self.parameter_rng.lock();
             let rng = hegel_internal_unwrap!(
-                self.parameter_rng.get(),
+                rng.as_mut(),
                 "swarm parameters requested before the test case's RNG was used"
             );
-            draw(&mut rng.lock()).map(Box::new)
+            draw(rng).map(Box::new)
         })
     }
 
