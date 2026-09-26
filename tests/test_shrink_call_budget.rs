@@ -57,7 +57,7 @@ fn shrink_budget_nested_vec() {
 
 #[test]
 fn shrink_budget_string_containing_bracket() {
-    let stats = measure_failing_run(101, 100, |tc| {
+    let stats = measure_failing_run(101, 1000, |tc| {
         let v = tc.draw(gs::text());
         v.contains(']').then(|| format!("{v:?}"))
     });

@@ -3108,49 +3108,103 @@ fn consecutive_integer_nodes_under_one_constraint_share_it() {
     assert_eq!(kind(2).max_value, BigInt::from(20));
 }
 
-/// A probe draws the family's swarm parameters from its RNG only when it
-/// first uses that RNG: replaying its prefix costs no Dirichlet draw, and
-/// the values it then samples are the ones an up-front draw would give.
+/// Each kind's swarm parameters are drawn by the first fresh draw of that
+/// kind, from an RNG spawned off the case's on its first use: the first
+/// integer draw samples the integer weights only, the first float draw the
+/// float weights, in that order from the parameters' RNG, and the case's
+/// own values follow from its RNG as if the weights had cost nothing.
 #[test]
-fn probe_draws_swarm_parameters_on_first_rng_use_only() {
-    let prefix = [ChoiceValue::Integer(BigInt::from(3))];
-    let mut lazy = NativeTestCase::for_probe(&prefix, EngineRng::seeded(9), BUFFER_SIZE);
-    assert_eq!(lazy.draw_integer(0i64, 10).unwrap(), 3);
-    assert!(lazy.family().generation_parameters().is_none());
-    let first = lazy.draw_integer(0i64, 1_000_000).unwrap();
-    let params = lazy.family().generation_parameters().copied().unwrap();
+fn swarm_parameters_are_drawn_per_kind_on_the_first_fresh_draw_of_that_kind() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(9));
+    assert!(!tc.family().has_parameter_rng());
+    let first = tc.draw_integer(0i64, 1_000_000).unwrap();
+    assert!(tc.family().has_parameter_rng());
+    let integer = *tc.family().drawn_integer_parameters().unwrap();
+    assert!(tc.family().drawn_float_parameters().is_none());
+    tc.draw_float(FloatWidth::F64, -1.0, 1.0, false, false, 0.0)
+        .unwrap();
+    let float = *tc.family().drawn_float_parameters().unwrap();
 
     let mut rng = EngineRng::seeded(9);
-    let eager_params = GenerationParameters::draw(&mut rng).unwrap();
-    assert_eq!(params, eager_params);
-    let mut eager = NativeTestCase::new_random_with_params(rng, eager_params, BUFFER_SIZE);
-    assert_eq!(eager.draw_integer(0i64, 1_000_000).unwrap(), first);
-}
-
-/// Spawning a clone stream is a use of the RNG too, so it draws the
-/// parameters first and the child samples exactly as it did when they were
-/// drawn up front.
-#[test]
-fn cloning_a_probe_stream_draws_the_swarm_parameters_before_spawning() {
-    let mut probe = NativeTestCase::for_probe(&[], EngineRng::seeded(13), BUFFER_SIZE);
-    let child = probe.clone_stream().unwrap();
-    let params = probe.family().generation_parameters().copied().unwrap();
-
-    let mut rng = EngineRng::seeded(13);
-    assert_eq!(params, GenerationParameters::draw(&mut rng).unwrap());
-    let mut eager = NativeTestCase::new_random_with_params(rng, params, BUFFER_SIZE);
-    let eager_child = eager.clone_stream().unwrap();
+    let mut parameter_rng = rng.spawn();
     assert_eq!(
-        child.lock().draw_integer(0i64, 1_000_000).unwrap(),
-        eager_child.lock().draw_integer(0i64, 1_000_000).unwrap()
+        integer,
+        IntegerGenerationParameters::draw(&mut parameter_rng).unwrap()
+    );
+    assert_eq!(
+        float,
+        FloatGenerationParameters::draw(&mut parameter_rng).unwrap()
+    );
+    let kind = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(1_000_000),
+        shrink_towards: BigInt::from(0),
+    };
+    assert_eq!(
+        biased_integer_sample(&kind, &mut rng, integer).unwrap(),
+        BigInt::from(first)
     );
 }
 
-/// A bare replay has no RNG and so never gets parameters; the family reports
-/// none rather than inventing some.
+/// A draw of a kind that has no swarm weights spawns the parameters' RNG,
+/// as any use of the case's RNG does, but samples no weights.
+#[test]
+fn a_draw_without_swarm_weights_samples_none() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(9));
+    tc.draw_bytes(1, 1).unwrap();
+    assert!(tc.family().has_parameter_rng());
+    assert!(tc.family().drawn_integer_parameters().is_none());
+    assert!(tc.family().drawn_float_parameters().is_none());
+}
+
+/// A probe spawns the parameters' RNG only when it first uses its own:
+/// replaying its prefix costs nothing, and the weights it then draws are
+/// the ones a fresh case with that RNG draws.
+#[test]
+fn probe_spawns_the_parameter_rng_on_first_rng_use_only() {
+    let prefix = [ChoiceValue::Integer(BigInt::from(3))];
+    let mut probe = NativeTestCase::for_probe(&prefix, EngineRng::seeded(9), BUFFER_SIZE);
+    assert_eq!(probe.draw_integer(0i64, 10).unwrap(), 3);
+    assert!(!probe.family().has_parameter_rng());
+    probe.draw_integer(0i64, 1_000_000).unwrap();
+    let mut parameter_rng = EngineRng::seeded(9).spawn();
+    assert_eq!(
+        *probe.family().drawn_integer_parameters().unwrap(),
+        IntegerGenerationParameters::draw(&mut parameter_rng).unwrap()
+    );
+}
+
+/// Spawning a clone stream is a use of the RNG too, so it spawns the
+/// parameters' RNG first, and the child's draws share the parent's weights.
+#[test]
+fn clone_streams_share_the_parameters_of_their_family() {
+    let mut probe = NativeTestCase::for_probe(&[], EngineRng::seeded(13), BUFFER_SIZE);
+    let child = probe.clone_stream().unwrap();
+    assert!(probe.family().has_parameter_rng());
+    assert!(probe.family().drawn_integer_parameters().is_none());
+
+    child.lock().draw_integer(0i64, 1_000_000).unwrap();
+    let mut parameter_rng = EngineRng::seeded(13).spawn();
+    let expected = IntegerGenerationParameters::draw(&mut parameter_rng).unwrap();
+    assert_eq!(
+        *probe.family().drawn_integer_parameters().unwrap(),
+        expected
+    );
+    probe.draw_integer(0i64, 1_000_000).unwrap();
+    assert_eq!(
+        *probe.family().drawn_integer_parameters().unwrap(),
+        expected
+    );
+    assert!(probe.family().drawn_float_parameters().is_none());
+}
+
+/// A bare replay has no RNG and so never spawns one for parameters nor
+/// draws any; the family reports none rather than inventing some.
 #[test]
 fn replay_only_family_has_no_swarm_parameters() {
     let mut tc = NativeTestCase::for_choices(&[ChoiceValue::Integer(BigInt::from(1))], None);
     assert_eq!(tc.draw_integer(0i64, 10).unwrap(), 1);
-    assert!(tc.family().generation_parameters().is_none());
+    assert!(!tc.family().has_parameter_rng());
+    assert!(tc.family().drawn_integer_parameters().is_none());
+    assert!(tc.family().drawn_float_parameters().is_none());
 }

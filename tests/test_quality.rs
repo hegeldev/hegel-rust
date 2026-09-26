@@ -84,7 +84,7 @@ mod shrink_quality {
         let bound: i128 = 1i128 << 120;
         let target: Vec<i128> = (0..20).collect();
         let target_clone = target.clone();
-        let actual = minimal(
+        let actual = Minimal::new(
             gs::vecs(gs::integers::<i128>().min_value(0).max_value(bound)),
             move |x: &Vec<i128>| {
                 if x.len() < 20 {
@@ -92,7 +92,9 @@ mod shrink_quality {
                 }
                 target_clone.iter().enumerate().all(|(i, t)| x[i] >= *t)
             },
-        );
+        )
+        .test_cases(5000)
+        .run();
         assert_eq!(actual, target);
     }
 
@@ -476,7 +478,7 @@ mod shrink_quality {
             gs::integers::<i64>().min_value(min_lo).max_value(max_hi)
         );
         let (a, b) = Minimal::new(s, move |(a, b): &(i64, i64)| a + gap == *b)
-            .test_cases(5000)
+            .test_cases(20000)
             .run();
         assert_eq!((a, b), (0, gap), "for gap={gap}");
     }

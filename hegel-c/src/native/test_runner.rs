@@ -362,10 +362,8 @@ impl<'a> Engine<'a> {
                     break;
                 }
 
-                let mut case_rng = self.rng.spawn();
-                let params = crate::native::core::GenerationParameters::draw(&mut case_rng)?;
-                let ntc =
-                    NativeTestCase::new_random_with_params(case_rng, params, self.choice_bound());
+                let case_rng = self.rng.spawn();
+                let ntc = NativeTestCase::new_random_with_max_size(case_rng, self.choice_bound());
                 if verbosity == Verbosity::Verbose {
                     output.line("Running test case");
                 }

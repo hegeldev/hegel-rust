@@ -628,9 +628,11 @@ impl Default for FloatGenerationParameters {
 }
 
 /// Per-test-case *swarm* parameters: one set of category weights for integer
-/// draws and one for float draws. Drawn once at the start of each generated
-/// test case (see [`Self::draw`]) and held constant across every draw and every
-/// clone-stream of that case.
+/// draws and one for float draws. A generated test case draws each set the
+/// first time it makes a fresh draw of that kind (see
+/// [`FamilyCore::integer_parameters`] and [`FamilyCore::float_parameters`]),
+/// from an RNG of its own spawned off the case's, and holds it constant across
+/// every later draw and every clone-stream of that case.
 ///
 /// They only ever change *how likely* each category is, never *which* values are
 /// reachable. Because hegel records typed choice *values* and the samplers are
@@ -643,6 +645,7 @@ impl Default for FloatGenerationParameters {
 /// concentrates on one special category. An endpoint-heavy case draws both
 /// operands of `x + y` from `{min, max, …}`, so their sum overflows about half
 /// the time — the correlation a fixed per-value probability can't produce.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct GenerationParameters {
     /// Category weights for wide-range integer draws.
@@ -651,15 +654,18 @@ pub struct GenerationParameters {
     pub float: FloatGenerationParameters,
 }
 
+#[cfg(test)]
 impl GenerationParameters {
-    /// Draw a fresh set of parameters for one test case: independent Dirichlet
-    /// draws for the integer and float weights.
+    /// Draw both sets of parameters at once: independent Dirichlet draws for
+    /// the integer and float weights, the integer ones first, as a test case
+    /// that draws integers before floats does. The engine draws each set on
+    /// its own as a case first needs it; the tests measure the two draws
+    /// together through this.
     ///
-    /// [`Self::default`] is the fixed fallback used only when no test-case
-    /// parameters have been drawn (a replay-only test case never samples, so it
-    /// never consults these). Its values are the mean of this draw, so any
-    /// accidental use still produces a reasonable distribution rather than a
-    /// degenerate one.
+    /// [`Self::default`] is the mean of this draw: the fixed weights the
+    /// sampler microbenchmarks and the direct sampling entry points use, so
+    /// anything that samples without a test case still gets a reasonable
+    /// distribution rather than a degenerate one.
     pub fn draw(rng: &mut EngineRng) -> Result<Self, InternalError> {
         Ok(GenerationParameters {
             integer: IntegerGenerationParameters::draw(rng)?,
@@ -1561,12 +1567,22 @@ pub struct FamilyCore {
     /// Identifiers handed out by [`NativeTestCase::draw_fresh_id`], family-wide
     /// so an identifier is unique across every stream of the test case.
     fresh_ids: Mutex<FreshIds>,
-    /// This test case's swarm [`GenerationParameters`], drawn once from the
-    /// root stream's RNG the first time that RNG is used (see
-    /// [`NativeTestCase::rng`]) and shared by every clone-stream so the whole
-    /// case has one consistent distribution. Unset for replay-only families,
-    /// which never sample, and for a probe until it draws past its prefix.
-    generation_parameters: OnceBox<GenerationParameters>,
+    /// The RNG this test case's swarm parameters are drawn from, spawned off
+    /// the root stream's RNG the first time that RNG is used (see
+    /// [`NativeTestCase::rng`]). Drawing the weights from a stream of their
+    /// own means that which kinds a case draws weights for, and when, leaves
+    /// the values its own RNG produces untouched. Unset for replay-only
+    /// families, which never sample, and for a probe until it draws past its
+    /// prefix.
+    parameter_rng: OnceBox<Mutex<EngineRng>>,
+    /// The integer category weights, drawn from [`Self::parameter_rng`] by the
+    /// case's first fresh integer draw and shared by every clone-stream so the
+    /// whole case has one consistent distribution. Unset until then, so a
+    /// case that never draws an integer never samples them.
+    integer_parameters: OnceBox<IntegerGenerationParameters>,
+    /// The float category weights, likewise drawn by the case's first fresh
+    /// float draw.
+    float_parameters: OnceBox<FloatGenerationParameters>,
 }
 
 impl FamilyCore {
@@ -1581,7 +1597,9 @@ impl FamilyCore {
             concurrent_machine: AtomicBool::new(false),
             reject_concurrent_machine: AtomicBool::new(false),
             fresh_ids: Mutex::new(FreshIds::default()),
-            generation_parameters: OnceBox::new(),
+            parameter_rng: OnceBox::new(),
+            integer_parameters: OnceBox::new(),
+            float_parameters: OnceBox::new(),
         }
     }
 
@@ -1611,28 +1629,62 @@ impl FamilyCore {
         self.reject_concurrent_machine.load(Ordering::Relaxed)
     }
 
-    /// Record swarm parameters the caller drew itself, as the exploration
-    /// loop does for each generated case; later calls (there are none in
-    /// practice) are ignored by the `OnceBox`.
-    fn set_generation_parameters(&self, params: GenerationParameters) {
-        let _ = self.generation_parameters.set(Box::new(params));
+    /// Spawn the swarm parameters' RNG off `rng`, unless the family already
+    /// has one.
+    fn spawn_parameter_rng(&self, rng: &mut EngineRng) {
+        self.parameter_rng
+            .get_or_init(|| Box::new(Mutex::new(rng.spawn())));
     }
 
-    /// This test case's swarm parameters, or `None` while none have been
-    /// drawn: a replay-only family, or a probe still inside its prefix.
+    /// Whether the swarm parameters' RNG has been spawned: `false` for a
+    /// replay-only family, or a probe still inside its prefix.
     #[cfg(test)]
-    pub(crate) fn generation_parameters(&self) -> Option<&GenerationParameters> {
-        self.generation_parameters.get()
+    pub(crate) fn has_parameter_rng(&self) -> bool {
+        self.parameter_rng.get().is_some()
     }
 
-    /// Draw this test case's swarm parameters from `rng`, or return the ones
-    /// already recorded.
-    fn draw_generation_parameters(
-        &self,
-        rng: &mut EngineRng,
-    ) -> Result<&GenerationParameters, InternalError> {
-        self.generation_parameters
-            .get_or_try_init(|| GenerationParameters::draw(rng).map(Box::new))
+    /// The integer category weights, or `None` while no fresh integer draw
+    /// has asked for them.
+    #[cfg(test)]
+    pub(crate) fn drawn_integer_parameters(&self) -> Option<&IntegerGenerationParameters> {
+        self.integer_parameters.get()
+    }
+
+    /// The float category weights, or `None` while no fresh float draw has
+    /// asked for them.
+    #[cfg(test)]
+    pub(crate) fn drawn_float_parameters(&self) -> Option<&FloatGenerationParameters> {
+        self.float_parameters.get()
+    }
+
+    /// This test case's integer category weights, drawn from the parameters'
+    /// RNG the first time a fresh integer draw asks for them.
+    pub(crate) fn integer_parameters(&self) -> Result<&IntegerGenerationParameters, InternalError> {
+        self.draw_parameters(&self.integer_parameters, IntegerGenerationParameters::draw)
+    }
+
+    /// This test case's float category weights, drawn from the parameters'
+    /// RNG the first time a fresh float draw asks for them.
+    pub(crate) fn float_parameters(&self) -> Result<&FloatGenerationParameters, InternalError> {
+        self.draw_parameters(&self.float_parameters, FloatGenerationParameters::draw)
+    }
+
+    /// The weights in `slot`, drawing them with `draw` from the parameters'
+    /// RNG on the first request. Only a fresh draw asks, and a fresh draw
+    /// has used the stream's RNG (see [`NativeTestCase::rng`]), so the
+    /// parameters' RNG is there by then.
+    fn draw_parameters<'a, P>(
+        &'a self,
+        slot: &'a OnceBox<P>,
+        draw: fn(&mut EngineRng) -> Result<P, InternalError>,
+    ) -> Result<&'a P, InternalError> {
+        slot.get_or_try_init(|| {
+            let rng = hegel_internal_unwrap!(
+                self.parameter_rng.get(),
+                "swarm parameters requested before the test case's RNG was used"
+            );
+            draw(&mut rng.lock()).map(Box::new)
+        })
     }
 
     /// The family's concluded status, or `None` while still running.
@@ -1819,17 +1871,10 @@ impl NativeTestCase {
             .with_random(rng)
     }
 
-    /// Like [`Self::new_random`], but generating from the given swarm
-    /// parameters rather than drawing fresh ones, up to `max_size` choices —
-    /// used by the exploration loop, which draws each case's parameters
-    /// itself.
-    pub fn new_random_with_params(
-        rng: EngineRng,
-        params: GenerationParameters,
-        max_size: usize,
-    ) -> Self {
-        Self::for_prefix_and_template(Prefix::empty(), None, max_size, None)
-            .with_random_and_params(rng, params)
+    /// Like [`Self::new_random`], but making up to `max_size` choices — the
+    /// exploration loop's constructor for each generated test case.
+    pub fn new_random_with_max_size(rng: EngineRng, max_size: usize) -> Self {
+        Self::for_prefix_and_template(Prefix::empty(), None, max_size, None).with_random(rng)
     }
 
     /// Replay `choices` in order, then for every further draw resolve via
@@ -1955,39 +2000,26 @@ impl NativeTestCase {
     /// `new_random` and `for_probe` to share the [`Self::for_choices_and_template`]
     /// constructor without duplicating the struct literal. Random draws can
     /// extend any stream, so the family budget becomes the requested
-    /// `max_size` rather than the bare-replay `usize::MAX`. Swarm parameters
-    /// are drawn from the RNG the first time it is used (see [`Self::rng`]),
-    /// so a probe that never draws past its prefix never draws them; the
-    /// main exploration loop draws its own and uses
-    /// [`Self::with_random_and_params`] instead.
+    /// `max_size` rather than the bare-replay `usize::MAX`. The swarm
+    /// parameters' RNG is spawned off this one the first time it is used (see
+    /// [`Self::rng`]), so a probe that never draws past its prefix never pays
+    /// for it.
     fn with_random(mut self, rng: EngineRng) -> Self {
         self.rng = Some(rng);
         self.family.set_budget(self.max_size);
         self
     }
 
-    /// Attach an RNG and use the given, already-drawn swarm parameters (rather
-    /// than drawing fresh ones). The parameters are held on the shared family,
-    /// so every draw and every clone-stream of this test case generates from
-    /// one consistent distribution.
-    fn with_random_and_params(mut self, rng: EngineRng, params: GenerationParameters) -> Self {
-        self.family.set_generation_parameters(params);
-        self.rng = Some(rng);
-        self.family.set_budget(self.max_size);
-        self
-    }
-
-    /// This stream's RNG together with the family's swarm parameters, or
-    /// `None` for a bare replay. The parameters are drawn from the RNG on the
-    /// family's first use of it — ahead of any other use, so the values a
-    /// seed produces are the ones an up-front draw would have produced — and
-    /// a probe that stays inside its prefix never pays for them.
-    fn rng(&mut self) -> Result<Option<(&mut EngineRng, &GenerationParameters)>, InternalError> {
-        let Some(rng) = self.rng.as_mut() else {
-            return Ok(None);
-        };
-        let params = self.family.draw_generation_parameters(rng)?;
-        Ok(Some((rng, params)))
+    /// This stream's RNG together with the family that holds the swarm
+    /// parameters, or `None` for a bare replay. The parameters' own RNG is
+    /// spawned off this one on the family's first use of it — ahead of any
+    /// other use — so the parameters a case draws never shift the values its
+    /// RNG produces, and a probe that stays inside its prefix never pays for
+    /// them.
+    fn rng(&mut self) -> Option<(&mut EngineRng, &FamilyCore)> {
+        let rng = self.rng.as_mut()?;
+        self.family.spawn_parameter_rng(rng);
+        Some((rng, &self.family))
     }
 
     /// The family state shared by every stream of this test case.
@@ -2027,7 +2059,7 @@ impl NativeTestCase {
         }
         let idx = self.nodes.len();
         let child_prefix = self.prefix.child_at(idx);
-        let child_rng = self.rng()?.map(|(rng, _)| rng.spawn());
+        let child_rng = self.rng().map(|(rng, _)| rng.spawn());
         let child_template = self.trailing_template.as_ref().map(|t| ChoiceTemplate {
             kind: t.kind,
             count: None,
@@ -2216,8 +2248,8 @@ impl NativeTestCase {
             shrink_towards: BigInt::zero(),
         };
 
-        let v = self.draw_integer_from(&kind, |kind, rng, params| {
-            biased_integer_sample(kind, rng, params.integer)
+        let v = self.draw_integer_from(&kind, |kind, rng, family| {
+            biased_integer_sample(kind, rng, *family.integer_parameters()?)
         })?;
 
         Ok(hegel_internal_unwrap!(
@@ -2290,11 +2322,7 @@ impl NativeTestCase {
     fn draw_integer_from(
         &mut self,
         kind: &IntegerChoice,
-        sample: impl Fn(
-            &IntegerChoice,
-            &mut EngineRng,
-            &GenerationParameters,
-        ) -> Result<BigInt, InternalError>,
+        sample: impl Fn(&IntegerChoice, &mut EngineRng, &FamilyCore) -> Result<BigInt, InternalError>,
     ) -> Result<BigInt, EngineError> {
         let (v, was_forced) = self.resolve_choice(
             || Ok(kind.simplest()),
@@ -2535,7 +2563,7 @@ impl NativeTestCase {
                 ChoiceValueRef::Float(f) if kind.validate(f) => Some(f),
                 _ => None,
             },
-            |rng, params| biased_float_sample(&kind, width, rng, params.float),
+            |rng, family| biased_float_sample(&kind, width, rng, *family.float_parameters()?),
         )?;
 
         self.nodes.push(ChoiceNode::float(kind, v, was_forced));
@@ -2692,14 +2720,15 @@ impl NativeTestCase {
     /// that doesn't fit puns exactly as before: to the draw's `simplest()`
     /// when the stale value was its original kind's simplest (known only
     /// when the prefix holds nodes), and to `unit()` otherwise. `random`
-    /// samples from the stream's RNG under the family's swarm parameters,
-    /// which reach it only here: a replayed draw never needs them.
+    /// samples from the stream's RNG, asking the family for the swarm
+    /// parameters of its kind if it needs them: only a fresh draw ever
+    /// does, so a replayed draw never has them drawn.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
         unit: impl FnOnce() -> Result<V, InternalError>,
         from_prefix: impl FnOnce(ChoiceValueRef<'_>) -> Option<V>,
-        random: impl FnOnce(&mut EngineRng, &GenerationParameters) -> Result<V, InternalError>,
+        random: impl FnOnce(&mut EngineRng, &FamilyCore) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
         self.pre_choice()?;
 
@@ -2727,11 +2756,11 @@ impl NativeTestCase {
             return Ok((value, false));
         }
 
-        let (rng, params) = hegel_internal_unwrap!(
-            self.rng()?,
+        let (rng, family) = hegel_internal_unwrap!(
+            self.rng(),
             "resolve_choice: no RNG available for random generation"
         );
-        Ok((random(rng, params)?, false))
+        Ok((random(rng, family)?, false))
     }
 }
 

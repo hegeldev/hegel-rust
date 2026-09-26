@@ -8,10 +8,12 @@ pub use choices::{
     StringChoice, flattened_len, flattened_values_len, sort_key,
 };
 pub use float_index::{float_to_index, index_to_float};
+#[cfg(test)]
+pub use state::GenerationParameters;
 pub(crate) use state::float_restrict_and_redraw;
 pub use state::{
-    FloatWidth, GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle,
-    NativeVariables, Prefix, RecursionState, Span, Spans,
+    FloatWidth, ManyState, NativeTestCase, NativeTestCaseHandle, NativeVariables, Prefix,
+    RecursionState, Span, Spans,
 };
 pub use state_machine::NativeStateMachine;
 
@@ -36,7 +38,7 @@ pub const BOUNDARY_PROBABILITY: f64 = 0.01;
 
 /// How a wide-range integer draw is split between four *categories* of value is
 /// not fixed: a mixture weight for each category is drawn afresh for every test
-/// case (as that case's [`GenerationParameters`]) from a Dirichlet distribution,
+/// case (as that case's [`state::IntegerGenerationParameters`]) from a Dirichlet distribution,
 /// a lumpy form of *swarm testing*. The categories are:
 ///
 ///   * **endpoints** — the range edges `{min, max, min + 1, max - 1}`;
