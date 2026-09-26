@@ -337,6 +337,18 @@ fn env_var_rejects_interior_nul() {
     assert_eq!(env_var("HEGEL\0SYS"), None);
 }
 
+#[cfg(unix)]
+#[test]
+fn env_var_looks_up_names_of_any_length() {
+    let longest_inline = format!("HEGEL_SYS_TEST_{}", "X".repeat(48));
+    assert_eq!(longest_inline.len(), 63);
+    assert_eq!(env_var(&longest_inline), None);
+    let heap = format!("HEGEL_SYS_TEST_{}", "X".repeat(49));
+    assert_eq!(env_var(&heap), None);
+    let long = format!("HEGEL_SYS_TEST_{}", "X".repeat(1000));
+    assert_eq!(env_var(&long), None);
+}
+
 #[cfg(windows)]
 #[test]
 fn env_var_distinguishes_empty_from_unset() {

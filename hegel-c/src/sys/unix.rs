@@ -217,6 +217,10 @@ unsafe extern "C" {
     fn getenv(name: *const core::ffi::c_char) -> *const core::ffi::c_char;
 }
 
+/// Room for the NUL-terminated copy of a variable's name on the stack; every
+/// name the engine itself looks up fits, so those lookups don't allocate.
+const ENV_NAME_INLINE: usize = 64;
+
 /// The value of the environment variable `name`, decoded lossily from
 /// whatever bytes the environment holds. `None` if unset or if `name`
 /// contains an interior NUL.
@@ -224,9 +228,18 @@ pub(super) fn env_var(name: &str) -> Option<String> {
     if name.as_bytes().contains(&0) {
         return None;
     }
-    let mut cname = Vec::with_capacity(name.len() + 1);
-    cname.extend_from_slice(name.as_bytes());
-    cname.push(0);
+    let mut inline = [0u8; ENV_NAME_INLINE];
+    let heap: Vec<u8>;
+    let cname: &[u8] = if name.len() < ENV_NAME_INLINE {
+        inline[..name.len()].copy_from_slice(name.as_bytes());
+        &inline[..=name.len()]
+    } else {
+        let mut cname = Vec::with_capacity(name.len() + 1);
+        cname.extend_from_slice(name.as_bytes());
+        cname.push(0);
+        heap = cname;
+        &heap
+    };
     // SAFETY: `cname` is NUL-terminated and outlives the call.
     let ptr = unsafe { getenv(cname.as_ptr().cast()) };
     if ptr.is_null() {
