@@ -58,7 +58,7 @@ def callgrind_total(path):
     raise SystemExit(f"no summary in {path}")
 
 
-def run(label, names, test_cases):
+def run(label, names, test_cases, binary=BINARY):
     CALLGRIND_OUT.mkdir(parents=True, exist_ok=True)
     results = {}
     for name in names:
@@ -69,7 +69,7 @@ def run(label, names, test_cases):
             "--quiet",
             f"--callgrind-out-file={out_file}",
             "--toggle-collect=hegel_bench::measured*",
-            str(BINARY),
+            str(binary),
             name,
             "--test-cases",
             str(test_cases),
@@ -145,6 +145,10 @@ def main():
     p.add_argument("label")
     p.add_argument("workloads", nargs="*")
     p.add_argument("--test-cases", type=int, default=100)
+    p.add_argument("--binary", type=Path, default=BINARY,
+                   help="measure this binary instead of the built one (from this directory: "
+                        "profile resolution walks the working directory's parents for hegel.toml, "
+                        "so a run's fixed cost depends on the cwd)")
     p = sub.add_parser("time")
     p.add_argument("label")
     p.add_argument("workloads", nargs="*")
@@ -166,7 +170,7 @@ def main():
     elif args.command == "run":
         if shutil.which("valgrind") is None:
             raise SystemExit("valgrind not found: run this on the Linux VM")
-        run(args.label, args.workloads or workloads(), args.test_cases)
+        run(args.label, args.workloads or workloads(), args.test_cases, args.binary)
     elif args.command == "time":
         time(args.label, args.workloads or workloads(), args.test_cases, args.n)
     elif args.command == "compare":

@@ -11,18 +11,23 @@ fn config_of(text: &str) -> ConfigFile {
     crate::config::parse(text).unwrap()
 }
 
-fn no_candidates() -> Candidates {
+fn no_env(_: &str) -> Option<String> {
+    None
+}
+
+fn no_candidates() -> Candidates<impl Fn(&str) -> Option<String> + Copy> {
     Candidates {
         overridden: None,
         env: None,
         toml: None,
-        environment: FALLBACK,
+        environment: OnceCell::from(FALLBACK),
+        detect: no_env,
     }
 }
 
-fn detected(name: &'static str) -> Candidates {
+fn detected(name: &'static str) -> Candidates<impl Fn(&str) -> Option<String> + Copy> {
     Candidates {
-        environment: name,
+        environment: OnceCell::from(name),
         ..no_candidates()
     }
 }
@@ -603,7 +608,7 @@ fn the_strongest_named_default_displaces_the_weaker_ones() {
         overridden: Some("a".to_owned()),
         env: Some("b".to_owned()),
         toml: Some("c".to_owned()),
-        environment: "ci",
+        ..detected("ci")
     };
     assert_eq!(
         candidates.resolve(&[]).unwrap(),
@@ -686,6 +691,33 @@ fn settings_for_from_resolves_the_default_profile() {
     assert!(s.print_blob);
     let s = settings_for_env(Some("base"), &no_config(), env).unwrap();
     assert!(!s.derandomize, "base ignores CI detection");
+}
+
+#[test]
+fn resolutions_that_never_reach_the_environment_never_detect_it() {
+    fn env(key: &str) -> Option<String> {
+        assert!(
+            key.starts_with("HEGEL_") || key == "ANTITHESIS_OUTPUT_DIR",
+            "{key} read for a resolution CI detection cannot affect"
+        );
+        None
+    }
+    assert!(settings_for_env(Some("base"), &no_config(), env).is_ok());
+    assert!(settings_for_env(Some("development"), &no_config(), env).is_ok());
+    let config = config_of("[profiles.nightly]\nextends = \"base\"\ntest_cases = 7\n");
+    assert!(settings_for_env(Some("nightly"), &config, env).is_ok());
+    let env = env_of(&[("HEGEL_DEFAULT_PROFILE", "base")]);
+    let candidates = Candidates::gather(&no_config(), None, env);
+    assert_eq!(
+        candidates.resolve(&[]).unwrap(),
+        ("base", Some("HEGEL_DEFAULT_PROFILE"))
+    );
+    assert!(candidates.environment.get().is_none());
+    assert_eq!(
+        candidates.resolve(&["base"]).unwrap(),
+        ("development", None)
+    );
+    assert_eq!(candidates.environment.get(), Some(&"development"));
 }
 
 #[test]

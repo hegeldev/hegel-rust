@@ -48,6 +48,7 @@
 use alloc::borrow::ToOwned;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::OnceCell;
 
 use crate::config::{self, ConfigFile};
 use crate::settings::{Backend, Database, HealthCheck, Phase, Settings, Verbosity};
@@ -367,32 +368,28 @@ fn known_names(config: &ConfigFile, registry: &[(String, ProfileDelta)]) -> Vec<
 }
 
 /// The candidates the `default` alias resolves through, strongest first.
-pub(crate) struct Candidates {
+pub(crate) struct Candidates<E> {
     overridden: Option<String>,
     env: Option<String>,
     toml: Option<String>,
     /// The environment's profile: `workload` or `ci` by detection, else
-    /// `development`.
-    environment: &'static str,
+    /// `development`. Detected the first time a resolution needs it: the
+    /// detection reads a dozen variables, and a resolution that never
+    /// reaches the alias (`base`, an explicit profile) or that a named
+    /// default settles never does.
+    environment: OnceCell<&'static str>,
+    /// The environment the detection reads.
+    detect: E,
 }
 
-impl Candidates {
-    fn gather(
-        config: &ConfigFile,
-        overridden: Option<String>,
-        env: impl Fn(&str) -> Option<String>,
-    ) -> Self {
+impl<E: Fn(&str) -> Option<String> + Copy> Candidates<E> {
+    fn gather(config: &ConfigFile, overridden: Option<String>, env: E) -> Self {
         Candidates {
             overridden,
             env: env(DEFAULT_PROFILE_VAR).filter(|v| !v.is_empty()),
             toml: config.default.clone(),
-            environment: if crate::antithesis::antithesis_env_var_set_from(&env) {
-                "workload"
-            } else if crate::settings::is_in_ci_from(&env) {
-                "ci"
-            } else {
-                FALLBACK
-            },
+            environment: OnceCell::new(),
+            detect: env,
         }
     }
 
@@ -404,8 +401,22 @@ impl Candidates {
             overridden: None,
             env: None,
             toml: self.toml.clone(),
-            environment: self.environment,
+            environment: self.environment.clone(),
+            detect: self.detect,
         }
+    }
+
+    /// The environment's profile, detected on first use.
+    fn environment(&self) -> &'static str {
+        self.environment.get_or_init(|| {
+            if crate::antithesis::antithesis_env_var_set_from(self.detect) {
+                "workload"
+            } else if crate::settings::is_in_ci_from(self.detect) {
+                "ci"
+            } else {
+                FALLBACK
+            }
+        })
     }
 
     /// The default-profile setting in effect: the strongest of the process
@@ -439,8 +450,9 @@ impl Candidates {
                 return Ok((name, Some(source)));
             }
         }
-        if !chain.contains(&self.environment) {
-            return Ok((self.environment, None));
+        let environment = self.environment();
+        if !chain.contains(&environment) {
+            return Ok((environment, None));
         }
         Ok((BASE, None))
     }
@@ -466,7 +478,7 @@ fn delta_chain<'a>(
     arrival: Arrival<'a>,
     config: &'a ConfigFile,
     registry: &'a [(String, ProfileDelta)],
-    candidates: &'a Candidates,
+    candidates: &'a Candidates<impl Fn(&str) -> Option<String> + Copy>,
 ) -> Result<Vec<&'a ProfileDelta>, ProfileError> {
     let mut deltas = Vec::new();
     let mut chain: Vec<&str> = Vec::new();
@@ -541,7 +553,7 @@ pub(crate) fn resolve(
     config: &ConfigFile,
     registry: &[(String, ProfileDelta)],
     base: &Settings,
-    candidates: &Candidates,
+    candidates: &Candidates<impl Fn(&str) -> Option<String> + Copy>,
 ) -> Result<Settings, ProfileError> {
     let deltas = delta_chain(name, Arrival::Requested, config, registry, candidates)?;
     let mut settings = base.clone();
@@ -560,7 +572,7 @@ pub(crate) fn resolve(
 fn validate(
     config: &ConfigFile,
     registry: &[(String, ProfileDelta)],
-    candidates: &Candidates,
+    candidates: &Candidates<impl Fn(&str) -> Option<String> + Copy>,
 ) -> Result<(), ProfileError> {
     let structural = candidates.structural();
     for (name, _) in &config.profiles {
