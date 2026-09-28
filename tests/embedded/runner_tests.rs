@@ -371,8 +371,10 @@ mod reproduce {
             .settings(Settings::new().database(None).verbosity(Verbosity::Quiet))
             .reproduce_failure(blob),
         );
+        assert!(msg.contains("did not reproduce"), "got: {msg}");
+        assert!(msg.contains("may have been fixed"), "got: {msg}");
         assert!(
-            msg.contains("no longer reproduces") || msg.to_lowercase().contains("stale"),
+            msg.contains("not have recurred within the replay budget"),
             "got: {msg}"
         );
     }

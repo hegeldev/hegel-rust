@@ -155,6 +155,34 @@ fn mutate_observing_replay_is_a_no_op_when_stalled() {
 }
 
 #[test]
+fn the_observing_replay_stall_guard_yields_to_the_confirmation_sweep() {
+    use crate::native::shrinker::SweepMode;
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(|run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => (false, nodes.to_vec(), Spans::new()),
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![ranged_int_node(0, 100, 5)],
+        Spans::new(),
+    );
+    shrinker.improvements = 1;
+    shrinker.max_stall = 0;
+    let snapshot = shrinker.current_nodes.clone();
+    let new_val = ChoiceValue::Integer(BigInt::from(3));
+    drive_no_yield(shrinker.replay_observing_divergence(&snapshot, &new_val, 0)).unwrap();
+    assert_eq!(
+        shrinker.calls, 0,
+        "a latched stall guard drops the fast-sweep observing replay"
+    );
+    shrinker.sweep = SweepMode::Confirm;
+    drive_no_yield(shrinker.replay_observing_divergence(&snapshot, &new_val, 0)).unwrap();
+    assert_eq!(
+        shrinker.calls, 1,
+        "the confirmation sweep must execute the observing replay"
+    );
+}
+
+#[test]
 fn observing_replay_rejects_a_value_that_does_not_fit_the_node() {
     let mut shrinker = Shrinker::with_probe(
         Box::new(|run: ShrinkRun<'_>| match run {

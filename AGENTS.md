@@ -45,7 +45,7 @@ MSRV is 1.86 (enforced in CI and Cargo.toml). If you bump it, also bump `ci.yml`
 
 - `src/lib.rs` — The exported `hegel_*` C functions: settings, run lifecycle, test-case handles (including clones), draws, spans, collections, pools, state machines, targeting, results/failures. The checked-in header `hegel-c/include/hegel.h` is generated from this file by cbindgen (`just c-header`)
 - `src/backend.rs` — The `DataSource` trait the engine implements and the C ABI drives
-- `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, data tree / novel-prefix generation, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding
+- `src/native/` — The engine proper: `core/` (choice sequence, test-case state, shrink ordering), `draws/` (the typed draw implementations: float specs, string generators, regex, internet, date/time/uuid/ip), `shrinker/`, `test_runner.rs` (owns a run: database replay, generation, targeting, shrinking, final replay), plus the failure database, the execution cache, RNG, regex generation (`re/`), interval sets + Unicode tables, and blob encoding. Nondeterministic-test handling (`counterexample.rs`, `graph.rs`, `graph_shrink.rs`, `nd/`, the graph walk in `core/replay.rs`) is described in `hegel-c/docs/nondeterminism.md`
 - `src/embed.rs` — Low-level embedding entry point for driving the engine natively from Rust
 - `src/antithesis.rs` — The Antithesis integration: detection from `ANTITHESIS_OUTPUT_DIR` (selects the `workload` profile) and reporting each run's verdict to `sdk.jsonl` for tests whose settings carry a location (`hegel_settings_set_test_location`, which the frontend's macros supply)
 - `benches/` — Microbenchmarks of engine internals, exposed through the internal `__bench` feature
@@ -85,6 +85,10 @@ Engine-managed collections use the `new_collection`/`collection_more`/`collectio
 ### Adding a New Generator
 
 Follow the skills: **new-generator** for the generator itself (struct, builder methods, `Generator` impl, wiring, rustdoc, required tests), **new-default-generator** to wire up `gs::default::<T>()` / `#[derive(DefaultGenerator)]` support, and **add-library-support** for a whole third-party crate integration under `src/extras/`.
+
+### Adding a Setting
+
+A setting is not done until it is reachable every way the others are: a `Settings` builder method in both crates, a `hegel.toml` profile key (`hegel-c/src/config.rs`), `hegel_settings_set_*`/`hegel_settings_get_*` over the C ABI (with `src/ffi.rs` round-tripping it), and a `HEGEL_<SETTING>` environment variable applied in `Settings::with_env_overrides_from` (`hegel-c/src/settings.rs`) with the same vocabulary as the profile key, an empty value ignored and a malformed one rejected with a message naming the variable. Document all of them in `src/docs/settings.md` (the settings table and both environment-variable tables) and the `hegel_settings_new` doc in `hegel-c/src/lib.rs`. Never add a setting without its environment variable: libtest owns the command line, so the variable is the only way to change a setting for one run of a `#[hegel::test]` without editing it.
 
 ### Derive Macro
 

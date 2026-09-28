@@ -81,6 +81,89 @@ fn targeting_state_tracks_multiple_labels_independently() {
 }
 
 #[test]
+fn seeds_are_sorted_by_label_and_carry_the_recorded_best() {
+    let mut state = TargetingState::new();
+    let choices_a = vec![ChoiceValue::Integer(BigInt::from(1))];
+    let choices_b = vec![ChoiceValue::Integer(BigInt::from(2))];
+    state.record(&choices_b, &HashMap::from_iter([("b".to_string(), 2.0)]));
+    state.record(&choices_a, &HashMap::from_iter([("a".to_string(), 1.0)]));
+    assert_eq!(
+        state.seeds(),
+        vec![
+            ("a".to_string(), 1.0, choices_a),
+            ("b".to_string(), 2.0, choices_b),
+        ]
+    );
+}
+
+#[test]
+fn nd_target_timeline_derives_the_node_values() {
+    let target = NdTarget {
+        nodes: vec![integer_node(3, 0, 10), float_node(1.5)],
+        reference: 0.0,
+        dead: false,
+    };
+    assert_eq!(
+        target.timeline(),
+        vec![
+            ChoiceValue::Integer(BigInt::from(3)),
+            ChoiceValue::Float(1.5)
+        ]
+    );
+}
+
+#[test]
+fn set_nd_target_stores_and_nd_target_reads_back() {
+    let mut state = TargetingState::new();
+    assert!(state.nd_target("s").is_none());
+    state.set_nd_target(
+        "s".to_string(),
+        NdTarget {
+            nodes: vec![integer_node(1, 0, 10)],
+            reference: 4.0,
+            dead: false,
+        },
+    );
+    assert_eq!(state.nd_target("s").unwrap().reference, 4.0);
+}
+
+#[test]
+fn adopt_nd_moves_the_nodes_but_never_lowers_the_reference() {
+    let mut state = TargetingState::new();
+    state.set_nd_target(
+        "s".to_string(),
+        NdTarget {
+            nodes: vec![integer_node(1, 0, 10)],
+            reference: 4.0,
+            dead: false,
+        },
+    );
+    state.adopt_nd("s", vec![integer_node(2, 0, 10)], 3.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 4.0);
+    assert_eq!(
+        target.timeline(),
+        vec![ChoiceValue::Integer(BigInt::from(2))]
+    );
+    state.adopt_nd("s", vec![integer_node(5, 0, 10)], 6.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 6.0);
+    assert_eq!(
+        target.timeline(),
+        vec![ChoiceValue::Integer(BigInt::from(5))]
+    );
+}
+
+#[test]
+fn adopt_nd_on_an_unknown_label_inserts_it() {
+    let mut state = TargetingState::new();
+    state.adopt_nd("s", vec![integer_node(2, 0, 10)], 3.0);
+    let target = state.nd_target("s").unwrap();
+    assert_eq!(target.reference, 3.0);
+    assert!(!target.dead);
+}
+
+#[test]
 fn schedule_fires_at_first_threshold() {
     let mut s = TargetingSchedule::new(100);
     assert!(!s.should_fire(49));
@@ -249,6 +332,7 @@ fn interesting() -> TestCaseResult {
     TestCaseResult::Interesting(Failure {
         origin: "Panic at <targeting-test>".to_string(),
         reproduce_blob: None,
+        caveat: None,
     })
 }
 
@@ -393,45 +477,75 @@ fn run_trial_records_interesting_result_into_ctx() {
     });
 }
 
-/// Drives `run_trial`'s mismatch propagation: the body's first draw changes
-/// kind between executions, so the probe after the initial replay contradicts
-/// the data tree and the climb must abort with `RunError::NonDeterministic`
-/// rather than continue against a poisoned tree.
+/// Drives `run_trial`'s mismatch propagation under `Error` strictness: the
+/// climber steps `n = 2` to `n = 3` (Valid, best score), then the next
+/// `optimise_targets` round replays the new best and the body flips that
+/// same sequence to INTERESTING — a verdict change the execution cache
+/// reports and the trial must surface as `RunError::Flaky`.
 #[test]
-fn run_trial_surfaces_a_tree_mismatch_as_nondeterministic() {
-    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+fn error_strictness_aborts_on_a_verdict_flip_during_hill_climbing() {
+    use crate::settings::NondeterminismStrictness;
+    let settings = crate::Settings::new()
+        .database(None)
+        .seed(Some(0xc0ffee))
+        .nondeterminism_strictness(NondeterminismStrictness::Error);
     let exchange = crate::exchange::CaseExchange::new();
-    let mut calls = 0u32;
+    let hits = core::cell::Cell::new(0u32);
     let fut = async {
         let mut engine = Engine::new(&settings, None, &exchange).unwrap();
         engine.targeting.record(
             &[ChoiceValue::Integer(BigInt::from(2))],
-            &HashMap::from_iter([("".to_string(), 2.0)]),
+            &HashMap::from_iter([("".to_string(), -1.0)]),
         );
         let mut optimiser = Optimiser {
             engine: &mut engine,
             max_valid: 10_000,
             max_calls: 100_000,
         };
-        match optimiser.optimise_targets().await {
-            Err(RunError::NonDeterministic(msg)) => {
-                assert!(msg.contains("non-deterministic"));
-            }
-            other => panic!("expected NonDeterministic, got {other:?}"),
-        }
+        let err = match optimiser.optimise_targets().await {
+            Err(err) => err,
+            Ok(()) => panic!("expected the verdict flip to abort the climb"),
+        };
+        assert!(matches!(err, RunError::Flaky(_)));
     };
     crate::exchange::drive(&exchange, fut, |ds| {
-        calls += 1;
         let result = (|| -> Result<TestCaseResult, ()> {
-            if calls == 1 {
-                let n = draw_int(&*ds, 0, 20)?;
-                ds.target_observation(n as f64, "").unwrap();
-            } else {
-                draw_bool(&*ds)?;
+            let n = draw_int(&*ds, 0, 20)?;
+            if n == 3 {
+                hits.set(hits.get() + 1);
+                if hits.get() > 1 {
+                    return Ok(interesting());
+                }
             }
+            ds.target_observation(-((n - 3).saturating_abs() as f64), "")
+                .unwrap();
             Ok(TestCaseResult::Valid)
         })()
         .unwrap_or(TestCaseResult::Overrun);
         ds.mark_complete(&result);
+    });
+}
+
+#[test]
+fn the_optimiser_stops_when_the_run_flips_nondeterministic() {
+    let settings = crate::Settings::new().database(None).seed(Some(0xc0ffee));
+    let exchange = crate::exchange::CaseExchange::new();
+    let fut = async {
+        let mut engine = Engine::new(&settings, None, &exchange).unwrap();
+        engine.targeting.record(
+            &[ChoiceValue::Integer(BigInt::from(2))],
+            &HashMap::from_iter([("".to_string(), 2.0)]),
+        );
+        engine.nd_active = true;
+        let mut optimiser = Optimiser {
+            engine: &mut engine,
+            max_valid: 10_000,
+            max_calls: 100_000,
+        };
+        optimiser.optimise_targets().await.unwrap();
+        assert_eq!(engine.calls, 0);
+    };
+    crate::exchange::drive(&exchange, fut, |_ds| {
+        panic!("no trial may execute once the run is nondeterministic");
     });
 }

@@ -314,9 +314,10 @@ pub trait DataSource: Send + Sync {
     /// observation is non-finite.
     fn event_observation(&self, label: &str, value: Option<f64>) -> Result<(), DataSourceError>;
 
-    /// Whether this test case belongs to a run already known to be
-    /// nondeterministic.
-    fn is_nondeterministic(&self) -> bool;
+    /// Whether the engine stamped this test case for capture: the client
+    /// should buffer its output and, if it fails, its rendered
+    /// diagnostic — the material for the failure report.
+    fn should_capture(&self) -> bool;
 
     /// Signal that the test case is complete and report its outcome.
     ///
@@ -330,9 +331,11 @@ pub trait DataSource: Send + Sync {
 
 /// A single interesting test case surfaced by a run.
 ///
-/// A failure carries the origin the engine grouped on and the reproduce blob
-/// the client replays; the rendered diagnostic (panic location, message,
-/// backtrace) is produced when the client replays that blob.
+/// A failure carries the origin the engine grouped on, the reproduce blob
+/// for replaying the failure in a later run, and — under nondeterministic
+/// handling — the caveat stating its confirmation standing. The rendered
+/// diagnostic (panic location, message, backtrace) comes from the stamped
+/// report-time replay the client captured, not from replaying the blob.
 #[derive(Debug, Clone)]
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
@@ -343,12 +346,21 @@ pub struct Failure {
     /// counterexample.
     pub origin: String,
     /// A base64 "failure blob" encoding the minimal counterexample's choice
-    /// sequence. `Some` for an interesting counterexample surfaced by a full
-    /// run (the shrunk choices are available); `None` for a nondeterministic
-    /// run, which has no replayable choice sequence to encode. The client
-    /// replays it via `hegel_test_case_from_blob`; paste into
+    /// sequence, or — under nondeterministic handling — the failure's replay
+    /// state (its timeline pool). `Some` on the failures an exploration run
+    /// reports; `None` for a caveat-only unconfirmed nondeterministic
+    /// failure and on the failures a blob replay returns (the caller already
+    /// holds the blob). The client replays it via `hegel_run_start_blob`;
+    /// paste into
     /// `#[hegel::reproduce_failure("…")]` to replay it by hand.
     pub reproduce_blob: Option<String>,
+    /// The failure's confirmation standing when the run handled
+    /// nondeterminism — quoting the run's own replay evidence rather than
+    /// a bare verdict — for the caller to print alongside the report. `None`
+    /// for a deterministic failure, and always `None` on the per-case
+    /// results the client reports in; only a run's aggregate failures
+    /// carry it.
+    pub caveat: Option<String>,
 }
 
 /// Result of running a single test case.
@@ -420,20 +432,16 @@ impl core::error::Error for RunError {}
 /// Result of a full test run: the run's outcome once generation and
 /// shrinking are done.
 ///
-/// The engine only *explores*, so each [`Failure`] carries the origin the
-/// engine grouped on and the reproduce blob the client replays. The client
-/// (`run_lifecycle::drive` for the panic API) replays each blob itself and
-/// owns the resulting report. The run passed iff `failures` is empty.
+/// The engine owns the whole exploration — including the final replay of
+/// each failure it reports — so each [`Failure`] arrives ready to report:
+/// the origin the engine grouped on, the reproduce blob, and the caveat
+/// when the run handled nondeterminism. The run passed iff `failures` is
+/// empty.
 #[derive(Debug)]
 pub struct TestRunResult {
     /// One entry per distinct interesting example surfaced by the run, one
     /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
-    /// Whether the run was nondeterministic (a test case created a state
-    /// machine with `max_concurrency > 1`). Failures of such a run carry no
-    /// reproduce blob — there is no final replay — so the caller should
-    /// report them from whatever it captured at discovery time.
-    pub nondeterministic: bool,
 }
 
 #[cfg(test)]

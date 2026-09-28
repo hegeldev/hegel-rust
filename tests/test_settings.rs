@@ -268,6 +268,34 @@ fn test_hegel_print_blob_env_turns_the_reproducer_off() {
     assert_no_reproducer_line(&without);
 }
 
+/// Fixture for `test_hegel_nondeterminism_strictness_env_makes_flakiness_an_error`,
+/// run via self-exec: a nondeterministic property whose settings leave
+/// `nondeterminism_strictness` to the profile, where it is quiet, so
+/// `HEGEL_NONDETERMINISM_STRICTNESS=error` is the only thing that can
+/// make it abort.
+#[test]
+#[ignore = "fixture: run via exec::self_test"]
+fn env_nondeterminism_strictness_fixture() {
+    let mut counter = 0;
+    hegel::Hegel::new(|tc: hegel::TestCase| {
+        tc.draw(gs::integers::<i32>().min_value(counter));
+        counter += 1;
+    })
+    .settings(hegel::Settings::new().database(None))
+    .run();
+}
+
+#[test]
+fn test_hegel_nondeterminism_strictness_env_makes_flakiness_an_error() {
+    self_test("env_nondeterminism_strictness_fixture")
+        .env_remove("HEGEL_NONDETERMINISM_STRICTNESS")
+        .run();
+    self_test("env_nondeterminism_strictness_fixture")
+        .env("HEGEL_NONDETERMINISM_STRICTNESS", "error")
+        .expect_failure("Your data generation is non-deterministic")
+        .run();
+}
+
 #[test]
 fn test_hegel_print_blob_compiled_in_beats_the_env() {
     let with = self_test("env_print_blob_compiled_in_fixture")

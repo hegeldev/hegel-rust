@@ -389,9 +389,8 @@ pub fn pool<T>(tc: &TestCase) -> Pool<T> {
 /// consumed value. The accepted trade-off is that a shared pool couples the
 /// workers' streams: which value a draw resolves to (and whether it rejects
 /// as empty) depends on what other workers have added or consumed in the
-/// meantime. In a nondeterministic run — which is what any run with
-/// concurrency > 1 becomes — nothing downstream depends on that
-/// independence anyway.
+/// meantime. When that coupling makes replays diverge, the engine observes
+/// it and switches the run into nondeterministic handling.
 pub struct ConcurrentPool<T> {
     handle: PoolHandle,
     values: Mutex<HashMap<i64, T>>,
@@ -784,11 +783,16 @@ impl<M: ConcurrentStateMachine + Sync> Machine<M> {
     ///
     /// # Nondeterminism
     ///
-    /// Concurrency bugs are nondeterministic — thread scheduling is outside
-    /// Hegel's control — so running with a maximum concurrency above 1 makes
-    /// the whole run nondeterministic. Failures are reported from the
-    /// discovering execution, with no replay, shrinking, database persistence,
-    /// or reproduce blob, with at most one failure per run.
+    /// Concurrency bugs are usually nondeterministic — thread scheduling is
+    /// outside Hegel's control — but concurrency alone does not mark the run
+    /// nondeterministic: a properly serialized machine can fail
+    /// deterministically, and the engine watches observed behavior (verdict
+    /// flips, replay misses) exactly as for any other test. Once a divergence
+    /// is observed, the run switches into nondeterministic handling: failures
+    /// are confirmed by repeated replay before they are shrunk or persisted;
+    /// each report carries a caveat quoting that replay evidence, plus a
+    /// reproduce blob when confirmed. An unconfirmed failure still fails the
+    /// run, caveated.
     ///
     /// # Abandoned rules and lock poisoning
     ///

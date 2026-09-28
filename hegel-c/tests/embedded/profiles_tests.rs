@@ -488,6 +488,7 @@ fn snapshots_reproduce_their_settings_over_any_base() {
         .show_statistics(true)
         .print_blob(true)
         .backend(Backend::Urandom)
+        .nondeterminism_strictness(NondeterminismStrictness::Error)
         .unbounded_choices(true);
     let mut restored = Settings::base(false)
         .test_cases(1)
@@ -505,6 +506,10 @@ fn snapshots_reproduce_their_settings_over_any_base() {
     assert!(restored.show_statistics);
     assert!(restored.print_blob);
     assert_eq!(restored.backend, Backend::Urandom);
+    assert_eq!(
+        restored.nondeterminism_strictness,
+        NondeterminismStrictness::Error
+    );
     assert!(restored.unbounded_choices);
 }
 

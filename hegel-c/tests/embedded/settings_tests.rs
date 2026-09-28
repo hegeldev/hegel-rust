@@ -218,6 +218,39 @@ fn env_override_print_blob_replaces_the_setting() {
 }
 
 #[test]
+fn env_override_nondeterminism_strictness_accepts_quiet_warn_and_error() {
+    for (value, strictness) in [
+        ("quiet", NondeterminismStrictness::Quiet),
+        ("warn", NondeterminismStrictness::Warn),
+        ("error", NondeterminismStrictness::Error),
+    ] {
+        assert_eq!(
+            with_env(
+                Settings::base(false).nondeterminism_strictness(NondeterminismStrictness::Warn),
+                "HEGEL_NONDETERMINISM_STRICTNESS",
+                value
+            )
+            .nondeterminism_strictness,
+            strictness,
+            "{value:?}"
+        );
+    }
+    assert_eq!(
+        with_env(
+            Settings::base(false).nondeterminism_strictness(NondeterminismStrictness::Error),
+            "HEGEL_NONDETERMINISM_STRICTNESS",
+            ""
+        )
+        .nondeterminism_strictness,
+        NondeterminismStrictness::Error
+    );
+    assert_eq!(
+        env_error("HEGEL_NONDETERMINISM_STRICTNESS", "strict"),
+        "HEGEL_NONDETERMINISM_STRICTNESS must be quiet, warn or error, got \"strict\""
+    );
+}
+
+#[test]
 fn env_overrides_report_the_first_malformed_variable() {
     let env = |key: &str| match key {
         "HEGEL_TEST_CASES" => Some("17".to_string()),
@@ -294,6 +327,15 @@ fn settings_default_to_stderr_output_and_carry_a_configured_one() {
     assert_eq!(format!("{:?}", Settings::new().output), "Output(stderr)");
     let s = Settings::new().output(Output::callback(|_| {}));
     assert_eq!(format!("{:?}", s.output), "Output(callback)");
+}
+
+#[test]
+fn nondeterminism_strictness_defaults_to_quiet_and_builds() {
+    let s = Settings::new();
+    assert_eq!(s.nondeterminism_strictness, NondeterminismStrictness::Quiet);
+    assert!(!s.nd_force);
+    let s = Settings::new().nondeterminism_strictness(NondeterminismStrictness::Error);
+    assert_eq!(s.nondeterminism_strictness, NondeterminismStrictness::Error);
 }
 
 #[test]

@@ -567,7 +567,7 @@ pub use hegel_macros::PrettyPrintable;
 pub use hegel_macros::composite;
 pub use hegel_macros::explicit_test_case;
 
-/// Replay a single failing example from a base64 *failure blob*.
+/// Replay a failing example from a base64 *failure blob*.
 ///
 /// When a test fails on the native backend and the
 /// [`print_blob`](Settings::print_blob) setting is enabled, Hegel prints a
@@ -579,7 +579,11 @@ pub use hegel_macros::explicit_test_case;
 /// ```
 ///
 /// Paste that attribute **below** `#[hegel::test]` and the next run will
-/// decode the blob's choice sequence and run *only* that example.
+/// replay the blob instead of generating fresh test cases. A deterministic
+/// blob decodes to one choice sequence, replayed up to four times — each
+/// attempt may draw fresh values past the recorded choices — stopping at
+/// the first failure. A nondeterministic blob decodes to its stored failing
+/// timelines, replayed until one fails, under a replay budget.
 ///
 /// ```no_run
 /// #[hegel::test]
@@ -612,11 +616,12 @@ pub use hegel_macros::explicit_test_case;
 /// fn my_test(tc: hegel::TestCase) { /* ... */ }
 /// ```
 ///
-/// The blob encodes Hegel's internal choice sequence, so it is only
-/// guaranteed to reproduce a failure within a specific version of Hegel.
-/// A blob that can't be decoded (corrupt or from an incompatible version),
-/// or that no longer reproduces a failure, panics with an explanatory
-/// message.
+/// The blob encodes Hegel's internal replay state — a choice sequence or,
+/// for a nondeterministic failure, its stored failing timelines — so it is
+/// only guaranteed to reproduce a failure within a specific version of
+/// Hegel. A blob that can't be decoded (corrupt or from an incompatible
+/// version), or that does not reproduce a failure, panics with an
+/// explanatory message.
 pub use hegel_macros::reproduce_failure;
 
 #[doc(hidden)]
@@ -849,4 +854,6 @@ pub use cli::CliOutcome;
 pub use cli::apply_cli_args as __apply_cli_args;
 #[doc(hidden)]
 pub use runner::hegel;
-pub use runner::{Backend, HealthCheck, Hegel, Phase, ProfileError, Settings, Verbosity};
+pub use runner::{
+    Backend, HealthCheck, Hegel, NondeterminismStrictness, Phase, ProfileError, Settings, Verbosity,
+};

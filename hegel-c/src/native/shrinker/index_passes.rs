@@ -87,6 +87,9 @@ impl<'a> Shrinker<'a> {
                 };
 
                 for new_val in &decrement_targets {
+                    if i >= self.current_nodes.len() {
+                        break;
+                    }
                     if gap == 1 {
                         let mut attempt = self.current_nodes.clone();
                         if let Some(lowered) = attempt[i].with_value(new_val) {
@@ -154,10 +157,10 @@ impl<'a> Shrinker<'a> {
     /// improvement cap on unit moves before those passes run again. A
     /// node the accepted run left without an index descends nowhere.
     async fn descend_index(&mut self, i: usize) -> ShrinkResult<()> {
-        let base = self.current_nodes[i]
-            .data
-            .to_index()?
-            .unwrap_or_else(BigUint::zero);
+        let Some(node) = self.current_nodes.get(i) else {
+            return Ok(());
+        };
+        let base = node.data.to_index()?.unwrap_or_else(BigUint::zero);
         let mut search = FindInteger::new();
         while let Some(n) = search.probe() {
             let step = BigUint::from(n as u64);

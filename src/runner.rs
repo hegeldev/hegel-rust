@@ -108,6 +108,23 @@ pub enum Verbosity {
     Debug,
 }
 
+/// How a run reacts when it detects nondeterministic test behavior — a test
+/// whose structure or outcome changes when the same choices are replayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NondeterminismStrictness {
+    /// Switch to nondeterministic handling silently: failures are confirmed
+    /// by repeated replay before they are shrunk or persisted, and every
+    /// report carries a caveat quoting the run's replay evidence. An
+    /// unconfirmed failure still fails the run. The default.
+    Quiet,
+    /// Switch as under quiet, printing a one-line notice once per run.
+    Warn,
+    /// Abort the run with a flaky-test error, for suites that use determinism
+    /// as a lint.
+    Error,
+}
+
 /// Configuration for a Hegel test run.
 ///
 /// Use builder methods to customize, then pass to [`Hegel::settings`] or
@@ -134,6 +151,7 @@ pub enum Verbosity {
 pub struct Settings {
     pub(crate) test_cases: u64,
     pub(crate) verbosity: Verbosity,
+    pub(crate) nondeterminism_strictness: NondeterminismStrictness,
     pub(crate) seed: Option<u64>,
     pub(crate) derandomize: bool,
     pub(crate) database: Database,
@@ -254,6 +272,18 @@ impl Settings {
         self
     }
 
+    /// Set how the run reacts when it detects nondeterministic test behavior
+    /// (default: [`NondeterminismStrictness::Quiet`]).
+    ///
+    /// The `HEGEL_NONDETERMINISM_STRICTNESS` environment variable, when set
+    /// and non-empty, changes the value a `Settings` starts from, whatever
+    /// the profile says: `quiet`, `warn` or `error`. A value set here takes
+    /// precedence over it.
+    pub fn nondeterminism_strictness(mut self, strictness: NondeterminismStrictness) -> Self {
+        self.nondeterminism_strictness = strictness;
+        self
+    }
+
     /// Set a fixed seed for reproducibility, or `None` for random.
     ///
     /// A fixed seed takes precedence over [`derandomize`](Self::derandomize).
@@ -317,8 +347,11 @@ impl Settings {
     /// counterexample when a test fails. Defaults to `true`: on CI, with the
     /// database disabled, the blob is the way to reproduce a failure locally.
     ///
-    /// The reproduce blob is always *attached* to the failure. This setting only controls whether it is printed to
-    /// the failure output. Has effect only on the native backend.
+    /// The reproduce blob is always *attached* to a failure that has one, and
+    /// this setting only controls whether it is printed to the failure
+    /// output. A failure without a blob — an unconfirmed nondeterministic
+    /// failure reported caveat-only, or one reproduced from a blob replay —
+    /// prints no reproducer line. Has effect only on the native backend.
     ///
     /// The `HEGEL_PRINT_BLOB` environment variable, when set and non-empty,
     /// changes the value a `Settings` starts from: `true`, `1` or `yes`
@@ -545,14 +578,18 @@ where
         self
     }
 
-    /// Replay a single failing example from a base64 failure blob instead of
+    /// Replay a failing example from a base64 failure blob instead of
     /// generating fresh test cases.
     ///
-    /// A failure blob encodes the choice sequence of a counterexample.
-    /// A native failure prints one while [`print_blob`](Settings::print_blob)
-    /// is true. When set, [`run`](Self::run) decodes it and runs exactly
-    /// that one example — bypassing generation and shrinking — so you can
-    /// reproduce a CI failure locally and deterministically.
+    /// A failure blob encodes a counterexample: the choice sequence of a
+    /// deterministic failure, or the counterexample graph of a
+    /// nondeterministic one. A native failure prints one while
+    /// [`print_blob`](Settings::print_blob) is true. When set,
+    /// [`run`](Self::run) replays the blob — a deterministic blob up to four
+    /// times, each attempt free to draw fresh values past the recorded
+    /// choices, stopping at the first failure; a nondeterministic blob's
+    /// graph until a replay fails, under a replay budget — bypassing
+    /// generation and shrinking, so you can reproduce a CI failure locally.
     ///
     /// First-wins: if a blob is already set, further calls are ignored.
     /// Stacked `#[hegel::reproduce_failure]` attributes lower to repeated

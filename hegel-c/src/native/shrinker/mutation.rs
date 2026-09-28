@@ -13,7 +13,7 @@ use crate::native::bignum::BigUint;
 use crate::native::core::{ChoiceKind, ChoiceValue, sort_key};
 use alloc::vec::Vec;
 
-use super::{ShrinkResult, ShrinkRun, Shrinker};
+use super::{ShrinkResult, ShrinkRun, Shrinker, SweepMode};
 
 /// Number of random continuations to try per mutation.
 const RANDOM_ATTEMPTS: u64 = 3;
@@ -133,7 +133,8 @@ impl<'a> Shrinker<'a> {
     /// and only diverge later. A `true` result means only a lucky random
     /// continuation can realise the alternative's interesting region: it is
     /// worth investing the deep random budget. A `false` result (including
-    /// a stall-guarded no-op) means the shape either stayed stable — the
+    /// a fast-sweep stall-guarded no-op) means the shape either stayed
+    /// stable — the
     /// deterministic passes cover that — or changed length, which is
     /// collection-resize territory the deletion and clone passes own. As
     /// with [`Shrinker::probe`], an interesting, strictly smaller replay is
@@ -147,7 +148,8 @@ impl<'a> Shrinker<'a> {
         if self.improvements >= self.max_improvements {
             return Err(super::ShrinkHalt::Stop);
         }
-        if self.improvements > 0
+        if self.sweep == SweepMode::Fast
+            && self.improvements > 0
             && self.calls.saturating_sub(self.calls_at_last_shrink) >= self.max_stall
         {
             return Ok(false);
@@ -168,7 +170,7 @@ impl<'a> Shrinker<'a> {
                 .skip(i + 1)
                 .any(|(a, e)| a.data.kind() != *e);
         if is_interesting && sort_key(&actual_nodes) < sort_key(&self.current_nodes) {
-            self.accept_improvement(actual_nodes, actual_spans);
+            self.accept_improvement(actual_nodes, actual_spans)?;
         }
         Ok(diverged)
     }

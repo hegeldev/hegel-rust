@@ -7,7 +7,7 @@ use alloc::string::ToString;
 /// Raised by the [`hegel_internal_assert!`] family as an `Err` value and
 /// threaded through each containing call graph: draw-layer violations merge
 /// into the draw error channel (`EngineError`), engine-side violations
-/// (shrinker, statistics, data tree) surface as a run-level error
+/// (shrinker, statistics) surface as a run-level error
 /// (`RunError`) read back through `hegel_run_result_error`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InternalError {

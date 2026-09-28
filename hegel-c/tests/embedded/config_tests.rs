@@ -33,6 +33,7 @@ fn parses_every_key() {
         print_blob = false
         verbosity = "verbose"
         backend = "default"
+        nondeterminism_strictness = "warn"
         database = "my/db"
         suppress_health_check = ["too_slow", "filter_too_much"]
         phases = ["reuse", "generate", "shrink"]
@@ -53,6 +54,7 @@ fn parses_every_key() {
             show_statistics: Some(true),
             print_blob: Some(false),
             backend: Some(Backend::Default),
+            nondeterminism_strictness: Some(NondeterminismStrictness::Warn),
             unbounded_choices: None,
         }
     );
@@ -119,6 +121,14 @@ fn parses_verbosity_and_backend_vocabularies() {
     for (name, expected) in [("default", Backend::Default), ("urandom", Backend::Urandom)] {
         let text = format!("[profiles.x]\nbackend = \"{name}\"\n");
         assert_eq!(parse_one(&text).backend, Some(expected));
+    }
+    for (name, expected) in [
+        ("quiet", NondeterminismStrictness::Quiet),
+        ("warn", NondeterminismStrictness::Warn),
+        ("error", NondeterminismStrictness::Error),
+    ] {
+        let text = format!("[profiles.x]\nnondeterminism_strictness = \"{name}\"\n");
+        assert_eq!(parse_one(&text).nondeterminism_strictness, Some(expected));
     }
 }
 
@@ -413,6 +423,10 @@ fn rejects_unknown_enum_names() {
     assert_eq!(
         parse_err("[profiles.x]\nbackend = \"dice\"\n").message,
         "`backend` expects one of default|urandom, got \"dice\""
+    );
+    assert_eq!(
+        parse_err("[profiles.x]\nnondeterminism_strictness = \"loud\"\n").message,
+        "`nondeterminism_strictness` expects one of quiet|warn|error, got \"loud\""
     );
     assert!(
         parse_err("[profiles.x]\nphases = [\"explode\"]\n")

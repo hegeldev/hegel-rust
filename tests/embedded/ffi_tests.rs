@@ -9,7 +9,7 @@
 use super::*;
 use crate::ffi::sys as hegel_c;
 use crate::generators as gs;
-use crate::runner::{Backend, Settings};
+use crate::runner::{Backend, NondeterminismStrictness, Settings};
 
 #[test]
 fn ffi_settings_builds_with_each_explicit_backend() {
@@ -228,13 +228,20 @@ fn ffi_reports_failure_with_blob_then_replays_it() {
         .expect("a shrunk failure carries a blob");
 
     let sh2 = SettingsHandle::build(&settings, None, None);
-    let replay = CTestCase::from_blob(&sh2, &blob, None).unwrap();
+    let replay_run = RunHandle::start_blob(&sh2, &blob, None);
+    let replay = replay_run.next_test_case().unwrap();
     assert_eq!(
         replay.generate_integer(0, 100).unwrap(),
         1,
         "the blob replays the minimal counterexample"
     );
     replay.mark_complete(INTERESTING, Some(origin)).unwrap();
+    assert!(replay_run.next_test_case().is_none());
+    let replay_result = replay_run.result();
+    assert!(
+        replay_result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_FAILED,
+        "the reproduced replay is the run's failure"
+    );
 }
 
 /// `clone_handle` yields an independent handle onto the same test case: both
@@ -263,14 +270,15 @@ fn ffi_clone_handle_shares_the_test_case() {
 }
 
 #[test]
-fn ffi_from_blob_rejects_undecodable_input() {
+fn ffi_start_blob_surfaces_an_undecodable_blob_as_the_runs_error() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None, None);
-    let err = match CTestCase::from_blob(&sh, "not a valid base64 hegel blob!!!", None) {
-        Err(e) => e,
-        Ok(_) => panic!("expected an undecodable blob to be rejected"),
-    };
-    assert!(!err.is_empty(), "an undecodable blob yields a diagnostic");
+    let run = RunHandle::start_blob(&sh, "not a valid base64 hegel blob!!!", None);
+    assert!(run.next_test_case().is_none());
+    let result = run.result();
+    assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+    let err = result.error().unwrap();
+    assert!(err.contains("could not be decoded"), "{err}");
 }
 
 #[test]
@@ -323,7 +331,8 @@ fn ffi_settings_round_trip_every_field_through_registration() {
         .report_multiple_failures(true)
         .show_statistics(true)
         .print_blob(true)
-        .backend(Backend::Urandom);
+        .backend(Backend::Urandom)
+        .nondeterminism_strictness(NondeterminismStrictness::Error);
     register_profile("ffi_tests_round_trip", &original).unwrap();
     let restored = settings_from_profile(Some("ffi_tests_round_trip")).unwrap();
     assert_eq!(restored.test_cases, 7);
@@ -341,19 +350,28 @@ fn ffi_settings_round_trip_every_field_through_registration() {
     assert!(restored.show_statistics);
     assert!(restored.print_blob);
     assert_eq!(restored.backend, Backend::Urandom);
+    assert_eq!(
+        restored.nondeterminism_strictness,
+        NondeterminismStrictness::Error
+    );
 }
 
 #[test]
 fn ffi_settings_round_trip_the_remaining_enum_values() {
     use crate::runner::Verbosity;
-    for verbosity in [Verbosity::Quiet, Verbosity::Verbose] {
+    for (verbosity, strictness) in [
+        (Verbosity::Quiet, NondeterminismStrictness::Warn),
+        (Verbosity::Verbose, NondeterminismStrictness::Quiet),
+    ] {
         let original = Settings::from_profile("base")
             .verbosity(verbosity)
-            .backend(Backend::Default);
+            .backend(Backend::Default)
+            .nondeterminism_strictness(strictness);
         register_profile("ffi_tests_enum_values", &original).unwrap();
         let restored = settings_from_profile(Some("ffi_tests_enum_values")).unwrap();
         assert_eq!(restored.verbosity, verbosity);
         assert_eq!(restored.backend, Backend::Default);
+        assert_eq!(restored.nondeterminism_strictness, strictness);
     }
 }
 
