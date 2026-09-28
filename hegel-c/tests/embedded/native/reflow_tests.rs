@@ -169,6 +169,26 @@ fn a_deep_group_is_not_folded_into_a_prefix() {
 }
 
 #[test]
+fn shallow_groups_with_several_items_or_padding_fold_into_a_prefix() {
+    assert_eq!(
+        render("Pair[int, string]{1, \"a\"}", 20),
+        "Pair[int, string]{1,\n                  \"a\"}"
+    );
+    assert_eq!(
+        render("Wrapper{ 1 }[100, 200]", 14),
+        "Wrapper{ 1 }[100,\n             200]"
+    );
+}
+
+#[test]
+fn a_prefix_reaches_back_to_the_last_space_of_a_flushed_leaf() {
+    assert_eq!(
+        render("key \"quoted\"[100, 200]", 12),
+        "key \"quoted\"[100,\n         200]"
+    );
+}
+
+#[test]
 fn reflow_writes_to_a_deferred_slot() {
     let mut printer = Printer::new(79);
     printer.text(Target::Main, "let x = ").unwrap();
