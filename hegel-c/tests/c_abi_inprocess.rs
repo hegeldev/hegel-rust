@@ -595,8 +595,8 @@ fn from_blob_rejects_bad_input() {
 }
 
 /// `hegel_run_start_blob` validates its arguments like `hegel_run_start`,
-/// replays a good blob as a run that reports the reproducing failure, and
-/// surfaces an undecodable blob as the run's error.
+/// rejects an undecodable blob before the run starts, and replays a valid
+/// blob as a run that reports the reproducing failure.
 #[test]
 fn run_start_blob_replays_and_reports_the_failure() {
     let ctx = hegel_context_new();
@@ -684,23 +684,19 @@ fn run_start_blob_replays_and_reports_the_failure() {
 
         let garbage = CString::new("!!! not a blob !!!").unwrap();
         let mut bad_run: *mut HegelRun = ptr::null_mut();
-        ok(hegel_run_start_blob(
-            ctx,
-            s,
-            garbage.as_ptr(),
-            None,
-            ptr::null_mut(),
-            &mut bad_run,
-        ));
-        assert!(next_case(ctx, bad_run).is_null());
-        let bad_res = result(ctx, bad_run);
-        assert!(status_of(ctx, bad_res) == hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
-        let err = std::ffi::CStr::from_ptr(run_error_of(ctx, bad_res))
-            .to_str()
-            .unwrap();
-        assert!(err.contains("could not be decoded"), "{err}");
-        ok(hegel_run_result_free(ctx, bad_res));
-        ok(hegel_run_free(ctx, bad_run));
+        assert_eq!(
+            hegel_run_start_blob(
+                ctx,
+                s,
+                garbage.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut bad_run,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(bad_run.is_null());
+        assert!(last_error(ctx).contains("could not be decoded"));
 
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));

@@ -493,9 +493,9 @@ impl RunHandle {
     }
 
     /// [`start`](Self::start) for a blob-replay run (`hegel_run_start_blob`):
-    /// the engine replays the blob instead of exploring. Infallible from the
-    /// safe wrapper (an undecodable blob is the *run's* error, read off the
-    /// result), so unlike [`start`](Self::start) there is no error to return.
+    /// the engine replays the blob instead of exploring. An undecodable blob
+    /// is rejected here with `HEGEL_E_INVALID_ARG`, which panics with the
+    /// engine's message.
     pub(crate) fn start_blob(
         settings: &SettingsHandle,
         blob: &str,

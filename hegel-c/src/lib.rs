@@ -2130,12 +2130,14 @@ pub unsafe extern "C" fn hegel_run_start(
 /// replay-until-failure sequence database reuse uses. The caller
 /// drives the run exactly like `hegel_run_start`: a reproducing replay is
 /// the run's failure (with its caveat for a nondeterministic blob, and no
-/// reproduce blob — the caller already holds it), a run with no failures
-/// means the blob is stale, and an undecodable blob surfaces as the run's
-/// error from `hegel_run_result`.
+/// reproduce blob — the caller already holds it), and a run with no
+/// failures means the blob is stale.
 ///
 /// Parameters: as `hegel_run_start`, plus
 /// `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
+///
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a blob that is not
+/// valid (corrupt, non-UTF-8, or from an incompatible Hegel version).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start_blob(
     ctx: *mut HegelContext,
@@ -2162,7 +2164,14 @@ pub unsafe extern "C" fn hegel_run_start_blob(
         set_last_error(ctx, "hegel_run_start_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
     };
-    let blob = blob.to_string();
+    let Some(blob) = crate::native::blob::decode_blob(blob) else {
+        set_last_error(
+            ctx,
+            "hegel_run_start_blob: the supplied failure blob could not be decoded. It may be \
+             corrupt or from an incompatible Hegel version.",
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
     let settings = handle
         .inner
         .clone()
@@ -2172,7 +2181,7 @@ pub unsafe extern "C" fn hegel_run_start_blob(
     let exchange = Arc::new(CaseExchange::new());
     let engine_exchange = Arc::clone(&exchange);
     let engine: EngineFuture = Box::pin(async move {
-        crate::native::test_runner::reproduce_blob(&settings, &blob, &engine_exchange).await
+        crate::native::test_runner::reproduce_blob(&settings, blob, &engine_exchange).await
     });
 
     let run = Box::into_raw(Box::new(HegelRun {

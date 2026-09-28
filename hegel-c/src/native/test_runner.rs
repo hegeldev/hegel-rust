@@ -244,20 +244,14 @@ pub(crate) async fn explore(
 /// to the blob. Every replay is stamped so the client captures the
 /// reproducing execution's output and diagnostic.
 ///
-/// A run with no failures means the blob is stale; an undecodable blob is
-/// the run's error.
+/// A run with no failures means the blob is stale. 
 pub(crate) async fn reproduce_blob(
     settings: &Settings,
-    blob: &str,
+    blob: crate::native::blob::DecodedBlob,
     exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
-    match crate::native::blob::decode_blob(blob) {
-        None => Err(RunError::UsageError(
-            "the supplied failure blob could not be decoded. It may be corrupt or from an \
-             incompatible Hegel version."
-                .to_string(),
-        )),
-        Some(crate::native::blob::DecodedBlob::Choices(choices)) => {
+    match blob {
+        crate::native::blob::DecodedBlob::Choices(choices) => {
             let mut rng = create_rng(settings, None);
             let budget =
                 nd::continuation_budget(crate::native::core::flattened_values_len(&choices));
@@ -276,7 +270,7 @@ pub(crate) async fn reproduce_blob(
             }
             Ok(TestRunResult { failures })
         }
-        Some(crate::native::blob::DecodedBlob::Nd(state)) => {
+        crate::native::blob::DecodedBlob::Nd(state) => {
             let mut engine = Engine::new(settings, None, exchange)?;
             if settings.nondeterminism_strictness != NondeterminismStrictness::Error {
                 engine.nd_flip();

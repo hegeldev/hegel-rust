@@ -270,15 +270,17 @@ fn ffi_clone_handle_shares_the_test_case() {
 }
 
 #[test]
-fn ffi_start_blob_surfaces_an_undecodable_blob_as_the_runs_error() {
+fn ffi_start_blob_rejects_an_undecodable_blob() {
     let settings = test_settings(1);
     let sh = SettingsHandle::build(&settings, None, None);
-    let run = RunHandle::start_blob(&sh, "not a valid base64 hegel blob!!!", None);
-    assert!(run.next_test_case().is_none());
-    let result = run.result();
-    assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
-    let err = result.error().unwrap();
-    assert!(err.contains("could not be decoded"), "{err}");
+    let start = std::panic::AssertUnwindSafe(|| {
+        RunHandle::start_blob(&sh, "not a valid base64 hegel blob!!!", None)
+    });
+    let Err(panic) = std::panic::catch_unwind(start) else {
+        panic!("an undecodable blob must fail at start");
+    };
+    let msg = crate::run_lifecycle::panic_message(&panic);
+    assert!(msg.contains("could not be decoded"), "{msg}");
 }
 
 #[test]

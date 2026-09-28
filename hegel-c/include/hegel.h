@@ -1223,12 +1223,14 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
  replay-until-failure sequence database reuse uses. The caller
  drives the run exactly like `hegel_run_start`: a reproducing replay is
  the run's failure (with its caveat for a nondeterministic blob, and no
- reproduce blob — the caller already holds it), a run with no failures
- means the blob is stale, and an undecodable blob surfaces as the run's
- error from `hegel_run_result`.
+ reproduce blob — the caller already holds it), and a run with no
+ failures means the blob is stale.
 
  Parameters: as `hegel_run_start`, plus
  `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
+
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a blob that is not
+ valid (corrupt, non-UTF-8, or from an incompatible Hegel version).
  */
 hegel_result_t hegel_run_start_blob(hegel_context_t *ctx,
                                     const hegel_settings_t *settings,
