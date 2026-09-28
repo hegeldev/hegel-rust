@@ -902,6 +902,7 @@ fn reproduce_blob_sync(
     mut body: impl FnMut(&dyn DataSource) -> TestCaseResult,
 ) -> Result<crate::backend::TestRunResult, crate::backend::RunError> {
     let exchange = CaseExchange::new();
+    let blob = crate::native::blob::decode_blob(blob).expect("a decodable blob");
     crate::exchange::drive(&exchange, reproduce_blob(settings, blob, &exchange), |ds| {
         let result = body(&*ds);
         ds.mark_complete(&result);
@@ -910,16 +911,6 @@ fn reproduce_blob_sync(
 
 fn quiet_settings() -> Settings {
     Settings::new().database(None).verbosity(Verbosity::Quiet)
-}
-
-#[test]
-fn reproduce_blob_rejects_an_undecodable_blob_as_the_runs_error() {
-    let err = reproduce_blob_sync(&quiet_settings(), "!!! junk !!!", |_| TestCaseResult::Valid)
-        .unwrap_err();
-    let crate::backend::RunError::UsageError(msg) = err else {
-        panic!("expected a usage error, got {err:?}");
-    };
-    assert!(msg.contains("could not be decoded"), "{msg}");
 }
 
 #[test]
