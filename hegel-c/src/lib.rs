@@ -2074,7 +2074,9 @@ pub unsafe extern "C" fn hegel_settings_get_nondeterminism_strictness(
 ///   `callback` is NULL.
 /// `out_run`: Receives the run handle.
 ///
-/// Returns `HEGEL_OK`.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when `ANTITHESIS_OUTPUT_DIR`
+/// is a directory that does not exist; read the message with
+/// `hegel_context_last_error`.
 ///
 /// This only sets up the run. No test case is generated until the first
 /// `hegel_next_test_case` call. libhegel emits while it runs inside that
@@ -2092,6 +2094,10 @@ pub unsafe extern "C" fn hegel_run_start(
     clear_last_error(ctx);
     if out_run.is_null() {
         set_last_error(ctx, "hegel_run_start: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    if let Err(err) = crate::antithesis::check_environment() {
+        set_last_error(ctx, &format!("hegel_run_start: {err}"));
         return HEGEL_E_INVALID_ARG;
     }
     let Some(handle) = (unsafe { settings.as_ref() }) else {
@@ -2137,7 +2143,8 @@ pub unsafe extern "C" fn hegel_run_start(
 /// `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a blob that is not
-/// valid (corrupt, non-UTF-8, or from an incompatible Hegel version).
+/// valid (corrupt, non-UTF-8, or from an incompatible Hegel version) or when
+/// `ANTITHESIS_OUTPUT_DIR` names a directory that does not exist.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start_blob(
     ctx: *mut HegelContext,
@@ -2164,6 +2171,10 @@ pub unsafe extern "C" fn hegel_run_start_blob(
         set_last_error(ctx, "hegel_run_start_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
     };
+    if let Err(err) = crate::antithesis::check_environment() {
+        set_last_error(ctx, &format!("hegel_run_start_blob: {err}"));
+        return HEGEL_E_INVALID_ARG;
+    }
     let Some(blob) = crate::native::blob::decode_blob(blob) else {
         set_last_error(
             ctx,

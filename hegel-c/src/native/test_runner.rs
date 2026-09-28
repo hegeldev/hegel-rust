@@ -244,7 +244,7 @@ pub(crate) async fn explore(
 /// to the blob. Every replay is stamped so the client captures the
 /// reproducing execution's output and diagnostic.
 ///
-/// A run with no failures means the blob is stale. 
+/// A run with no failures means the blob is stale.
 pub(crate) async fn reproduce_blob(
     settings: &Settings,
     blob: crate::native::blob::DecodedBlob,
@@ -1475,7 +1475,6 @@ impl<'a> Engine<'a> {
         database_key: Option<&'a str>,
         exchange: &'a CaseExchange,
     ) -> Result<Self, RunError> {
-        crate::antithesis::check_environment()?;
         #[cfg(not(target_family = "wasm"))]
         let db: Option<Box<dyn TestCaseDatabase>> = match &settings.database {
             Database::Path(path) => Some(Box::new(DirectoryTestCaseDatabase::new(path))),

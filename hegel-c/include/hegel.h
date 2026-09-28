@@ -1200,7 +1200,9 @@ hegel_result_t hegel_settings_get_nondeterminism_strictness(hegel_context_t *ctx
    `callback` is NULL.
  `out_run`: Receives the run handle.
 
- Returns `HEGEL_OK`.
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` when `ANTITHESIS_OUTPUT_DIR`
+ is a directory that does not exist; read the message with
+ `hegel_context_last_error`.
 
  This only sets up the run. No test case is generated until the first
  `hegel_next_test_case` call. libhegel emits while it runs inside that
@@ -1230,7 +1232,8 @@ hegel_result_t hegel_run_start(hegel_context_t *ctx,
  `blob`: A base64 blob from `hegel_failure_reproduction_blob`.
 
  Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a blob that is not
- valid (corrupt, non-UTF-8, or from an incompatible Hegel version).
+ valid (corrupt, non-UTF-8, or from an incompatible Hegel version) or when
+ `ANTITHESIS_OUTPUT_DIR` names a directory that does not exist.
  */
 hegel_result_t hegel_run_start_blob(hegel_context_t *ctx,
                                     const hegel_settings_t *settings,

@@ -9,15 +9,16 @@
 
 mod common;
 
-use common::{make_settings, next_case, ok, start};
-use hegel_c::hegel_result_t::HEGEL_OK;
+use common::{last_error, make_settings, next_case, ok, start};
+use hegel_c::hegel_result_t::{HEGEL_E_INVALID_ARG, HEGEL_OK};
 use hegel_c::{
     HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelSettings, HegelTestCase,
     hegel_context_free, hegel_context_new, hegel_failure_free, hegel_failure_reproduction_blob,
     hegel_generate_integer, hegel_mark_complete, hegel_run_free, hegel_run_result,
-    hegel_run_result_failure, hegel_run_result_status, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new_for_profile, hegel_settings_set_database, hegel_settings_set_test_location,
-    hegel_status_t, hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_run_result_failure, hegel_run_result_status, hegel_run_start, hegel_run_start_blob,
+    hegel_run_status_t, hegel_settings_free, hegel_settings_new_for_profile,
+    hegel_settings_set_database, hegel_settings_set_test_location, hegel_status_t,
+    hegel_test_case_free, hegel_test_case_from_blob,
 };
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
@@ -258,4 +259,41 @@ fn a_run_that_errors_reports_a_false_condition() {
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }
+}
+
+/// An `ANTITHESIS_OUTPUT_DIR` set to a nonexistent directory is rejected when
+/// a run starts.
+#[test]
+fn a_missing_output_dir_is_rejected_at_run_start() {
+    let (_turn, _sdk) = take_turn();
+    unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", "/no/such/antithesis/output/dir") };
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings(ctx);
+        let mut run: *mut HegelRun = ptr::null_mut();
+        assert_eq!(
+            hegel_run_start(ctx, s, None, ptr::null_mut(), &mut run),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(run.is_null());
+        // missing antithesis dir takes precedence over invalid blob
+        assert!(last_error(ctx).contains("to exist when running inside of Antithesis"));
+        assert_eq!(
+            hegel_run_start_blob(
+                ctx,
+                s,
+                c"not a blob".as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut run
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(run.is_null());
+        assert!(last_error(ctx).contains("to exist when running inside of Antithesis"));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+    let dir = OUTPUT_DIR.get().unwrap().path();
+    unsafe { std::env::set_var("ANTITHESIS_OUTPUT_DIR", dir) };
 }
