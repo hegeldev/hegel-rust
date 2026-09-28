@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.44.1 - 2026-09-28
+
+This patch fixes `hegel_run_start_blob` to reject a blob it cannot decode. 
+It now returns `HEGEL_E_INVALID_ARG`, with the message in `hegel_context_last_error`. 
+No run is started. Before, it returned `HEGEL_OK`, started a run, and the run ended 
+with `HEGEL_RUN_STATUS_ERROR`.
+
+`hegel_run_start` and `hegel_run_start_blob` now also return `HEGEL_E_INVALID_ARG` when
+`ANTITHESIS_OUTPUT_DIR` is set to a nonexistent directory. Before, the run started and then
+ended with `HEGEL_RUN_STATUS_ERROR`, and a replay of a deterministic blob did not check the
+directory at all.
+
 ## 0.44.0 - 2026-09-28
 
 This release adds engine-side nondeterministic handling — failures confirmed by repeated replay before being shrunk or persisted, shrinking guarded by a statistical bound on how much reproduction reliability a step can trade away, unconfirmed failures still reported with a caveat — controlled by the new `nondeterminism_strictness` setting (`hegel_settings_set_nondeterminism_strictness` / `hegel_settings_get_nondeterminism_strictness`, the `nondeterminism_strictness` profile key, the `HEGEL_NONDETERMINISM_STRICTNESS` environment variable; quiet by default; error restores the old abort). Three ABI changes for frontends:

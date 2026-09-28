@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.48.1 - 2026-09-28
+
+This release updates the `hegeltest-c` dependency to 0.44.1.
+
 ## 0.48.0 - 2026-09-28
 
 This release makes Hegel handle nondeterministic tests instead of refusing them. A test whose structure or outcome changes when the same generated data is replayed — hidden global state, time, an outside service — previously aborted the run with a flaky-test error. Now the run switches to nondeterministic handling: a failure is confirmed by repeated replay before it is shrunk or persisted to the database, shrunk under a statistical guard that bounds how much reproduction reliability a shrink step can trade away, and reported with a caveat quoting the run's replay evidence, e.g. "nondeterministic failure, confirmed: failed 7 of 20 replays at confirmation and 1 of 2 at report time". Their reproduce blobs encode the counterexample as a graph of the failing runs the engine saw, and `#[hegel::reproduce_failure]` replays them until a replay fails rather than judging them stale after a single attempt. An unconfirmed failure still fails the run, with a caveat instead of a reproduce blob.
