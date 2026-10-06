@@ -800,12 +800,6 @@ fn build_in_set(
     flags: u32,
     alphabet: &Option<IntervalSet>,
 ) -> Result<Vec<char>, InternalError> {
-    if matches!(items.first(), Some(SetItem::Negate)) {
-        return Ok(gather_chars(alphabet, |c| {
-            char_matches_set(items, c, flags)
-        }));
-    }
-
     let mut out: Vec<char> = Vec::new();
     let mut seen: HashSet<char> = HashSet::default();
     let mut equivalents: Vec<char> = Vec::new();
@@ -822,7 +816,11 @@ fn build_in_set(
 
     for item in items {
         match item {
-            SetItem::Negate => {}
+            SetItem::Negate => {
+                return Ok(gather_chars(alphabet, |c| {
+                    char_matches_set(items, c, flags)
+                }));
+            }
             SetItem::Literal(cp) => add_equivalents(codepoint_to_char(*cp)?),
             SetItem::Range(lo, hi) => {
                 for cp in *lo..=*hi {

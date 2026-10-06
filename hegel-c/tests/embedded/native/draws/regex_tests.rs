@@ -965,10 +965,21 @@ fn generate_regex_branch_picks_only_producible_alternatives() {
             "seed {seed}"
         );
     }
-    let re = CompiledRegex::compile("Ā|Ē", alphabet).unwrap();
+    let re = CompiledRegex::compile("Āx|Ēy", alphabet).unwrap();
     for seed in 0..20 {
         let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
         assert!(generate_regex(&mut ntc, &re, true).is_err(), "seed {seed}");
+    }
+}
+
+#[test]
+fn generate_regex_empty_negative_lookahead_is_rejected() {
+    use crate::native::rng::EngineRng;
+    let re = CompiledRegex::compile("(?!)", None).unwrap();
+    for seed in 0..5 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
+        assert!(generate_regex(&mut ntc, &re, true).is_err(), "seed {seed}");
+        assert_eq!(ntc.status(), Some(Status::Invalid));
     }
 }
 
