@@ -973,6 +973,18 @@ fn generate_regex_branch_picks_only_producible_alternatives() {
 }
 
 #[test]
+fn generate_regex_class_the_alphabet_cannot_supply_is_rejected() {
+    use crate::native::rng::EngineRng;
+    let alphabet = Some(IntervalSet::new(vec![(0, 127)]).unwrap());
+    let re = CompiledRegex::compile("[ĀĒ]", alphabet).unwrap();
+    for seed in 0..5 {
+        let mut ntc = NativeTestCase::new_random(EngineRng::seeded(seed)).unwrap();
+        assert!(generate_regex(&mut ntc, &re, true).is_err(), "seed {seed}");
+        assert_eq!(ntc.status(), Some(Status::Invalid));
+    }
+}
+
+#[test]
 fn generate_regex_empty_negative_lookahead_is_rejected() {
     use crate::native::rng::EngineRng;
     let re = CompiledRegex::compile("(?!)", None).unwrap();
