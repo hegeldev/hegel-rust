@@ -1047,6 +1047,47 @@ mod regex_tests {
     }
 
     #[test]
+    fn test_pattern_with_a_nul_character() {
+        assert_all_examples(gs::from_regex("a\0b"), |s: &String| s == "a\0b");
+    }
+
+    #[test]
+    fn test_ascii_flag_does_not_restrict_characters_or_ranges() {
+        assert_all_examples(gs::from_regex(r"(?a)[Ï-İ]"), |s: &String| {
+            s.chars().count() == 1 && ('Ï'..='İ').contains(&s.chars().next().unwrap())
+        });
+        assert_all_examples(gs::from_regex(r"(?a)[^\x00-\xff]"), |s: &String| {
+            s.chars().count() == 1 && s.chars().all(|c| c as u32 > 0xFF)
+        });
+    }
+
+    #[test]
+    fn test_ascii_flag_folds_case_for_ascii_letters_only() {
+        assert_all_examples(gs::from_regex("(?ai)À"), |s: &String| s == "À");
+        find_any(gs::from_regex("(?ai)a"), |s: &String| s == "A");
+    }
+
+    #[test]
+    fn test_inline_flags_do_not_leak_out_of_an_incompatible_subpattern() {
+        assert_all_examples(
+            gs::from_regex("(?-i:Ā)*k").alphabet(gs::characters().max_codepoint(127)),
+            |s: &String| s == "k",
+        );
+    }
+
+    #[test]
+    fn test_ignorecase_negated_set_excludes_every_case_equal_char() {
+        assert_all_examples(gs::from_regex("(?i)[^k]"), |s: &String| {
+            s.chars().count() == 1 && !matches!(s.as_str(), "k" | "K" | "\u{212A}")
+        });
+    }
+
+    #[test]
+    fn test_ignorecase_literal_generates_every_case_equal_char() {
+        find_any(gs::from_regex("(?i)k"), |s: &String| s == "\u{212A}");
+    }
+
+    #[test]
     fn test_can_pad_strings_arbitrarily() {
         find_any(gs::from_regex("a").fullmatch(false), |s: &String| {
             !s.starts_with('a')

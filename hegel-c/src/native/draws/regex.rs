@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use crate::native::bignum::{BigInt, ToPrimitive};
 use crate::native::core::{EngineError, ManyState, NativeTestCase, Status};
 use crate::native::intervalsets::IntervalSet;
+use crate::native::re::casefold;
 use crate::native::re::constants::{
     AtCode, ChCode, SRE_FLAG_ASCII, SRE_FLAG_DOTALL, SRE_FLAG_IGNORECASE, SRE_FLAG_MULTILINE,
 };
@@ -23,10 +24,13 @@ fn is_surrogate_cp(cp: u32) -> bool {
     (0xD800..=0xDFFF).contains(&cp)
 }
 
+/// The flag bits that change which characters a literal or class matches.
+const CASE_FLAGS: u32 = SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII;
+
 /// Cache key for a `(IN, items)` node's character set: the `SetItem` slice's
 /// address and length (stable because the AST is owned by the enclosing
-/// [`CompiledRegex`]) plus the active flags (which affect IGNORECASE swaps
-/// and ASCII-only filtering).
+/// [`CompiledRegex`]) plus the active flags (which affect IGNORECASE folding
+/// and the ASCII-only categories).
 type InKey = (usize, usize, u32);
 
 /// Cache key for the alphabet-constrained `Any` and `NotLiteral` character
@@ -34,16 +38,38 @@ type InKey = (usize, usize, u32);
 /// the flag bits the set depends on.
 type CharKey = (u32, u32);
 
+/// Cache key for a subpattern's producibility: the address of its op slice
+/// (stable, see [`InKey`]) plus the active flags.
+type ProducibleKey = (usize, u32);
+
+/// Cross-draw caches of the alphabet-constrained character sets (category
+/// classes like `\w` cost a full alphabet scan to materialise) and of which
+/// subpatterns the alphabet can produce at all.
+#[derive(Debug)]
+pub(crate) struct Caches {
+    in_cache: Mutex<HashMap<InKey, Arc<[char]>>>,
+    char_cache: Mutex<HashMap<CharKey, Arc<[char]>>>,
+    producible: Mutex<HashMap<ProducibleKey, bool>>,
+}
+
+impl Default for Caches {
+    fn default() -> Self {
+        Caches {
+            in_cache: Mutex::new(HashMap::default()),
+            char_cache: Mutex::new(HashMap::default()),
+            producible: Mutex::new(HashMap::default()),
+        }
+    }
+}
+
 /// A regex pattern compiled once at string-generator construction time:
-/// the parsed AST, the optional user alphabet, and cross-draw caches of
-/// the alphabet-constrained character sets (category classes like
-/// `\w` cost a full alphabet scan to materialise).
+/// the parsed AST, the optional user alphabet, and the [`Caches`] shared by
+/// every draw from it.
 #[derive(Debug)]
 pub(crate) struct CompiledRegex {
     parsed: ParsedPattern,
     alphabet: Option<IntervalSet>,
-    in_cache: Mutex<HashMap<InKey, Arc<[char]>>>,
-    char_cache: Mutex<HashMap<CharKey, Arc<[char]>>>,
+    caches: Caches,
 }
 
 impl CompiledRegex {
@@ -59,8 +85,7 @@ impl CompiledRegex {
         Ok(CompiledRegex {
             parsed,
             alphabet,
-            in_cache: Mutex::new(HashMap::default()),
-            char_cache: Mutex::new(HashMap::default()),
+            caches: Caches::default(),
         })
     }
 }
@@ -106,8 +131,7 @@ fn generate_regex_attempt(
         pending_asserts: Vec::new(),
         pending_lookaheads: Vec::new(),
         needs_whole_match: false,
-        in_cache: &re.in_cache,
-        char_cache: &re.char_cache,
+        caches: &re.caches,
     };
     let mut result = String::new();
 
@@ -233,12 +257,8 @@ struct GenState<'a> {
     /// Set when the pattern contains an atomic group or possessive repeat,
     /// whose generated output must be re-validated against the whole pattern.
     needs_whole_match: bool,
-    /// The enclosing [`CompiledRegex`]'s cross-draw cache of
-    /// alphabet-constrained `IN`-node character sets.
-    in_cache: &'a Mutex<HashMap<InKey, Arc<[char]>>>,
-    /// The enclosing [`CompiledRegex`]'s cross-draw cache of
-    /// alphabet-constrained `Any` / `NotLiteral` character sets.
-    char_cache: &'a Mutex<HashMap<CharKey, Arc<[char]>>>,
+    /// The enclosing [`CompiledRegex`]'s cross-draw caches.
+    caches: &'a Caches,
 }
 
 struct PendingAnchor {
@@ -364,6 +384,19 @@ fn generate_subpattern(
     }
     Ok(())
 }
+
+/// Draw an index into a non-empty candidate list, without drawing at all
+/// when there is only one candidate.
+fn pick_index(ntc: &mut NativeTestCase, n: usize) -> Result<usize, EngineError> {
+    if n == 1 {
+        return Ok(0);
+    }
+    Ok(ntc
+        .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+        .to_i128()
+        .unwrap() as usize)
+}
+
 fn generate_op(
     ntc: &mut NativeTestCase,
     op: &OpCode,
@@ -374,53 +407,20 @@ fn generate_op(
     match op {
         OpCode::Literal(cp) => {
             let c = codepoint_to_char(*cp)?;
-            if state.flags & SRE_FLAG_IGNORECASE != 0 {
-                if let Some(sw) = char_swapcase(c) {
-                    let which = ntc
-                        .draw_integer(BigInt::from(0), BigInt::from(1))?
-                        .to_i128()
-                        .unwrap();
-                    let pick = if which == 0 { c } else { sw };
-                    if !alphabet_allows(alphabet, pick) {
-                        return Err(mark_invalid(ntc));
-                    }
-                    out.push(pick);
-                    return Ok(());
-                }
-            }
-            if !alphabet_allows(alphabet, c) {
+            let candidates = literal_candidates(c, state.flags, alphabet);
+            if candidates.is_empty() {
                 return Err(mark_invalid(ntc));
             }
-            out.push(c);
+            let idx = pick_index(ntc, candidates.len())?;
+            out.push(candidates[idx]);
         }
         OpCode::NotLiteral(cp) => {
             let c = codepoint_to_char(*cp)?;
-            if alphabet.is_none() {
-                let chars = cached_default_not_literal(c, state.flags);
-                emit_from_chars(ntc, &chars, out)?;
-            } else {
-                let chars = cached_chars(
-                    state.char_cache,
-                    (*cp, state.flags & SRE_FLAG_IGNORECASE),
-                    || {
-                        let blacklist = swapcase_blacklist(c, state.flags);
-                        gather_chars(alphabet, |c| !blacklist.contains(&c))
-                    },
-                );
-                emit_from_chars(ntc, &chars, out)?;
-            }
+            let chars = not_literal_chars(c, state.flags, alphabet, state.caches);
+            emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::Any => {
-            let allow_newline = state.flags & SRE_FLAG_DOTALL != 0;
-            let chars = if alphabet.is_none() {
-                cached_default_any(allow_newline)
-            } else {
-                cached_chars(
-                    state.char_cache,
-                    (u32::MAX, state.flags & SRE_FLAG_DOTALL),
-                    || gather_chars(alphabet, |c| allow_newline || c != '\n'),
-                )
-            };
+            let chars = any_chars(state.flags, alphabet, state.caches);
             emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::At(at) => match at {
@@ -446,30 +446,21 @@ fn generate_op(
             }
         },
         OpCode::In(items) => {
-            if alphabet.is_none() {
-                let chars = cached_default_in_set(items, state.flags)?;
-                emit_from_chars(ntc, &chars, out)?;
-            } else {
-                let key = (items.as_ptr() as usize, items.len(), state.flags);
-                let cached = state.in_cache.lock().get(&key).cloned();
-                let chars = match cached {
-                    Some(cached) => cached,
-                    None => {
-                        let computed: Arc<[char]> =
-                            build_in_set(items, state.flags, alphabet)?.into();
-                        state.in_cache.lock().insert(key, Arc::clone(&computed));
-                        computed
-                    }
-                };
-                emit_from_chars(ntc, &chars, out)?;
-            }
+            let chars = in_chars(items, state.flags, alphabet, state.caches)?;
+            emit_from_chars(ntc, &chars, out)?;
         }
         OpCode::Branch(items) => {
-            let idx = ntc
-                .draw_integer(BigInt::from(0), BigInt::from(items.len() as i64 - 1))?
-                .to_i128()
-                .unwrap() as usize;
-            generate_subpattern(ntc, &items[idx], state, alphabet, out)?;
+            let mut live: Vec<&SubPattern> = Vec::with_capacity(items.len());
+            for item in items {
+                if producible_sub(item, state.flags, alphabet, state.caches)? {
+                    live.push(item);
+                }
+            }
+            if live.is_empty() {
+                return Err(mark_invalid(ntc));
+            }
+            let idx = pick_index(ntc, live.len())?;
+            generate_subpattern(ntc, live[idx], state, alphabet, out)?;
         }
         OpCode::Subpattern {
             group,
@@ -547,6 +538,9 @@ fn generate_op(
         OpCode::MaxRepeat { min, max, item }
         | OpCode::MinRepeat { min, max, item }
         | OpCode::PossessiveRepeat { min, max, item } => {
+            if *min == 0 && !producible_sub(item, state.flags, alphabet, state.caches)? {
+                return Ok(());
+            }
             if matches!(op, OpCode::PossessiveRepeat { .. }) {
                 state.needs_whole_match = true;
             }
@@ -567,6 +561,156 @@ fn generate_op(
     }
     Ok(())
 }
+
+/// Whether the alphabet can supply every character `sp` needs, under
+/// `flags`: false when some literal, class or wildcard in it has no
+/// candidates, when every branch of an alternation is unproducible, or when
+/// a required repetition's body is. Anchors, assertions and back-references
+/// are taken as producible: they fail (if at all) on the final string, not
+/// for want of characters.
+///
+/// A repetition whose body is unproducible is generated zero times rather
+/// than rejected, and an alternation picks only among its producible
+/// branches, so `(?-i:Ā)*k` over an ASCII alphabet produces `k` instead of
+/// tripping the filter-too-much health check.
+fn producible_sub(
+    sp: &SubPattern,
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+    caches: &Caches,
+) -> Result<bool, InternalError> {
+    if sp.data.is_empty() {
+        return Ok(true);
+    }
+    let key = (sp.data.as_ptr() as usize, flags);
+    if let Some(&cached) = caches.producible.lock().get(&key) {
+        return Ok(cached);
+    }
+    let mut result = true;
+    for op in &sp.data {
+        if !producible_op(op, flags, alphabet, caches)? {
+            result = false;
+            break;
+        }
+    }
+    caches.producible.lock().insert(key, result);
+    Ok(result)
+}
+
+fn producible_op(
+    op: &OpCode,
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+    caches: &Caches,
+) -> Result<bool, InternalError> {
+    Ok(match op {
+        OpCode::Literal(cp) => {
+            !literal_candidates(codepoint_to_char(*cp)?, flags, alphabet).is_empty()
+        }
+        OpCode::NotLiteral(cp) => {
+            !not_literal_chars(codepoint_to_char(*cp)?, flags, alphabet, caches).is_empty()
+        }
+        OpCode::Any => !any_chars(flags, alphabet, caches).is_empty(),
+        OpCode::In(items) => !in_chars(items, flags, alphabet, caches)?.is_empty(),
+        OpCode::At(_) | OpCode::GroupRef(_) | OpCode::AssertNot { .. } => true,
+        OpCode::Failure => false,
+        OpCode::Branch(items) => {
+            let mut any = false;
+            for item in items {
+                if producible_sub(item, flags, alphabet, caches)? {
+                    any = true;
+                    break;
+                }
+            }
+            any
+        }
+        OpCode::Subpattern {
+            add_flags,
+            del_flags,
+            p,
+            ..
+        } => producible_sub(p, (flags | *add_flags) & !*del_flags, alphabet, caches)?,
+        OpCode::GroupRefExists { yes, no, .. } => {
+            producible_sub(yes, flags, alphabet, caches)?
+                || match no {
+                    Some(no) => producible_sub(no, flags, alphabet, caches)?,
+                    None => true,
+                }
+        }
+        OpCode::Assert { p, .. } | OpCode::AtomicGroup(p) => {
+            producible_sub(p, flags, alphabet, caches)?
+        }
+        OpCode::MaxRepeat { min, item, .. }
+        | OpCode::MinRepeat { min, item, .. }
+        | OpCode::PossessiveRepeat { min, item, .. } => {
+            *min == 0 || producible_sub(item, flags, alphabet, caches)?
+        }
+    })
+}
+
+/// The characters a literal `c` may be emitted as, `c` first: its
+/// case-equivalents under IGNORECASE, restricted to the alphabet.
+fn literal_candidates(c: char, flags: u32, alphabet: &Option<IntervalSet>) -> Vec<char> {
+    let mut candidates = Vec::new();
+    casefold::push_equivalents(&mut candidates, c, flags);
+    let mut seen: HashSet<char> = HashSet::default();
+    candidates.retain(|&x| alphabet_allows(alphabet, x) && seen.insert(x));
+    candidates
+}
+
+/// The characters a `(IN, items)` node may emit under `flags`, restricted to
+/// the alphabet; cached per node and flags.
+fn in_chars(
+    items: &[SetItem],
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+    caches: &Caches,
+) -> Result<Arc<[char]>, InternalError> {
+    if alphabet.is_none() {
+        return cached_default_in_set(items, flags);
+    }
+    let key = (items.as_ptr() as usize, items.len(), flags & CASE_FLAGS);
+    let cached = caches.in_cache.lock().get(&key).cloned();
+    match cached {
+        Some(cached) => Ok(cached),
+        None => {
+            let computed: Arc<[char]> = build_in_set(items, flags, alphabet)?.into();
+            caches.in_cache.lock().insert(key, Arc::clone(&computed));
+            Ok(computed)
+        }
+    }
+}
+
+/// The characters a `(NOT_LITERAL, c)` node may emit under `flags`: every
+/// alphabet character that does not match the literal `c`.
+fn not_literal_chars(
+    c: char,
+    flags: u32,
+    alphabet: &Option<IntervalSet>,
+    caches: &Caches,
+) -> Arc<[char]> {
+    if alphabet.is_none() {
+        return cached_default_not_literal(c, flags);
+    }
+    cached_chars(&caches.char_cache, (c as u32, flags & CASE_FLAGS), || {
+        gather_chars(alphabet, |x| !casefold::literal_matches(c, x, flags))
+    })
+}
+
+/// The characters an `ANY` node may emit under `flags`: the alphabet minus
+/// the newline unless DOTALL.
+fn any_chars(flags: u32, alphabet: &Option<IntervalSet>, caches: &Caches) -> Arc<[char]> {
+    let allow_newline = flags & SRE_FLAG_DOTALL != 0;
+    if alphabet.is_none() {
+        return cached_default_any(allow_newline);
+    }
+    cached_chars(
+        &caches.char_cache,
+        (u32::MAX, flags & SRE_FLAG_DOTALL),
+        || gather_chars(alphabet, |c| allow_newline || c != '\n'),
+    )
+}
+
 /// Cached version of [`build_in_set`] for the default (no-alphabet) case.
 ///
 /// Category-driven classes like `\w`, `\s`, `[^a-z0-9_]` require a full
@@ -579,10 +723,7 @@ fn generate_op(
 fn cached_default_in_set(items: &[SetItem], flags: u32) -> Result<Arc<[char]>, InternalError> {
     type Cache = Mutex<HashMap<(Vec<SetItem>, u32), Arc<[char]>>>;
     static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
-    let cache_key = (
-        items.to_vec(),
-        flags & (SRE_FLAG_IGNORECASE | SRE_FLAG_ASCII),
-    );
+    let cache_key = (items.to_vec(), flags & CASE_FLAGS);
     {
         let guard = CACHE.lock();
         if let Some(cached) = guard.get(&cache_key) {
@@ -632,122 +773,107 @@ fn cached_chars<F: FnOnce() -> Vec<char>>(
 fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
     type Cache = Mutex<HashMap<(u32, u32), Arc<[char]>>>;
     static CACHE: Lazy<Cache> = Lazy::new(|| Mutex::new(HashMap::default()));
-    let cache_key = (c as u32, flags & SRE_FLAG_IGNORECASE);
+    let cache_key = (c as u32, flags & CASE_FLAGS);
     {
         let guard = CACHE.lock();
         if let Some(cached) = guard.get(&cache_key) {
             return Arc::clone(cached);
         }
     }
-    let blacklist = swapcase_blacklist(c, flags);
-    let computed: Arc<[char]> = gather_chars(&None, |c| !blacklist.contains(&c)).into();
+    let computed: Arc<[char]> =
+        gather_chars(&None, |x| !casefold::literal_matches(c, x, flags)).into();
     CACHE.lock().insert(cache_key, Arc::clone(&computed));
     computed
 }
 
-/// Build the set of characters that a `(IN, items)` node can emit, after
-/// applying the current flags (IGNORECASE swaps, ASCII restriction) and
-/// intersecting with the user-supplied alphabet.
+/// Build the set of characters that a `(IN, items)` node can emit under
+/// `flags`, intersected with the user-supplied alphabet.
+///
+/// A negated class is the alphabet filtered through [`char_matches_set`].
+/// A positive class lists its literals and ranges in pattern order (each
+/// followed by its case-equivalents under IGNORECASE) and then the
+/// characters of its categories; the ASCII flag narrows only the
+/// categories and the case folding, never the explicit characters — `(?a)Ā`
+/// still matches `Ā` in Python.
 fn build_in_set(
     items: &[SetItem],
     flags: u32,
     alphabet: &Option<IntervalSet>,
 ) -> Result<Vec<char>, InternalError> {
-    let negate = matches!(items.first(), Some(SetItem::Negate));
+    if matches!(items.first(), Some(SetItem::Negate)) {
+        return Ok(gather_chars(alphabet, |c| {
+            char_matches_set(items, c, flags)
+        }));
+    }
 
-    let mut positive: Vec<char> = Vec::new();
+    let mut out: Vec<char> = Vec::new();
+    let mut seen: HashSet<char> = HashSet::default();
+    let mut equivalents: Vec<char> = Vec::new();
     let mut categories: Vec<ChCode> = Vec::new();
+    let mut add_equivalents = |c: char| {
+        equivalents.clear();
+        casefold::push_equivalents(&mut equivalents, c, flags);
+        for &x in &equivalents {
+            if alphabet_allows(alphabet, x) && seen.insert(x) {
+                out.push(x);
+            }
+        }
+    };
 
     for item in items {
         match item {
             SetItem::Negate => {}
-            SetItem::Literal(cp) => {
-                let c = codepoint_to_char(*cp)?;
-                add_with_swapcase(&mut positive, c, flags);
-            }
+            SetItem::Literal(cp) => add_equivalents(codepoint_to_char(*cp)?),
             SetItem::Range(lo, hi) => {
                 for cp in *lo..=*hi {
                     if let Some(c) = char::from_u32(cp) {
-                        add_with_swapcase(&mut positive, c, flags);
+                        add_equivalents(c);
                     }
                 }
             }
-            SetItem::Category(cat) => {
-                categories.push(*cat);
-            }
+            SetItem::Category(cat) => categories.push(*cat),
         }
     }
 
-    let ascii_only = flags & SRE_FLAG_ASCII != 0;
-
-    if !negate {
-        let mut out: Vec<char> = Vec::new();
-        let mut seen: HashSet<char> = HashSet::default();
-        for c in positive {
-            if ascii_only && (c as u32) >= 128 {
-                continue;
-            }
-            if !alphabet_allows(alphabet, c) {
-                continue;
-            }
+    if !categories.is_empty() {
+        let ascii = flags & SRE_FLAG_ASCII != 0;
+        for c in gather_chars(alphabet, |c| {
+            categories.iter().any(|cat| in_category(c, *cat, ascii))
+        }) {
             if seen.insert(c) {
                 out.push(c);
             }
         }
-        if !categories.is_empty() {
-            let cat_chars = gather_chars(alphabet, |c| {
-                categories.iter().any(|cat| in_category(c, *cat))
-            });
-            for c in cat_chars {
-                if ascii_only && (c as u32) >= 128 {
-                    continue;
-                }
-                if seen.insert(c) {
-                    out.push(c);
-                }
-            }
-        }
-        Ok(out)
-    } else {
-        let cat_blocks: Vec<ChCode> = categories;
-        let mut positive_set: HashSet<char> = HashSet::default();
-        for c in positive {
-            positive_set.extend(swapcase_blacklist(c, flags));
-        }
-        Ok(gather_chars(alphabet, |c| {
-            if ascii_only && (c as u32) >= 128 {
-                return false;
-            }
-            if positive_set.contains(&c) {
-                return false;
-            }
-            if cat_blocks.iter().any(|cat| in_category(c, *cat)) {
-                return false;
-            }
-            true
-        }))
     }
+    Ok(out)
 }
-fn add_with_swapcase(v: &mut Vec<char>, c: char, flags: u32) {
-    v.push(c);
-    if flags & SRE_FLAG_IGNORECASE != 0 {
-        if let Some(sw) = char_swapcase(c) {
-            v.push(sw);
+
+/// Return whether `c` is in the given CPython character category, with the
+/// ASCII flag's narrower definitions (`\d` is `[0-9]`, `\s` is
+/// `[ \t\n\r\f\v]`, `\w` is `[a-zA-Z0-9_]`) when `ascii`.
+fn in_category(c: char, cat: ChCode, ascii: bool) -> bool {
+    match cat {
+        ChCode::Digit => {
+            if ascii {
+                c.is_ascii_digit()
+            } else {
+                unicodedata::is_in_group_char(c, "Nd")
+            }
         }
+        ChCode::NotDigit => !in_category(c, ChCode::Digit, ascii),
+        ChCode::Space => {
+            if ascii {
+                matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0b' | '\x0c')
+            } else {
+                is_uni_space(c)
+            }
+        }
+        ChCode::NotSpace => !in_category(c, ChCode::Space, ascii),
+        ChCode::Word => is_word(c, ascii),
+        ChCode::NotWord => !is_word(c, ascii),
     }
 }
 
-/// Return whether codepoint `c` is in the given CPython character category.
-fn in_category(c: char, cat: ChCode) -> bool {
-    match cat {
-        ChCode::Digit => unicodedata::is_in_group_char(c, "Nd"),
-        ChCode::NotDigit => !unicodedata::is_in_group_char(c, "Nd"),
-        ChCode::Space => is_uni_space(c),
-        ChCode::NotSpace => !is_uni_space(c),
-        ChCode::Word => is_uni_word(c),
-        ChCode::NotWord => !is_uni_word(c),
-    }
-}
 fn is_uni_space(c: char) -> bool {
     matches!(
         c,
@@ -755,8 +881,12 @@ fn is_uni_space(c: char) -> bool {
     ) || unicodedata::is_in_group_char(c, "Z")
 }
 
-fn is_uni_word(c: char) -> bool {
-    c == '_' || unicodedata::is_in_group_char(c, "L") || unicodedata::is_in_group_char(c, "N")
+fn is_word(c: char, ascii: bool) -> bool {
+    if ascii {
+        c == '_' || c.is_ascii_alphanumeric()
+    } else {
+        c == '_' || unicodedata::is_in_group_char(c, "L") || unicodedata::is_in_group_char(c, "N")
+    }
 }
 
 /// Gather all characters in `alphabet` (or BMP-minus-surrogates when no
@@ -837,6 +967,7 @@ fn draw_any_char(
         }
     }
 }
+
 fn emit_from_chars(
     ntc: &mut NativeTestCase,
     chars: &[char],
@@ -875,56 +1006,6 @@ fn codepoint_to_char(cp: u32) -> Result<char, InternalError> {
     ))
 }
 
-/// Python's `str.swapcase()` on a single char.  Python's definition differs
-/// from Rust's only for a handful of title-case codepoints; for the regex
-/// strategy the straightforward case-flipping-or-identity behaviour is
-/// sufficient, matching what `re.IGNORECASE` does on single-character
-/// matches.
-///
-/// Returns `None` when there is no usable swap: the character is uncased,
-/// maps to itself, or its case mapping is more than one codepoint (e.g.
-/// `'ß'.to_uppercase()` is `"SS"`, which `re.IGNORECASE` does *not* treat
-/// as equal to `'ß'` — Hypothesis guards this with an explicit `re.match`
-/// check before offering the swapped form).
-fn char_swapcase(c: char) -> Option<char> {
-    match swapcase_chars(c).as_slice() {
-        [sw] if *sw != c => Some(*sw),
-        _ => None,
-    }
-}
-
-/// All codepoints of `c`'s swapped-case form (possibly several, e.g.
-/// `'İ'.to_lowercase()` is `"i\u{307}"`); empty for uncased characters.
-fn swapcase_chars(c: char) -> Vec<char> {
-    if c.is_lowercase() {
-        c.to_uppercase().collect()
-    } else if c.is_uppercase() {
-        c.to_lowercase().collect()
-    } else {
-        Vec::new()
-    }
-}
-
-/// The set of characters `re.IGNORECASE` may treat as equal to `c`: chain
-/// `swapcase` to a fixpoint, expanding multi-character results, so e.g.
-/// `(?i)[^İ]` excludes {İ, i, U+0307, I}. Port of Hypothesis's fix for
-/// issue #2657 ("patterns such as r\"[^\\u0130]+\" where \"i\\u0307\"
-/// matches").
-fn swapcase_blacklist(c: char, flags: u32) -> Vec<char> {
-    let mut blacklist = vec![c];
-    if flags & SRE_FLAG_IGNORECASE == 0 {
-        return blacklist;
-    }
-    let mut stack = swapcase_chars(c);
-    while let Some(ch) = stack.pop() {
-        if !blacklist.contains(&ch) {
-            blacklist.push(ch);
-            stack.extend(swapcase_chars(ch));
-        }
-    }
-    blacklist
-}
-
 fn match_seq(
     ops: &[OpCode],
     pos: usize,
@@ -939,7 +1020,7 @@ fn match_seq(
         OpCode::Literal(cp) => {
             let want = char::from_u32(*cp)?;
             let got = *chars.get(pos)?;
-            if chars_eq(got, want, flags) {
+            if casefold::literal_matches(want, got, flags) {
                 match_seq(rest, pos + 1, chars, flags, groups)
             } else {
                 None
@@ -948,7 +1029,7 @@ fn match_seq(
         OpCode::NotLiteral(cp) => {
             let banned = char::from_u32(*cp)?;
             let got = *chars.get(pos)?;
-            if chars_eq(got, banned, flags) {
+            if casefold::literal_matches(banned, got, flags) {
                 None
             } else {
                 match_seq(rest, pos + 1, chars, flags, groups)
@@ -1008,7 +1089,7 @@ fn match_seq(
                 return None;
             }
             for (i, vc) in vcs.iter().enumerate() {
-                if !chars_eq(chars[pos + i], *vc, flags) {
+                if !casefold::groupref_eq(chars[pos + i], *vc, flags) {
                     return None;
                 }
             }
@@ -1153,51 +1234,28 @@ fn match_seq(
         }
     }
 }
-fn chars_eq(a: char, b: char, flags: u32) -> bool {
-    if a == b {
-        return true;
-    }
-    if flags & SRE_FLAG_IGNORECASE != 0 {
-        char_swapcase(a) == Some(b) || char_swapcase(b) == Some(a)
-    } else {
-        false
-    }
-}
+
+/// Whether `c` matches the character class `items` under `flags`, with
+/// Python's semantics: under IGNORECASE a literal or range matches every
+/// character case-equal to one of its members (see [`casefold`]), and under
+/// the ASCII flag the categories narrow to their ASCII definitions while
+/// explicit characters and ranges keep matching outside ASCII.
 fn char_matches_set(items: &[SetItem], c: char, flags: u32) -> bool {
     let negate = matches!(items.first(), Some(SetItem::Negate));
-    let mut contained = false;
-    for item in items {
-        match item {
-            SetItem::Negate => {}
-            SetItem::Literal(cp) => {
-                if let Some(lc) = char::from_u32(*cp) {
-                    if chars_eq(c, lc, flags) {
-                        contained = true;
-                    }
-                }
-            }
-            SetItem::Range(lo, hi) => {
-                let cp = c as u32;
-                if cp >= *lo && cp <= *hi {
-                    contained = true;
-                } else if flags & SRE_FLAG_IGNORECASE != 0 {
-                    if let Some(sw) = char_swapcase(c) {
-                        if (sw as u32) >= *lo && (sw as u32) <= *hi {
-                            contained = true;
-                        }
-                    }
-                }
-            }
-            SetItem::Category(cat) => {
-                if in_category(c, *cat) {
-                    contained = true;
-                }
-            }
+    let ascii = flags & SRE_FLAG_ASCII != 0;
+    let contained = items.iter().any(|item| match item {
+        SetItem::Negate => false,
+        SetItem::Literal(cp) => {
+            char::from_u32(*cp).is_some_and(|lc| casefold::literal_matches(lc, c, flags))
         }
-    }
-    if negate { !contained } else { contained }
+        SetItem::Range(lo, hi) => casefold::range_matches(*lo, *hi, c, flags),
+        SetItem::Category(cat) => in_category(c, *cat, ascii),
+    });
+    negate != contained
 }
+
 fn at_matches(at: &AtCode, chars: &[char], pos: usize, flags: u32) -> bool {
+    let ascii = flags & SRE_FLAG_ASCII != 0;
     match at {
         AtCode::BeginningString => pos == 0,
         AtCode::Beginning => {
@@ -1215,13 +1273,14 @@ fn at_matches(at: &AtCode, chars: &[char], pos: usize, flags: u32) -> bool {
             }
         }
         AtCode::EndString => pos == chars.len(),
-        AtCode::Boundary => is_word_boundary(chars, pos),
-        AtCode::NonBoundary => !is_word_boundary(chars, pos),
+        AtCode::Boundary => is_word_boundary(chars, pos, ascii),
+        AtCode::NonBoundary => !is_word_boundary(chars, pos, ascii),
     }
 }
-fn is_word_boundary(chars: &[char], pos: usize) -> bool {
-    let before = pos > 0 && is_uni_word(chars[pos - 1]);
-    let after = pos < chars.len() && is_uni_word(chars[pos]);
+
+fn is_word_boundary(chars: &[char], pos: usize, ascii: bool) -> bool {
+    let before = pos > 0 && is_word(chars[pos - 1], ascii);
+    let after = pos < chars.len() && is_word(chars[pos], ascii);
     before != after
 }
 

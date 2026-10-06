@@ -1091,27 +1091,42 @@ fn regex_email_url_domain_generators_draw_valid_values() {
     unsafe {
         let mut regex_g: *mut HegelStringGenerator = ptr::null_mut();
         assert_eq!(
-            hegel_string_generator_regex(ctx, ptr::null(), false, ptr::null(), &mut regex_g),
+            hegel_string_generator_regex(ctx, ptr::null(), 0, false, ptr::null(), &mut regex_g),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("pattern is null"));
-        let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+        let bad_utf8: [u8; 1] = [0xFF];
         assert_eq!(
-            hegel_string_generator_regex(ctx, bad_utf8.as_ptr(), false, ptr::null(), &mut regex_g),
+            hegel_string_generator_regex(
+                ctx,
+                bad_utf8.as_ptr(),
+                bad_utf8.len(),
+                false,
+                ptr::null(),
+                &mut regex_g
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("pattern is not valid UTF-8"));
-        let unclosed = CString::new("(unclosed").unwrap();
+        let unclosed = b"(unclosed";
         assert_eq!(
-            hegel_string_generator_regex(ctx, unclosed.as_ptr(), false, ptr::null(), &mut regex_g),
+            hegel_string_generator_regex(
+                ctx,
+                unclosed.as_ptr(),
+                unclosed.len(),
+                false,
+                ptr::null(),
+                &mut regex_g
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid regex pattern"));
-        let pattern = CString::new("[ab]{2,4}").unwrap();
+        let pattern = b"[ab]{2,4}";
         assert_eq!(
             hegel_string_generator_regex(
                 ctx,
                 pattern.as_ptr(),
+                pattern.len(),
                 false,
                 ptr::null(),
                 ptr::null_mut()
@@ -1154,13 +1169,27 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         );
 
         assert_eq!(
-            hegel_string_generator_regex(ctx, pattern.as_ptr(), true, email_g, &mut regex_g),
+            hegel_string_generator_regex(
+                ctx,
+                pattern.as_ptr(),
+                pattern.len(),
+                true,
+                email_g,
+                &mut regex_g
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("must be a text string generator"));
         let alphabet = text_generator(ctx, 0, 10);
         assert_eq!(
-            hegel_string_generator_regex(ctx, pattern.as_ptr(), true, alphabet, &mut regex_g),
+            hegel_string_generator_regex(
+                ctx,
+                pattern.as_ptr(),
+                pattern.len(),
+                true,
+                alphabet,
+                &mut regex_g
+            ),
             HEGEL_OK
         );
 
@@ -1223,6 +1252,47 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         ok(hegel_string_generator_free(ctx, url_g));
         ok(hegel_string_generator_free(ctx, domain_g));
         ok(hegel_string_generator_free(ctx, alphabet));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn regex_pattern_may_contain_nul() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let pattern = b"a\0b";
+        let mut regex_g: *mut HegelStringGenerator = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_regex(
+                ctx,
+                pattern.as_ptr(),
+                pattern.len(),
+                true,
+                ptr::null(),
+                &mut regex_g
+            ),
+            HEGEL_OK
+        );
+        let s = make_settings_no_db(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 5));
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            assert_eq!(draw_string(ctx, tc, regex_g), "a\0b");
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_VALID as u32,
+                ptr::null(),
+            ));
+            ok(hegel_c::hegel_test_case_free(ctx, tc));
+        }
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_string_generator_free(ctx, regex_g));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }
