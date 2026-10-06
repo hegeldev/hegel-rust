@@ -2,17 +2,13 @@ error[E0277]: `Opaque` doesn't implement `std::fmt::Debug`
  --> tests/ui-printability/one_of_non_printable_draw.rs:13:21
  |
 LL |     let _ = tc.draw(hegel::one_of!(gs::just(Opaque), gs::just(Opaque)));
- |                ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `Opaque`
+ |                ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` cannot be formatted using `{:?}`
  |                |
  |                required by a bound introduced by this call
  |
-help: the trait `PrintableGenerator<T>` is conditionally implemented for `OneOfGenerator<'_, T, A>`
- --> src/generators/combinators.rs
- |
-LL | impl<'a, T, A: PrintableAlternatives<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, A> {
- | ^^^^^^^^^^^^^^^------------------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
- |                |
- |                unsatisfied requirement introduced here: `OneOfCons<JustGenerator<Opaque>, OneOfLast<JustGenerator<Opaque>>>: PrintableAlternatives<Opaque>`
+ = help: the trait `std::fmt::Debug` is not implemented for `Opaque`
+ = note: add `#[derive(Debug)]` to `Opaque` or manually `impl std::fmt::Debug for Opaque`
+ = help: the trait `PrintableGenerator<T>` is implemented for `OneOfGenerator<'_, T, A>`
  = note: required for `JustGenerator<Opaque>` to implement `PrintableGenerator<Opaque>`
  = note: required for `OneOfCons<JustGenerator<Opaque>, OneOfLast<JustGenerator<Opaque>>>` to implement `PrintableAlternatives<Opaque>`
  = note: 1 redundant requirement hidden
@@ -24,6 +20,6 @@ LL |     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
  |                                           ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
 help: consider annotating `Opaque` with `#[derive(Debug)]`
  |
- 10 + #[derive(Debug)]
+10  + #[derive(Debug)]
 LL | struct Opaque;
  |

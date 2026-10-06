@@ -55,6 +55,44 @@ fn e0283_note_uses_must_implement_wording() -> bool {
     panic!("unrecognized E0283 note wording; add a golden for it:\n{stderr}");
 }
 
+/// rustc also changed how it renders the "the trait `X` is not implemented
+/// for `Y`" help when `Y` is a local type: the MSRV toolchain prints it as an
+/// inline `= help:` note where newer toolchains print a `help:` block with a
+/// source pointer at `Y`'s definition (and spell out trait paths more
+/// fully). Probed like [`e0283_note_uses_must_implement_wording`].
+fn trait_help_has_source_pointer() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    let probe = dir.path().join("probe.rs");
+    std::fs::write(
+        &probe,
+        "#[diagnostic::on_unimplemented(message = \"probe\", label = \"probe\")]\n\
+         trait Marker {}\n\
+         struct Plain;\n\
+         fn need<T: Marker>() {}\n\
+         fn main() { need::<Plain>(); }\n",
+    )
+    .unwrap();
+    let output = Command::new(rustc_binary())
+        .args(["--edition", "2021", "--crate-name", "probe"])
+        .arg(&probe)
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "the trait-help probe unexpectedly compiled"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("= help: the trait `Marker` is not implemented") {
+        return false;
+    }
+    if stderr.contains("help: the trait `Marker` is not implemented") {
+        return true;
+    }
+    panic!("unrecognized trait-help wording; add a golden for it:\n{stderr}");
+}
+
 fn rustc_binary() -> std::ffi::OsString {
     std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into())
 }
@@ -149,7 +187,9 @@ fn newest_hegel_rlib(dirs: &[PathBuf]) -> PathBuf {
 ///   across toolchains;
 /// - a type too long for a `required for` note is elided as `, ...>` by
 ///   stable but `, _>` by nightly; the nightly form is rewritten to
-///   stable's;
+///   stable's, and the `unsatisfied requirement introduced here` label of
+///   a conditional-impl help, which nightly elides whole to `_: Trait<_>`,
+///   drops its requirement (the `required for` notes spell it out);
 /// - a `required by a bound in` note keeps only the source line its `^^^`
 ///   label points at: newer toolchains also print the enclosing item's
 ///   header (`impl TestCase {`) above it, with a `...` line for the gap.
@@ -227,6 +267,13 @@ fn normalize_e0283_stderr(raw: &str) -> String {
         }
         if trimmed.starts_with("= note: required for ") {
             out.push(format!(" {}", trimmed.replace(", _>", ", ...>")));
+            continue;
+        }
+        if let Some(index) = trimmed.find("unsatisfied requirement introduced here: `") {
+            out.push(format!(
+                " {}unsatisfied requirement introduced here",
+                &trimmed[..index]
+            ));
             continue;
         }
         if trimmed.starts_with('|') || trimmed.starts_with('=') {
@@ -342,16 +389,21 @@ fn e0283_diagnostic() {
 
 /// A `one_of!` over non-printable components passed to `tc.draw`. Checked by
 /// hand for the same reason as the E0283 case — the diagnostic enumerates
-/// `Debug` implementors, which vary with the toolchain — but with the
-/// long-type elision normalized the rest of the wording is toolchain-stable,
-/// so a single golden suffices.
+/// `Debug` implementors, which vary with the toolchain — and golden-split by
+/// the trait-help wording: the MSRV toolchain explains the missing `Debug`
+/// with inline notes, newer ones with a `help:` block pointing at the
+/// conditional `PrintableGenerator` impl. Regenerate with
+/// `TRYBUILD=overwrite`, once on the MSRV toolchain and once on a current
+/// one.
 #[test]
 fn one_of_non_printable_draw_diagnostic() {
     let actual = compile_failing_case("tests/ui-printability/one_of_non_printable_draw.rs");
-    check_against_golden(
-        &actual,
-        "tests/ui-printability/one_of_non_printable_draw.stderr",
-    );
+    let golden = if trait_help_has_source_pointer() {
+        "tests/ui-printability/one_of_non_printable_draw-current.stderr"
+    } else {
+        "tests/ui-printability/one_of_non_printable_draw-msrv.stderr"
+    };
+    check_against_golden(&actual, golden);
 }
 
 #[test]
