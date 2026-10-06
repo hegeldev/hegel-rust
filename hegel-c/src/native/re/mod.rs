@@ -11,5 +11,6 @@
 //! Vendored sources for cross-reference live under
 //! `resources/cpython/Lib/re/`.
 
+pub mod casefold;
 pub mod constants;
 pub mod parser;

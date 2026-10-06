@@ -4644,17 +4644,22 @@ pub unsafe extern "C" fn hegel_string_generator_text(
 }
 
 /// Parameters:
-/// `pattern`: The pattern to match, in Python `re` syntax.
+/// `pattern` / `pattern_len`: UTF-8 buffer (pointer plus byte length) of
+///   the pattern to match, in Python `re` syntax. Length-delimited so the
+///   pattern may contain the NUL character, which `re` accepts.
 /// `fullmatch`: When true, the whole string must match the pattern.
 ///   Otherwise, the match may be padded on either side.
 /// `alphabet`: Optional (NULL for none). Must be a text generator. Its
 ///   character set constrains the padding and wildcard characters.
 ///
-/// Returns `HEGEL_OK`.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a NULL or non-UTF-8
+/// pattern, a pattern that does not parse, or an alphabet that is not a
+/// text generator.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_string_generator_regex(
     ctx: *mut HegelContext,
-    pattern: *const c_char,
+    pattern: *const u8,
+    pattern_len: usize,
     fullmatch: bool,
     alphabet: *const HegelStringGenerator,
     out_generator: *mut *mut HegelStringGenerator,
@@ -4665,9 +4670,9 @@ pub unsafe extern "C" fn hegel_string_generator_regex(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_generator = ptr::null_mut() };
+    const FN: &str = "hegel_string_generator_regex";
     let pattern =
-        match unsafe { optional_utf8_arg(ctx, "hegel_string_generator_regex", "pattern", pattern) }
-        {
+        match unsafe { optional_utf8_buffer_arg(ctx, FN, "pattern", pattern, pattern_len) } {
             Ok(Some(s)) => s,
             Ok(None) => {
                 set_last_error(ctx, "hegel_string_generator_regex: pattern is null");

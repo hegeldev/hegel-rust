@@ -2120,16 +2120,21 @@ hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
 
 /*
  Parameters:
- `pattern`: The pattern to match, in Python `re` syntax.
+ `pattern` / `pattern_len`: UTF-8 buffer (pointer plus byte length) of
+   the pattern to match, in Python `re` syntax. Length-delimited so the
+   pattern may contain the NUL character, which `re` accepts.
  `fullmatch`: When true, the whole string must match the pattern.
    Otherwise, the match may be padded on either side.
  `alphabet`: Optional (NULL for none). Must be a text generator. Its
    character set constrains the padding and wildcard characters.
 
- Returns `HEGEL_OK`.
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a NULL or non-UTF-8
+ pattern, a pattern that does not parse, or an alphabet that is not a
+ text generator.
  */
 hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
-                                            const char *pattern,
+                                            const uint8_t *pattern,
+                                            size_t pattern_len,
                                             bool fullmatch,
                                             const hegel_string_generator_t *alphabet,
                                             hegel_string_generator_t **out_generator);

@@ -126,7 +126,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_string_generator_domain(ctx: *mut HegelContext, max_length: u64, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_string_generator_email(ctx: *mut HegelContext, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_string_generator_free(ctx: *mut HegelContext, generator: *mut HegelStringGenerator) -> hegel_result_t;
-            fn hegel_string_generator_regex(ctx: *mut HegelContext, pattern: *const c_char, fullmatch: bool, alphabet: *const HegelStringGenerator, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
+            fn hegel_string_generator_regex(ctx: *mut HegelContext, pattern: *const u8, pattern_len: usize, fullmatch: bool, alphabet: *const HegelStringGenerator, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_string_generator_text(ctx: *mut HegelContext, min_size: u64, max_size: u64, codec: *const c_char, min_codepoint: u32, max_codepoint: u32, categories: *const *const c_char, categories_len: usize, exclude_categories: *const *const c_char, exclude_categories_len: usize, include_characters: *const u8, include_characters_len: usize, exclude_characters: *const u8, exclude_characters_len: usize, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_string_generator_url(ctx: *mut HegelContext, out_generator: *mut *mut HegelStringGenerator) -> hegel_result_t;
             fn hegel_target(ctx: *mut HegelContext, tc: *mut HegelTestCase, value: f64, label: *const c_char) -> hegel_result_t;

@@ -1394,12 +1394,12 @@ impl StringGenerator {
         fullmatch: bool,
         alphabet: Option<&StringGenerator>,
     ) -> Result<Self, String> {
-        let c_pattern = cstring_lossy(pattern);
         let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_string_generator_regex(
                 ctx,
-                c_pattern.as_ptr(),
+                pattern.as_ptr(),
+                pattern.len(),
                 fullmatch,
                 alphabet.map_or(ptr::null(), |a| a.raw),
                 &mut raw,
