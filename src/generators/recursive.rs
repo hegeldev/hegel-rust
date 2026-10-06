@@ -329,8 +329,6 @@ where
 ///     Array(Vec<Json>),
 /// }
 ///
-/// hegel::pretty_print_as_debug!(Json);
-///
 /// #[hegel::test]
 /// fn my_test(tc: hegel::TestCase) {
 ///     let value = tc.draw(gs::recursive(

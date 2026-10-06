@@ -1,0 +1,25 @@
+error[E0277]: `Opaque` doesn't implement `std::fmt::Debug`
+ --> tests/ui-printability/one_of_non_printable_draw.rs:13:21
+ |
+LL |     let _ = tc.draw(hegel::one_of!(gs::just(Opaque), gs::just(Opaque)));
+ |                ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` cannot be formatted using `{:?}`
+ |                |
+ |                required by a bound introduced by this call
+ |
+ = help: the trait `std::fmt::Debug` is not implemented for `Opaque`
+ = note: add `#[derive(Debug)]` to `Opaque` or manually `impl std::fmt::Debug for Opaque`
+ = help: the trait `PrintableGenerator<T>` is implemented for `OneOfGenerator<'_, T, A>`
+ = note: required for `JustGenerator<Opaque>` to implement `PrintableGenerator<Opaque>`
+ = note: required for `OneOfCons<JustGenerator<Opaque>, OneOfLast<JustGenerator<Opaque>>>` to implement `PrintableAlternatives<Opaque>`
+ = note: 1 redundant requirement hidden
+ = note: required for `OneOfGenerator<'_, Opaque, OneOfCons<JustGenerator<Opaque>, ...>>` to implement `PrintableGenerator<Opaque>`
+note: required by a bound in `TestCase::draw`
+ --> src/test_case.rs
+ |
+LL |     pub fn draw<T>(&self, generator: impl PrintableGenerator<T>) -> T {
+ |                                           ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `TestCase::draw`
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+ |
+10  + #[derive(Debug)]
+LL | struct Opaque;
+ |

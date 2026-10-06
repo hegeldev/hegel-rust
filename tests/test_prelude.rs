@@ -1,10 +1,10 @@
 //! `hegel::prelude` covers the imports a typical test needs: the generator
-//! traits (so combinator and boxing methods resolve), the derivable traits
-//! with their derive macros, `TestCase`, and the `gs` alias.
+//! traits (so combinator and boxing methods resolve), `DefaultGenerator`
+//! with its derive macro, `TestCase`, and the `gs` alias.
 
 use hegel::prelude::*;
 
-#[derive(Debug, Clone, DefaultGenerator, PrettyPrintable)]
+#[derive(Debug, Clone, DefaultGenerator)]
 struct Config {
     threshold: u8,
 }
@@ -25,12 +25,4 @@ fn prelude_brings_generator_methods_and_derives_into_scope(tc: TestCase) {
     let config: Config = tc.draw(gs::default::<Config>());
     let flag = tc.draw(silent_bools().print_as_debug().boxed_printable());
     let _ = (n, config.threshold, flag);
-}
-
-#[hegel::test]
-fn prelude_brings_pretty_printable_into_scope(tc: TestCase) {
-    let config: Config = tc.draw(gs::default::<Config>());
-    let mut doc = hegel::Document::new();
-    config.pretty_print(doc.printer());
-    assert!(doc.finish().starts_with("Config {"));
 }

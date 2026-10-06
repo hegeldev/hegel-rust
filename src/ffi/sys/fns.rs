@@ -61,6 +61,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_printer_options_free(ctx: *mut HegelContext, options: *mut HegelPrinterOptions) -> hegel_result_t;
             fn hegel_printer_options_new(ctx: *mut HegelContext, out_options: *mut *mut HegelPrinterOptions) -> hegel_result_t;
             fn hegel_printer_options_set_max_width(ctx: *mut HegelContext, options: *mut HegelPrinterOptions, max_width: u64) -> hegel_result_t;
+            fn hegel_printer_reflow(ctx: *mut HegelContext, printer: *mut HegelPrinter, options: *const HegelReflowOptions, text: *const u8, len: usize) -> hegel_result_t;
             fn hegel_printer_resolve(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
             fn hegel_printer_shift_indent(ctx: *mut HegelContext, printer: *mut HegelPrinter, delta: i64) -> hegel_result_t;
             fn hegel_printer_text(ctx: *mut HegelContext, printer: *mut HegelPrinter, text: *const u8, len: usize) -> hegel_result_t;
@@ -71,6 +72,8 @@ macro_rules! for_each_hegel_fn {
             fn hegel_recursion_free(ctx: *mut HegelContext, recursion: *mut HegelRecursion) -> hegel_result_t;
             fn hegel_recursion_leaf(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion) -> hegel_result_t;
             fn hegel_recursion_retry(ctx: *mut HegelContext, tc: *mut HegelTestCase, recursion: *mut HegelRecursion) -> hegel_result_t;
+            fn hegel_reflow_options_free(ctx: *mut HegelContext, options: *mut HegelReflowOptions) -> hegel_result_t;
+            fn hegel_reflow_options_new(ctx: *mut HegelContext, out_options: *mut *mut HegelReflowOptions) -> hegel_result_t;
             fn hegel_run_free(ctx: *mut HegelContext, run: *mut HegelRun) -> hegel_result_t;
             fn hegel_run_result(ctx: *mut HegelContext, run: *mut HegelRun, out_result: *mut *mut HegelRunResult) -> hegel_result_t;
             fn hegel_run_result_error(ctx: *mut HegelContext, r: *const HegelRunResult, out_error: *mut *const c_char) -> hegel_result_t;

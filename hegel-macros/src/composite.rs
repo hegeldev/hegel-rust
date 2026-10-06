@@ -220,7 +220,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
             #(#clone_bounds,)*
             #(#user_predicates,)*
             #struct_name #ty_generics: ::hegel::generators::Generator<__HegelT>,
-            __HegelT: ::hegel::PrettyPrintable,
+            __HegelT: ::core::fmt::Debug,
         {
             fn do_draw_and_print(
                 &self,
@@ -228,7 +228,7 @@ pub fn expand_composite(f: ItemFn) -> TokenStream {
                 printer: &mut ::hegel::PrettyPrinter,
             ) -> __HegelT {
                 let __hegel_value = ::hegel::generators::Generator::do_draw(self, tc);
-                ::hegel::PrettyPrintable::pretty_print(&__hegel_value, printer);
+                printer.debug(&__hegel_value);
                 __hegel_value
             }
         }

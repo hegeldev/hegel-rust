@@ -5,7 +5,7 @@ use crate::common::utils::expect_panic;
 use hegel::generators::{self as gs, Generator, PrintableGenerator};
 use hegel::{Hegel, Settings};
 
-#[derive(Debug, Clone, hegel::PrettyPrintable)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum FloatOrBool {
     Float(f64),

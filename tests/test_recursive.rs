@@ -43,8 +43,6 @@ enum BinTree {
     Branch(Box<BinTree>, Box<BinTree>),
 }
 
-hegel::pretty_print_as_debug!(BinTree);
-
 impl BinTree {
     fn height(&self) -> usize {
         match self {

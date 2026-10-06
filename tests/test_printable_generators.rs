@@ -94,9 +94,9 @@ fn wide_values_wrap_across_lines() {
     assert_eq!(
         lines,
         vec![
-            "let draw_1 = vec![\"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
-            "     \"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
-            "     \"aaaaaaaaaaaaaaaaaaaa\".to_string()];",
+            "let draw_1 = [\"aaaaaaaaaaaaaaaaaaaa\",",
+            " \"aaaaaaaaaaaaaaaaaaaa\",",
+            " \"aaaaaaaaaaaaaaaaaaaa\"];",
         ]
     );
 }
@@ -142,7 +142,7 @@ fn structural_combinators_print_compositionally() {
         );
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = vec![1];"]);
+    assert_eq!(lines, vec!["let draw_1 = [1];"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::arrays::<_, _, 2>(gs::booleans()));
@@ -157,43 +157,37 @@ fn sets_and_maps_print_in_draw_order() {
         let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HashSet::from([1]);"]);
+    assert_eq!(lines, vec!["let draw_1 = {1};"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashsets(gs::text().max_size(2)).min_size(1));
         panic!("boom");
     });
-    assert_eq!(
-        lines,
-        vec!["let draw_1 = HashSet::from([\"\".to_string()]);"]
-    );
+    assert_eq!(lines, vec!["let draw_1 = {\"\"};"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashmaps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = HashMap::from([(9, false)]);"]);
+    assert_eq!(lines, vec!["let draw_1 = {9: false};"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashmaps(gs::text().max_size(2), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(
-        lines,
-        vec!["let draw_1 = HashMap::from([(\"\".to_string(), false)]);"]
-    );
+    assert_eq!(lines, vec!["let draw_1 = {\"\": false};"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::btree_sets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = BTreeSet::from([1]);"]);
+    assert_eq!(lines, vec!["let draw_1 = {1};"]);
 
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::btree_maps(gs::sampled_from(vec![9]), gs::booleans()).min_size(1));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = BTreeMap::from([(9, false)]);"]);
+    assert_eq!(lines, vec!["let draw_1 = {9: false};"]);
 }
 
 #[test]
@@ -259,8 +253,8 @@ fn unique_vec_rejections_never_corrupt_verbose_output() {
         let b: bool = tc.draw(gs::booleans());
         assert!(!b);
     });
-    let pattern = regex::Regex::new(r"^let draw_1 = vec!\[(\d+(, \d+)*)?\];$").unwrap();
-    let vec_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= vec![")).collect();
+    let pattern = regex::Regex::new(r"^let draw_1 = \[(\d+(, \d+)*)?\];$").unwrap();
+    let vec_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= [")).collect();
     assert!(!vec_lines.is_empty());
     for line in vec_lines {
         assert!(pattern.is_match(line), "malformed vec line {line:?}");
@@ -276,7 +270,7 @@ struct Sonar {
 }
 
 #[test]
-fn derived_generators_print_compositionally_without_pretty_printable() {
+fn derived_generators_print_compositionally() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::default::<Sonar>());
         panic!("boom");
@@ -303,22 +297,23 @@ fn derived_enum_generators_print_every_variant_shape() {
         let _ = tc.draw(gs::default::<Signal>());
         panic!("boom");
     });
-    assert_eq!(unit, vec!["let draw_1 = Signal::Quiet;"]);
+    assert_eq!(unit, vec!["let draw_1 = Quiet;"]);
 
     let named = failing_lines(|tc| {
         let signal: Signal = tc.draw(gs::default::<Signal>());
         assert!(!matches!(signal, Signal::Level { .. }), "boom");
     });
-    assert_eq!(named, vec!["let draw_1 = Signal::Level { db: 0 };"]);
+    assert_eq!(named, vec!["let draw_1 = Level { db: 0 };"]);
 
     let tuple = failing_lines(|tc| {
         let signal: Signal = tc.draw(gs::default::<Signal>());
         assert!(!matches!(signal, Signal::Pair(..)), "boom");
     });
-    assert_eq!(tuple, vec!["let draw_1 = Signal::Pair(false, 0);"]);
+    assert_eq!(tuple, vec!["let draw_1 = Pair(false, 0);"]);
 }
 
-#[derive(Clone, hegel::DefaultGenerator, hegel::PrettyPrintable)]
+#[derive(Clone, Debug, hegel::DefaultGenerator)]
+#[allow(dead_code)]
 enum Depth {
     Surface,
     Dive { meters: u8, staged: bool },
@@ -326,7 +321,7 @@ enum Depth {
 }
 
 #[test]
-fn derived_generator_printing_matches_derived_pretty_printable() {
+fn derived_generator_printing_matches_the_values_debug_output() {
     for force in [
         (|d: &Depth| matches!(d, Depth::Surface)) as fn(&Depth) -> bool,
         |d| matches!(d, Depth::Dive { .. }),
@@ -343,7 +338,7 @@ fn derived_generator_printing_matches_derived_pretty_printable() {
         let value = captured.lock().unwrap().take().unwrap();
         let mut doc = hegel::Document::new();
         let printer = doc.printer();
-        hegel::PrettyPrintable::pretty_print(&value, printer);
+        printer.debug(&value);
         assert_eq!(lines, vec![format!("let draw_1 = {};", doc.finish())]);
     }
 }
@@ -362,7 +357,7 @@ fn print_adapters_control_the_representation() {
     assert_eq!(lines, vec!["let draw_1 = #0;"]);
 
     let lines = failing_lines(|tc| {
-        let _ = tc.draw(gs::booleans().print_as_value());
+        let _ = tc.draw(gs::booleans().print_as_debug());
         panic!("boom");
     });
     assert_eq!(lines, vec!["let draw_1 = false;"]);
@@ -406,7 +401,7 @@ fn print_as_call_composes_inside_structural_combinators() {
     });
     assert_eq!(
         lines,
-        vec!["let draw_1 = vec![KeyData::from_ffi(0), KeyData::from_ffi(0)];"]
+        vec!["let draw_1 = [KeyData::from_ffi(0), KeyData::from_ffi(0)];"]
     );
 }
 
@@ -426,9 +421,9 @@ fn print_as_call_wraps_wide_inputs_inside_the_call() {
     assert_eq!(
         lines,
         vec![
-            "let draw_1 = concat_all(vec![\"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
-            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string(),",
-            "                \"aaaaaaaaaaaaaaaaaaaa\".to_string()]);",
+            "let draw_1 = concat_all([\"aaaaaaaaaaaaaaaaaaaa\",",
+            "            \"aaaaaaaaaaaaaaaaaaaa\",",
+            "            \"aaaaaaaaaaaaaaaaaaaa\"]);",
         ]
     );
 }
@@ -505,16 +500,10 @@ fn draws_after_notes_keep_document_order() {
 
 #[test]
 fn every_leaf_generator_prints() {
-    assert_eq!(
-        printed_draw_lines(gs::text()),
-        vec!["let draw_1 = \"\".to_string();"]
-    );
+    assert_eq!(printed_draw_lines(gs::text()), vec!["let draw_1 = \"\";"]);
     printed_draw_lines(gs::characters());
     printed_draw_lines(gs::from_regex("[a-z]{2}"));
-    assert_eq!(
-        printed_draw_lines(gs::binary()),
-        vec!["let draw_1 = vec![];"]
-    );
+    assert_eq!(printed_draw_lines(gs::binary()), vec!["let draw_1 = [];"]);
     printed_draw_lines(gs::emails());
     printed_draw_lines(gs::urls());
     printed_draw_lines(gs::domains());
@@ -527,7 +516,7 @@ fn every_leaf_generator_prints() {
     printed_draw_lines(gs::uuids());
     printed_draw_lines(gs::durations());
     printed_draw_lines(gs::floats::<f64>());
-    printed_draw_lines(gs::characters().print_as_value());
+    printed_draw_lines(gs::characters().print_as_debug());
 }
 
 #[test]
@@ -570,7 +559,7 @@ fn filtered_sampled_from_prints_the_chosen_value() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(
             gs::sampled_from(vec![1, 2])
-                .print_as_value()
+                .print_as_debug()
                 .filter(|n| *n > 1),
         );
         panic!("boom");
@@ -584,7 +573,7 @@ fn subsequences_print_the_drawn_value() {
         let _: Vec<i32> = tc.draw(gs::subsequences(vec![1, 2, 3]));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = vec![];"]);
+    assert_eq!(lines, vec!["let draw_1 = [];"]);
 }
 
 #[test]
@@ -593,7 +582,7 @@ fn samples_print_the_drawn_value() {
         let _: Vec<i32> = tc.draw(gs::samples(vec![1, 2, 3]).max_size(5));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = vec![];"]);
+    assert_eq!(lines, vec!["let draw_1 = [];"]);
 }
 
 #[test]
@@ -602,7 +591,7 @@ fn permutations_print_the_drawn_value() {
         let _: Vec<i32> = tc.draw(gs::permutations(vec![1, 2, 3]));
         panic!("boom");
     });
-    assert_eq!(lines, vec!["let draw_1 = vec![1, 2, 3];"]);
+    assert_eq!(lines, vec!["let draw_1 = [1, 2, 3];"]);
 }
 
 #[test]
@@ -671,7 +660,7 @@ fn multi_element_sets_and_maps_print_separators() {
         panic!("boom");
     });
     assert_eq!(lines.len(), 1);
-    assert!(lines[0].contains(", false), ("), "{lines:?}");
+    assert!(lines[0].contains(": false, "), "{lines:?}");
 }
 
 /// A compositional generator written the recommended way: one drawing body
@@ -800,11 +789,8 @@ fn duplicate_set_elements_reject_cleanly_while_printing() {
         let _ = s;
         panic!("boom");
     });
-    let pattern = regex::Regex::new(r"^let draw_\d+ = HashSet::from\(\[\d+, \d+\]\);$").unwrap();
-    let set_lines: Vec<&String> = lines
-        .iter()
-        .filter(|l| l.contains("= HashSet::from(["))
-        .collect();
+    let pattern = regex::Regex::new(r"^let draw_\d+ = \{\d+, \d+\};$").unwrap();
+    let set_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= {")).collect();
     assert!(!set_lines.is_empty());
     for line in set_lines {
         assert!(pattern.is_match(line), "malformed set line {line:?}");
@@ -824,14 +810,9 @@ fn duplicate_map_keys_reject_cleanly_while_printing() {
         let _ = m;
         panic!("boom");
     });
-    let pattern = regex::Regex::new(
-        r"^let draw_\d+ = HashMap::from\(\[\(\d+, (true|false)\), \(\d+, (true|false)\)\]\);$",
-    )
-    .unwrap();
-    let map_lines: Vec<&String> = lines
-        .iter()
-        .filter(|l| l.contains("= HashMap::from(["))
-        .collect();
+    let pattern =
+        regex::Regex::new(r"^let draw_\d+ = \{\d+: (true|false), \d+: (true|false)\};$").unwrap();
+    let map_lines: Vec<&String> = lines.iter().filter(|l| l.contains("= {")).collect();
     assert!(!map_lines.is_empty());
     for line in map_lines {
         assert!(pattern.is_match(line), "malformed map line {line:?}");
@@ -887,7 +868,7 @@ fn recursive_draws_print_their_values() {
 
 /// Recursive values print through their component generators — here the
 /// leaf and branch `print_with` representations — not by the produced
-/// value's own `PrettyPrintable` impl (which would print `1` and `2`).
+/// value's own `Debug` output (which would print `1` and `2`).
 #[test]
 fn recursive_draws_print_through_their_component_generators() {
     let lines = failing_lines(|tc| {

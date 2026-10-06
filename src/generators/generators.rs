@@ -1,6 +1,7 @@
 use super::{combine_labels, label_from_name};
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::{TestCase, invalid_argument};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -140,12 +141,11 @@ pub trait Generator<T> {
     /// `Vec` or when passing to [`one_of()`](super::one_of).
     ///
     /// A `BoxedGenerator<T>` is a [`PrintableGenerator`] whenever `T`
-    /// implements [`PrettyPrintable`], printing each drawn value's own
-    /// representation. For a `T` that is not [`PrettyPrintable`], or to keep
-    /// a custom printing strategy (a
-    /// [`print_with`](Generator::print_with), say) through the type erasure,
-    /// box with [`boxed_printable`](PrintableGenerator::boxed_printable)
-    /// instead.
+    /// implements `Debug`, printing each drawn value's `Debug`
+    /// representation. For a `T` that is not `Debug`, or to keep a custom
+    /// printing strategy (a [`print_with`](Generator::print_with), say)
+    /// through the type erasure, box with
+    /// [`boxed_printable`](PrintableGenerator::boxed_printable) instead.
     ///
     /// # Example
     ///
@@ -173,8 +173,13 @@ pub trait Generator<T> {
     ///
     /// This is the fine-grained control point for printing: the resulting
     /// generator satisfies [`PrintableGenerator`] for any source generator,
-    /// with the drawn value's representation produced by `print` instead of
-    /// the value's own [`PrettyPrintable`] implementation.
+    /// with the drawn value's representation produced by `print` — which
+    /// receives the value and the [`PrettyPrinter`] to write it to — instead
+    /// of the value's `Debug` output. Use it to mask a secret, to print a
+    /// type without a useful `Debug` implementation, or to write a
+    /// representation that isn't the value at all (the arguments that built
+    /// it, say). [`PrettyPrinter::debug`] embeds a component's `Debug`
+    /// representation in a larger layout.
     ///
     /// # Example
     ///
@@ -182,6 +187,14 @@ pub trait Generator<T> {
     /// use hegel::generators::{self as gs, Generator};
     ///
     /// let masked = gs::text().print_with(|_, printer| printer.text("<secret>"));
+    /// let pairs = gs::tuples!(gs::integers::<u8>(), gs::text())
+    ///     .print_with(|(id, name), printer| {
+    ///         printer.group(6, "Entry(", ")", |p| {
+    ///             p.debug(id);
+    ///             p.separator();
+    ///             p.debug(name);
+    ///         });
+    ///     });
     /// ```
     fn print_with<F>(self, print: F) -> PrintedWith<Self, F>
     where
@@ -194,40 +207,31 @@ pub trait Generator<T> {
         }
     }
 
-    /// Make this generator printable by printing each drawn value's own
-    /// [`PrettyPrintable`] representation.
-    ///
-    /// Useful when a combinator chain loses printability — e.g. a `map` to a
-    /// type that does implement [`PrettyPrintable`] but whose source cannot
-    /// prove it, or a hand-written [`Generator`] implementation.
-    fn print_as_value(self) -> PrintedAsValue<Self>
-    where
-        Self: Sized,
-        T: PrettyPrintable,
-    {
-        PrintedAsValue { source: self }
-    }
-
     /// Make this generator printable by printing each drawn value's `Debug`
     /// representation.
     ///
-    /// This works for any `Debug` type, so it is the escape hatch for types
-    /// the orphan rule keeps out of [`PrettyPrintable`] — standard-library
-    /// and third-party types alike. Derived-`Debug` output is re-laid-out
-    /// through the printer (see
-    /// [`print_debug_repr`](crate::pretty::print_debug_repr)), so large
-    /// values wrap like natively printed ones. On a `map` whose `Debug`
-    /// output is not pastable Rust,
-    /// [`print_as_call`](Mapped::print_as_call) can report the mapped
-    /// expression instead.
+    /// Every value-producing generator in the library (`map`, `just`,
+    /// `boxed`, composites) already prints this way, so this is for a
+    /// hand-written [`Generator`] implementation that never implemented
+    /// [`PrintableGenerator`]: the value is formatted with `{:?}` and laid
+    /// out through [`PrettyPrinter::debug`], so large values wrap like
+    /// natively printed ones.
     ///
     /// # Example
     ///
     /// ```no_run
     /// use hegel::generators::{self as gs, Generator};
-    /// use std::path::PathBuf;
+    /// use hegel::TestCase;
     ///
-    /// let paths = gs::text().map(PathBuf::from).print_as_debug();
+    /// struct Evens;
+    ///
+    /// impl Generator<u32> for Evens {
+    ///     fn do_draw(&self, tc: &TestCase) -> u32 {
+    ///         tc.draw_silent(gs::integers::<u32>()) & !1
+    ///     }
+    /// }
+    ///
+    /// let evens = Evens.print_as_debug();
     /// ```
     fn print_as_debug(self) -> PrintedAsDebug<Self>
     where
@@ -244,11 +248,11 @@ pub trait Generator<T> {
 /// [`Generator`] can still be drawn with [`TestCase::draw_silent`]. Most
 /// generators in the library are printable — leaves unconditionally,
 /// structural combinators (collections, tuples, `optional`, `one_of!`,
-/// `flat_map`, `recursive`) whenever their component generators are, and value-transforming
-/// combinators (`map`, `filter`, `just`, `sampled_from`, `boxed`, composites) whenever
-/// the produced type implements [`PrettyPrintable`]. For everything else
-/// there are [`Generator::print_as_value`], [`Generator::print_as_debug`],
-/// and [`Generator::print_with`].
+/// `filter`, `flat_map`, `recursive`) whenever their component generators
+/// are, and value-producing combinators (`map`, `just`, `sampled_from`,
+/// `boxed`, composites) whenever the produced type implements `Debug`. For
+/// everything else there are [`Generator::print_with`] and
+/// [`Generator::print_as_debug`].
 ///
 /// # Contract
 ///
@@ -266,8 +270,8 @@ pub trait Generator<T> {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot print the values it draws",
     label = "`{Self}` does not implement `PrintableGenerator<{T}>`",
-    note = "if `{T}` is your own type and does not implement `PrettyPrintable`, implementing it — `#[derive(hegel::PrettyPrintable)]`, or `hegel::pretty_print_as_debug!` for a `Debug` type — fixes every generator of `{T}` at once",
-    note = "otherwise, make this generator printable with `.print_as_debug()` (any `Debug` value), `.print_as_value()` (any `PrettyPrintable` value), or `.print_with(|value, printer| ..)`",
+    note = "if `{T}` is your own type and does not implement `Debug`, adding `#[derive(Debug)]` fixes every generator of `{T}` at once",
+    note = "otherwise, make this generator printable with `.print_with(|value, printer| ..)`, or with `.print_as_debug()` if `{T}` is `Debug` and the generator is hand-written",
     note = "a `map` whose input draw is printable can report the mapped expression instead with `.print_as_call(\"path::to::function\")`",
     note = "a `-> impl Generator<..>` return type or `.boxed()` erases printability: return `impl PrintableGenerator<..>` instead, and box a printing generator with `.boxed_printable()`",
     note = "or draw without reporting the value via `tc.draw_silent(..)`",
@@ -298,16 +302,16 @@ pub trait PrintableGenerator<T>: Generator<T> {
     }
 }
 
-/// Draw from `generator` silently, then print the drawn value's own
-/// [`PrettyPrintable`] representation. The shared implementation for every
-/// generator that prints by value.
-pub(crate) fn draw_and_print_value<T: PrettyPrintable>(
+/// Draw from `generator` silently, then print the drawn value's `Debug`
+/// representation. The shared implementation for every generator that
+/// prints by value.
+pub(crate) fn draw_and_print_value<T: Debug>(
     generator: &impl Generator<T>,
     tc: &TestCase,
     printer: &mut PrettyPrinter,
 ) -> T {
     let value = generator.do_draw(tc);
-    value.pretty_print(printer);
+    printer.debug(&value);
     value
 }
 
@@ -343,35 +347,6 @@ where
     }
 }
 
-/// Result of [`Generator::print_as_value`].
-pub struct PrintedAsValue<G> {
-    source: G,
-}
-
-impl<T, G> Generator<T> for PrintedAsValue<G>
-where
-    G: Generator<T>,
-    T: PrettyPrintable,
-{
-    fn label(&self) -> u64 {
-        self.source.label()
-    }
-
-    fn do_draw(&self, tc: &TestCase) -> T {
-        self.source.do_draw(tc)
-    }
-}
-
-impl<T, G> PrintableGenerator<T> for PrintedAsValue<G>
-where
-    G: Generator<T>,
-    T: PrettyPrintable,
-{
-    fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        draw_and_print_value(&self.source, tc, printer)
-    }
-}
-
 /// Result of [`Generator::print_as_debug`].
 pub struct PrintedAsDebug<G> {
     source: G,
@@ -380,7 +355,7 @@ pub struct PrintedAsDebug<G> {
 impl<T, G> Generator<T> for PrintedAsDebug<G>
 where
     G: Generator<T>,
-    T: std::fmt::Debug,
+    T: Debug,
 {
     fn label(&self) -> u64 {
         self.source.label()
@@ -394,14 +369,10 @@ where
 impl<T, G> PrintableGenerator<T> for PrintedAsDebug<G>
 where
     G: Generator<T>,
-    T: std::fmt::Debug,
+    T: Debug,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
-        let value = self.source.do_draw(tc);
-        if printer.should_print() {
-            crate::pretty::print_debug_repr(&format!("{value:?}"), printer);
-        }
-        value
+        draw_and_print_value(&self.source, tc, printer)
     }
 }
 
@@ -447,7 +418,7 @@ impl<T, U, F, G> PrintableGenerator<U> for Mapped<T, U, F, G>
 where
     G: Generator<T>,
     F: Fn(T) -> U + Send + Sync,
-    U: PrettyPrintable,
+    U: Debug,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> U {
         draw_and_print_value(self, tc, printer)
@@ -462,12 +433,12 @@ where
     /// Make this mapped generator printable by printing `function` applied
     /// to the drawn input: `function(input)`.
     ///
-    /// A `map` to a foreign type usually resorts to
-    /// [`print_as_debug`](Generator::print_as_debug), whose output framed as
-    /// `let x = …;` can look like Rust without being pastable. The drawn
-    /// input often is pastable, so this prints it through the source
-    /// generator, wrapped in a call of `function` — the mapping function's
-    /// path, which cannot be recovered from the closure.
+    /// A `map` prints the mapped value's `Debug` output, which for a type
+    /// with an opaque or hand-written `Debug` implementation (`3v0` for a
+    /// tagged pointer, say) may not say how the value came about. This
+    /// prints the drawn input through the source generator instead, wrapped
+    /// in a call of `function` — the mapping function's path, which cannot
+    /// be recovered from the closure.
     ///
     /// # Example
     ///
@@ -688,10 +659,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
 }
 
 /// A boxed generator prints by value: the erased generator draws silently
-/// and the drawn value's own representation is printed. A custom printing
-/// strategy on the erased generator is not preserved — for that, erase with
-/// [`PrintableGenerator::boxed_printable`].
-impl<T: PrettyPrintable> PrintableGenerator<T> for BoxedGenerator<'_, T> {
+/// and the drawn value's `Debug` representation is printed. A custom
+/// printing strategy on the erased generator is not preserved — for that,
+/// erase with [`PrintableGenerator::boxed_printable`].
+impl<T: Debug> PrintableGenerator<T> for BoxedGenerator<'_, T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
     }

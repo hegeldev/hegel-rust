@@ -207,15 +207,16 @@ pub(crate) fn generator_param_ident(field_name: &str) -> syn::Ident {
     )
 }
 
-/// Emit the printing statements for one struct or enum-variant shape,
-/// matching the layout `#[derive(PrettyPrintable)]` produces: braced shapes
-/// as `Label { field: value, … }` with block indentation of 4 when broken,
-/// tuple shapes as `Label(value, …)` with continuation indentation of 1.
+/// Emit the printing statements for one struct or enum-variant shape, in
+/// the layout `#[derive(Debug)]` output takes once libhegel's reflower has
+/// laid it out: braced shapes as `Label { field: value, … }` with block
+/// indentation of 4 when broken, tuple shapes as `Label(value, …)` with
+/// continuation indentation of the open delimiter's width.
 ///
-/// `label` is the leading name (`Point`, `Shape::Circle`); `actions` are
-/// statement blocks that print each field's value — for the `PrettyPrintable`
-/// derive a `pretty_print` call, for the `DefaultGenerator` derive a
-/// draw-and-print of the field's generator — in declaration order.
+/// `label` is the leading name (`Point`, or `Circle` for an enum variant, as
+/// `Debug` writes it); `actions` are
+/// statement blocks that print each field's value — a draw-and-print of the
+/// field's generator — in declaration order.
 pub(crate) fn print_shape(
     label: &str,
     fields: &syn::Fields,

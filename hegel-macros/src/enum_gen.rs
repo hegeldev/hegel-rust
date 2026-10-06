@@ -398,7 +398,7 @@ pub(crate) fn derive_enum_generator(input: &DeriveInput, data: &syn::DataEnum) -
             let variant_name = &variant.ident;
             match &variant.fields {
                 Fields::Unit => {
-                    let label = format!("{enum_name}::{variant_name}");
+                    let label = variant_name.to_string();
                     quote! { #i => { __printer.text(#label); #enum_name::#variant_name } }
                 }
                 _ => {
@@ -708,7 +708,7 @@ fn generate_variant_generator(
     };
 
     let label = format!("{enum_name}::{variant_name}");
-    let print_body = print_shape(&label, &variant.fields, &print_actions);
+    let print_body = print_shape(&variant_name.to_string(), &variant.fields, &print_actions);
 
     quote! {
         #[doc = #struct_doc]

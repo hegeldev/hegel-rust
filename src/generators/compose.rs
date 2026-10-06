@@ -1,6 +1,7 @@
 use super::generators::draw_and_print_value;
 use super::{Generator, PrintableGenerator, TestCase};
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 /// A generator built from imperative code. Created by [`compose!`](crate::compose).
@@ -43,7 +44,7 @@ where
 
 impl<T, F> PrintableGenerator<T> for ComposedGenerator<T, F>
 where
-    T: PrettyPrintable,
+    T: Debug,
     F: Fn(&TestCase) -> T + Send + Sync,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {

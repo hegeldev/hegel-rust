@@ -65,7 +65,7 @@ impl<G, T> VecGenerator<G, T> {
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        printer.begin_group(5, "vec![");
+        printer.begin_group(1, "[");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut result = Vec::new();
         while collection.more() {
@@ -186,7 +186,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        printer.begin_group(15, "HashSet::from([");
+        printer.begin_group(1, "{");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = HashSet::new();
         while collection.more() {
@@ -205,7 +205,7 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
-        printer.end_group("])");
+        printer.end_group("}");
         set
     }
 }
@@ -316,7 +316,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        printer.begin_group(15, "HashMap::from([");
+        printer.begin_group(1, "{");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = HashMap::new();
         while collection.more() {
@@ -325,7 +325,6 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            speculation.printer().text("(");
             let key = draw_key(&self.keys, tc, speculation.printer());
             match map.entry(key) {
                 std::collections::hash_map::Entry::Occupied(_) => {
@@ -333,16 +332,15 @@ where
                     collection.reject(Some("duplicate key"));
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    speculation.printer().text(", ");
+                    speculation.printer().text(": ");
                     let value = draw_value(&self.values, tc, speculation.printer());
-                    speculation.printer().text(")");
                     speculation.commit();
                     entry.insert(value);
                 }
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
-        printer.end_group("])");
+        printer.end_group("}");
         map
     }
 }
@@ -430,7 +428,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        printer.begin_group(16, "BTreeSet::from([");
+        printer.begin_group(1, "{");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut set = BTreeSet::new();
         while collection.more() {
@@ -449,7 +447,7 @@ where
             }
         }
         hegel_internal_assert!(set.len() >= self.min_size);
-        printer.end_group("])");
+        printer.end_group("}");
         set
     }
 }
@@ -568,7 +566,7 @@ where
                 invalid_argument!("Cannot have max_size < min_size");
             }
         }
-        printer.begin_group(16, "BTreeMap::from([");
+        printer.begin_group(1, "{");
         let mut collection = Collection::new(tc, self.min_size, self.max_size);
         let mut map = BTreeMap::new();
         while collection.more() {
@@ -577,7 +575,6 @@ where
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            speculation.printer().text("(");
             let key = draw_key(&self.keys, tc, speculation.printer());
             match map.entry(key) {
                 std::collections::btree_map::Entry::Occupied(_) => {
@@ -585,16 +582,15 @@ where
                     collection.reject(Some("duplicate key"));
                 }
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    speculation.printer().text(", ");
+                    speculation.printer().text(": ");
                     let value = draw_value(&self.values, tc, speculation.printer());
-                    speculation.printer().text(")");
                     speculation.commit();
                     entry.insert(value);
                 }
             }
         }
         hegel_internal_assert!(map.len() >= self.min_size);
-        printer.end_group("])");
+        printer.end_group("}");
         map
     }
 }

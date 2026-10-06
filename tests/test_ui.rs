@@ -55,45 +55,6 @@ fn e0283_note_uses_must_implement_wording() -> bool {
     panic!("unrecognized E0283 note wording; add a golden for it:\n{stderr}");
 }
 
-/// rustc also changed how it annotates a "required for" note that points at
-/// a `#[derive(..)]` span: the MSRV toolchain says ``unsatisfied trait bound
-/// introduced in this `derive` macro`` where newer toolchains say ``type
-/// parameter would need to implement …`` and add a "consider manually
-/// implementing" help. Probed like
-/// [`e0283_note_uses_must_implement_wording`], with a dependency-free
-/// derive whose generated impl has an unsatisfiable bound.
-fn derive_bound_note_uses_type_parameter_wording() -> bool {
-    let dir = tempfile::tempdir().unwrap();
-    let probe = dir.path().join("probe.rs");
-    std::fs::write(
-        &probe,
-        "#[derive(Clone)] struct Foo<T>(T);\n\
-         struct NoClone;\n\
-         fn need<T: Clone>(_: T) {}\n\
-         fn main() { need(Foo(NoClone)); }\n",
-    )
-    .unwrap();
-    let output = Command::new(rustc_binary())
-        .args(["--edition", "2021", "--crate-name", "probe"])
-        .arg(&probe)
-        .current_dir(dir.path())
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        !output.status.success(),
-        "the derive-bound probe unexpectedly compiled"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.contains("type parameter would need to implement") {
-        return true;
-    }
-    if stderr.contains("unsatisfied trait bound introduced in this") {
-        return false;
-    }
-    panic!("unrecognized derive-bound note wording; add a golden for it:\n{stderr}");
-}
-
 /// rustc also changed how it renders the "the trait `X` is not implemented
 /// for `Y`" help when `Y` is a local type: the MSRV toolchain prints it as an
 /// inline `= help:` note where newer toolchains print a `help:` block with a
@@ -226,7 +187,9 @@ fn newest_hegel_rlib(dirs: &[PathBuf]) -> PathBuf {
 ///   across toolchains;
 /// - a type too long for a `required for` note is elided as `, ...>` by
 ///   stable but `, _>` by nightly; the nightly form is rewritten to
-///   stable's;
+///   stable's, and the `unsatisfied requirement introduced here` label of
+///   a conditional-impl help, which nightly elides whole to `_: Trait<_>`,
+///   drops its requirement (the `required for` notes spell it out);
 /// - a `required by a bound in` note keeps only the source line its `^^^`
 ///   label points at: newer toolchains also print the enclosing item's
 ///   header (`impl TestCase {`) above it, with a `...` line for the gap.
@@ -304,6 +267,13 @@ fn normalize_e0283_stderr(raw: &str) -> String {
         }
         if trimmed.starts_with("= note: required for ") {
             out.push(format!(" {}", trimmed.replace(", _>", ", ...>")));
+            continue;
+        }
+        if let Some(index) = trimmed.find("unsatisfied requirement introduced here: `") {
+            out.push(format!(
+                " {}unsatisfied requirement introduced here",
+                &trimmed[..index]
+            ));
             continue;
         }
         if trimmed.starts_with('|') || trimmed.starts_with('=') {
@@ -417,55 +387,23 @@ fn e0283_diagnostic() {
     check_against_golden(&actual, golden);
 }
 
-/// The error a user sees when a derived generator's customized field
-/// generator is not printable and the result is drawn with `tc.draw`. Pinned
-/// because the "required for" chain names the derive's hidden generator
-/// type: the headline message and escape-hatch notes have to carry the
-/// explanation on their own. Checked by hand for the same reason as the
-/// E0283 case — the diagnostic enumerates `PrintableGenerator` implementors,
-/// which vary with the feature set — and golden-split by the derive-bound
-/// note wording. Regenerate with `TRYBUILD=overwrite`, once on the MSRV
-/// toolchain and once on a current one.
-#[test]
-fn derived_generator_non_printable_field_diagnostic() {
-    let actual = compile_failing_case("tests/ui-printability/derive_non_printable_field_draw.rs");
-    let golden = if derive_bound_note_uses_type_parameter_wording() {
-        "tests/ui-printability/derive_non_printable_field_draw-current.stderr"
-    } else {
-        "tests/ui-printability/derive_non_printable_field_draw-msrv.stderr"
-    };
-    check_against_golden(&actual, golden);
-}
-
-/// The error a user sees when a `#[derive(PrettyPrintable)]` field's type is
-/// not printable. Pinned because this diagnostic is the discovery path for
-/// `#[pretty(debug)]`: it must point at the offending field and give the
-/// derive-specific fixes, not draw-site advice. Checked by hand because it
-/// enumerates `PrettyPrintable` implementors, which vary with the feature
-/// set and toolchain.
-#[test]
-fn derive_non_printable_field_diagnostic() {
-    let actual = compile_failing_case("tests/ui-printability/derive_non_printable_field.rs");
-    let golden = if trait_help_has_source_pointer() {
-        "tests/ui-printability/derive_non_printable_field-current.stderr"
-    } else {
-        "tests/ui-printability/derive_non_printable_field-msrv.stderr"
-    };
-    check_against_golden(&actual, golden);
-}
-
 /// A `one_of!` over non-printable components passed to `tc.draw`. Checked by
 /// hand for the same reason as the E0283 case — the diagnostic enumerates
-/// `PrettyPrintable` implementors, which vary with the feature set and
-/// toolchain — but with the long-type elision normalized the rest of the
-/// wording is toolchain-stable, so a single golden suffices.
+/// `Debug` implementors, which vary with the toolchain — and golden-split by
+/// the trait-help wording: the MSRV toolchain explains the missing `Debug`
+/// with inline notes, newer ones with a `help:` block pointing at the
+/// conditional `PrintableGenerator` impl. Regenerate with
+/// `TRYBUILD=overwrite`, once on the MSRV toolchain and once on a current
+/// one.
 #[test]
 fn one_of_non_printable_draw_diagnostic() {
     let actual = compile_failing_case("tests/ui-printability/one_of_non_printable_draw.rs");
-    check_against_golden(
-        &actual,
-        "tests/ui-printability/one_of_non_printable_draw.stderr",
-    );
+    let golden = if trait_help_has_source_pointer() {
+        "tests/ui-printability/one_of_non_printable_draw-current.stderr"
+    } else {
+        "tests/ui-printability/one_of_non_printable_draw-msrv.stderr"
+    };
+    check_against_golden(&actual, golden);
 }
 
 #[test]

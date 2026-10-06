@@ -93,7 +93,7 @@ fn test_default_btree_set() {
 
 #[test]
 fn test_default_derive_with_btree_fields() {
-    #[derive(Debug, hegel::DefaultGenerator, hegel::PrettyPrintable)]
+    #[derive(Debug, hegel::DefaultGenerator)]
     struct HasBTrees {
         #[allow(dead_code)]
         map: std::collections::BTreeMap<u8, u8>,

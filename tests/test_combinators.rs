@@ -222,7 +222,7 @@ fn test_sampled_from_accepts_array(tc: TestCase) {
 
 #[hegel::test]
 fn test_sampled_from_non_primitive(tc: TestCase) {
-    #[derive(Clone, Debug, PartialEq, hegel::PrettyPrintable)]
+    #[derive(Clone, Debug, PartialEq)]
     struct Point {
         x: i32,
         y: i32,
@@ -561,8 +561,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let draw_1 = vec![0, 0];"),
-            "expected `let draw_1 = vec![0, 0];` in the captured report:\n{}",
+            output.contains("let draw_1 = [0, 0];"),
+            "expected `let draw_1 = [0, 0];` in the captured report:\n{}",
             output
         );
         assert!(
@@ -596,8 +596,8 @@ mod arbitrary_data {
         assert!(result.is_err(), "expected the property to fail");
         let output = lines.join("\n");
         assert!(
-            output.contains("let some_numbers = vec![0, 0];"),
-            "expected `let some_numbers = vec![0, 0];` in the captured report:\n{}",
+            output.contains("let some_numbers = [0, 0];"),
+            "expected `let some_numbers = [0, 0];` in the captured report:\n{}",
             output
         );
         assert!(

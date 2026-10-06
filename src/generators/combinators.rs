@@ -3,9 +3,10 @@ use super::{
     BoxedPrintableGenerator, Generator, PrintableGenerator, TestCase, combine_labels, integers,
     label_from_name,
 };
-use crate::pretty::{PrettyPrintable, PrettyPrinter};
+use crate::pretty::PrettyPrinter;
 use crate::test_case::invalid_argument;
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 const ONE_OF_LABEL: u64 = label_from_name("hegel.one_of");
@@ -31,7 +32,7 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
     }
 }
 
-impl<'a, T: Clone + Send + Sync + PrettyPrintable + 'a> PrintableGenerator<T>
+impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<T>
     for SampledFromGenerator<'a, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
@@ -208,7 +209,7 @@ impl<T, G: PrintableGenerator<T>, R: PrintableAlternatives<T>> PrintableAlternat
 /// Choose from multiple generators of the same type.
 ///
 /// Accepts any iterable of boxed generators: `Vec<BoxedGenerator<T>>`
-/// (printable whenever `T` is [`PrettyPrintable`]) or
+/// (printable whenever `T` is [`Debug`]) or
 /// `Vec<BoxedPrintableGenerator<T>>` (each generator keeps its own
 /// printing). For a more convenient syntax, use the `one_of!` macro instead.
 pub fn one_of<'a, T, B, I>(generators: I) -> OneOfGenerator<'a, T, Vec<B>>

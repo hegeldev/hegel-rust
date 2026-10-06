@@ -76,6 +76,7 @@
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
  *     hegel_generate_string      ->  hegel_generate_string_result_free
  *     hegel_printer_options_new  ->  hegel_printer_options_free
+ *     hegel_reflow_options_new   ->  hegel_reflow_options_free
  *     hegel_printer_new          ->  hegel_printer_free
  *     hegel_printer_deferred     ->  hegel_printer_free
  *     hegel_test_case_printer    ->  hegel_printer_free
@@ -436,7 +437,10 @@ typedef struct hegel_pool_t hegel_pool_t;
  delimit the groups those decisions are made over. Breaking is
  all-or-nothing per group, decided outermost groups first. The engine only
  provides the layout machinery; what gets printed — and in which language's
- syntax — is entirely the client's choice.
+ syntax — is entirely the client's choice. A client that can only format a
+ value flat — with its language's default debug formatter — hands the
+ result to `hegel_printer_reflow`, which recovers the bracket structure
+ and emits it through those same primitives.
 
  Two facilities support printing values *while generating them*:
  `hegel_printer_deferred` opens a hole whose content is written later
@@ -518,6 +522,17 @@ typedef struct hegel_printer_options_t hegel_printer_options_t;
  frees.
  */
 typedef struct HegelRecursion HegelRecursion;
+
+/*
+ Options for `hegel_printer_reflow`.
+
+ Construct with `hegel_reflow_options_new` and free with
+ `hegel_reflow_options_free`. There are no settable options yet; the
+ handle exists so that reflow calls have somewhere to take them when they
+ arrive, without changing any signature. Every option will have a
+ default, and a NULL options pointer means "all defaults".
+ */
+typedef struct hegel_reflow_options_t hegel_reflow_options_t;
 
 /*
  In-flight property-test run.
@@ -2487,6 +2502,53 @@ hegel_result_t hegel_printer_end_group(hegel_context_t *ctx,
 hegel_result_t hegel_printer_shift_indent(hegel_context_t *ctx,
                                           hegel_printer_t *printer,
                                           int64_t delta);
+
+/*
+ Create a reflow-options handle with every option at its default.
+
+ On success writes a caller-owned handle into `*out_options` (release with
+ `hegel_reflow_options_free`) and returns `HEGEL_OK`. Returns
+ `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+ */
+hegel_result_t hegel_reflow_options_new(hegel_context_t *ctx, hegel_reflow_options_t **out_options);
+
+/*
+ Free an options handle previously returned by `hegel_reflow_options_new`.
+ Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+ */
+hegel_result_t hegel_reflow_options_free(hegel_context_t *ctx, hegel_reflow_options_t *options);
+
+/*
+ Re-emit a one-line debug representation — `len` bytes of UTF-8 at `text`
+ — through the printer's groups and break points, so a value the client
+ can only format flat (Rust's `{:?}`, Go's `%#v`, Python's `repr`,
+ JavaScript's `util.inspect`, Java's `toString`, …) wraps like one printed
+ structurally.
+
+ The representation is parsed with a language-agnostic grammar: items
+ separated by `, ` or `; ` inside `(…)`, `[…]` and `{…}` groups, with
+ quoted literals (`"…"`, `'…'`, backslash escapes) kept whole and any text
+ glued to an open delimiter (`Some(`, `main.Point{`, `Point {`) treated as
+ the group's prefix. Delimiter text is preserved verbatim, so a
+ representation that fits on one line renders exactly as passed. Each
+ group lays out inline when it fits and one item per line when it does
+ not: a group whose open delimiter is followed by a space (`Point { x: 1 }`,
+ `{ a: 1 }`) in block style, indented four columns, and any other group
+ aligned just past its open delimiter. Text that does not parse as that
+ grammar (a hand-written formatter can produce anything), or that nests
+ more than 64 groups deep, is emitted verbatim; unlike `hegel_printer_text`
+ this call accepts newlines, honoring each as a hard break.
+
+ `options` may be NULL for defaults (see `hegel_reflow_options_t`).
+ Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+ deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+ text or a NULL `text` with `len > 0`.
+ */
+hegel_result_t hegel_printer_reflow(hegel_context_t *ctx,
+                                    hegel_printer_t *printer,
+                                    const hegel_reflow_options_t *options,
+                                    const uint8_t *text,
+                                    size_t len);
 
 /*
  Open a deferred hole at the handle's current position and write a

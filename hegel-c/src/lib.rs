@@ -253,6 +253,7 @@ use crate::embed::{data_source_for_blob, run_native_async};
 use crate::exchange::CaseExchange;
 use crate::native::bignum::BigInt;
 use crate::native::printer::{Printer, PrinterError, Target as PrinterTarget};
+use crate::native::reflow::{ReflowOptions, reflow};
 use crate::settings::{
     Backend, Database, HealthCheck, NondeterminismStrictness, Output, Phase, Settings, Verbosity,
 };
@@ -5217,7 +5218,10 @@ unsafe fn event_observation(
 /// delimit the groups those decisions are made over. Breaking is
 /// all-or-nothing per group, decided outermost groups first. The engine only
 /// provides the layout machinery; what gets printed — and in which language's
-/// syntax — is entirely the client's choice.
+/// syntax — is entirely the client's choice. A client that can only format a
+/// value flat — with its language's default debug formatter — hands the
+/// result to `hegel_printer_reflow`, which recovers the bracket structure
+/// and emits it through those same primitives.
 ///
 /// Two facilities support printing values *while generating them*:
 /// `hegel_printer_deferred` opens a hole whose content is written later
@@ -5757,6 +5761,111 @@ pub unsafe extern "C" fn hegel_printer_shift_indent(
     };
     let delta = isize::try_from(delta.clamp(isize::MIN as i64, isize::MAX as i64)).unwrap();
     match handle.inner.lock().shift_indent(handle.target, delta) {
+        Ok(()) => HEGEL_OK,
+        Err(e) => translate_printer_error(ctx, FN, e),
+    }
+}
+
+/// Options for `hegel_printer_reflow`.
+///
+/// Construct with `hegel_reflow_options_new` and free with
+/// `hegel_reflow_options_free`. There are no settable options yet; the
+/// handle exists so that reflow calls have somewhere to take them when they
+/// arrive, without changing any signature. Every option will have a
+/// default, and a NULL options pointer means "all defaults".
+pub struct HegelReflowOptions {
+    inner: ReflowOptions,
+}
+
+/// Create a reflow-options handle with every option at its default.
+///
+/// On success writes a caller-owned handle into `*out_options` (release with
+/// `hegel_reflow_options_free`) and returns `HEGEL_OK`. Returns
+/// `HEGEL_E_INVALID_ARG` for a NULL `out_options`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_reflow_options_new(
+    ctx: *mut HegelContext,
+    out_options: *mut *mut HegelReflowOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if out_options.is_null() {
+        set_last_error(ctx, "hegel_reflow_options_new: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let options = Box::into_raw(Box::new(HegelReflowOptions {
+        inner: ReflowOptions::default(),
+    }));
+    unsafe { *out_options = options };
+    HEGEL_OK
+}
+
+/// Free an options handle previously returned by `hegel_reflow_options_new`.
+/// Safe to call with NULL (a no-op that returns `HEGEL_OK`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_reflow_options_free(
+    ctx: *mut HegelContext,
+    options: *mut HegelReflowOptions,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    if !options.is_null() {
+        drop(unsafe { Box::from_raw(options) });
+    }
+    HEGEL_OK
+}
+
+/// Re-emit a one-line debug representation — `len` bytes of UTF-8 at `text`
+/// — through the printer's groups and break points, so a value the client
+/// can only format flat (Rust's `{:?}`, Go's `%#v`, Python's `repr`,
+/// JavaScript's `util.inspect`, Java's `toString`, …) wraps like one printed
+/// structurally.
+///
+/// The representation is parsed with a language-agnostic grammar: items
+/// separated by `, ` or `; ` inside `(…)`, `[…]` and `{…}` groups, with
+/// quoted literals (`"…"`, `'…'`, backslash escapes) kept whole and any text
+/// glued to an open delimiter (`Some(`, `main.Point{`, `Point {`) treated as
+/// the group's prefix. Delimiter text is preserved verbatim, so a
+/// representation that fits on one line renders exactly as passed. Each
+/// group lays out inline when it fits and one item per line when it does
+/// not: a group whose open delimiter is followed by a space (`Point { x: 1 }`,
+/// `{ a: 1 }`) in block style, indented four columns, and any other group
+/// aligned just past its open delimiter. Text that does not parse as that
+/// grammar (a hand-written formatter can produce anything), or that nests
+/// more than 64 groups deep, is emitted verbatim; unlike `hegel_printer_text`
+/// this call accepts newlines, honoring each as a hard break.
+///
+/// `options` may be NULL for defaults (see `hegel_reflow_options_t`).
+/// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
+/// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
+/// text or a NULL `text` with `len > 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_printer_reflow(
+    ctx: *mut HegelContext,
+    printer: *mut HegelPrinter,
+    options: *const HegelReflowOptions,
+    text: *const u8,
+    len: usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    const FN: &str = "hegel_printer_reflow";
+    let (handle, _guard) = match unsafe { printer_guard(ctx, FN, printer) } {
+        Ok(pair) => pair,
+        Err(rc) => return rc,
+    };
+    let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
+        Ok(Some(text)) => text,
+        Ok(None) if len == 0 => String::new(),
+        Ok(None) => {
+            set_last_error(ctx, &format!("{FN}: text is null"));
+            return HEGEL_E_INVALID_ARG;
+        }
+        Err(rc) => return rc,
+    };
+    let default_options = ReflowOptions::default();
+    let options = match unsafe { options.as_ref() } {
+        Some(options) => &options.inner,
+        None => &default_options,
+    };
+    match handle.record(|printer, target| reflow(printer, target, &text, options)) {
         Ok(()) => HEGEL_OK,
         Err(e) => translate_printer_error(ctx, FN, e),
     }

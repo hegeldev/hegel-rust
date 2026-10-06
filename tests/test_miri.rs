@@ -181,13 +181,13 @@ fn map_filter_flatmap() {
     check(g, |v: &Vec<bool>| v.len() <= 3);
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 struct Point {
     x: i32,
     y: i32,
 }
 
-#[derive(DeriveGenerator, hegel::PrettyPrintable, Debug, Clone)]
+#[derive(DeriveGenerator, Debug, Clone)]
 enum Shape {
     Empty,
     Circle(u32),

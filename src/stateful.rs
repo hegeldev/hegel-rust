@@ -322,7 +322,7 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     }
 }
 
-impl<'a, T: crate::PrettyPrintable> crate::generators::PrintableGenerator<&'a T>
+impl<'a, T: std::fmt::Debug> crate::generators::PrintableGenerator<&'a T>
     for ValuesReusable<'a, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> &'a T {
@@ -353,7 +353,7 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
     }
 }
 
-impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T> for ValuesConsumed<'_, T> {
+impl<T: std::fmt::Debug> crate::generators::PrintableGenerator<T> for ValuesConsumed<'_, T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
         crate::generators::draw_and_print_value(self, tc, printer)
     }
@@ -481,7 +481,7 @@ impl<T: Clone> Generator<T> for ConcurrentValuesReusable<'_, T> {
     }
 }
 
-impl<T: Clone + crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+impl<T: Clone + std::fmt::Debug> crate::generators::PrintableGenerator<T>
     for ConcurrentValuesReusable<'_, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
@@ -508,7 +508,7 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     }
 }
 
-impl<T: crate::PrettyPrintable> crate::generators::PrintableGenerator<T>
+impl<T: std::fmt::Debug> crate::generators::PrintableGenerator<T>
     for ConcurrentValuesConsumed<'_, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {

@@ -338,7 +338,7 @@ pub use control::currently_in_test_context;
 pub use explicit_test_case::ExplicitTestCase;
 pub use generators::Generator;
 pub use generators::PrintableGenerator;
-pub use pretty::{Document, PrettyPrintable, PrettyPrinter};
+pub use pretty::{Document, PrettyPrinter};
 pub use test_case::TestCase;
 
 /// The imports nearly every hegel test wants in scope.
@@ -354,15 +354,15 @@ pub use test_case::TestCase;
 /// ```
 ///
 /// Brings in the [`Generator`] and [`PrintableGenerator`] traits (so
-/// combinator and boxing methods resolve), the [`PrettyPrintable`] and
-/// [`DefaultGenerator`](generators::DefaultGenerator) traits and their
-/// derive macros, [`TestCase`], and the [`generators`] module both under
-/// its own name and its conventional alias `gs`.
+/// combinator and boxing methods resolve), the
+/// [`DefaultGenerator`](generators::DefaultGenerator) trait and its derive
+/// macro, [`TestCase`], and the [`generators`] module both under its own
+/// name and its conventional alias `gs`.
 pub mod prelude {
     pub use crate::DefaultGenerator;
+    pub use crate::TestCase;
     pub use crate::generators;
     pub use crate::generators::{self as gs, DefaultGenerator, Generator, PrintableGenerator};
-    pub use crate::{PrettyPrintable, TestCase};
 }
 
 #[doc(hidden)]
@@ -380,19 +380,17 @@ pub use runner::TestLocation;
 /// another crate, see [`derive_generator!`](crate::derive_generator) instead.
 ///
 /// The derived generator prints values field by field as it draws them, in
-/// the same Rust-expression format `#[derive(PrettyPrintable)]` produces,
-/// so the type itself needs no [`PrettyPrintable`] implementation. It is
-/// generic over its field generators — mirroring `one_of!` and tuples — and
-/// is a [`PrintableGenerator`] exactly when every field generator is one:
-/// the builder methods accept any [`Generator`] of the field's type, and a
+/// the same `Name { field: value, … }` shape `#[derive(Debug)]` output
+/// takes, so the type itself needs no `Debug` implementation. It is generic
+/// over its field generators — mirroring `one_of!` and tuples — and is a
+/// [`PrintableGenerator`] exactly when every field generator is one: the
+/// builder methods accept any [`Generator`] of the field's type, and a
 /// non-printable field generator simply makes the result silent-only (or
-/// printable again via [`print_as_value`](generators::Generator::print_as_value),
-/// [`print_as_debug`](generators::Generator::print_as_debug), or
-/// [`print_with`](generators::Generator::print_with)). Because the derived
-/// generator prints compositionally, a hand-written [`PrettyPrintable`]
-/// implementation on the type is **not consulted** for its failing-example
-/// output; a type that wants a different printed representation implements
-/// [`DefaultGenerator`] by hand.
+/// printable again via [`print_with`](generators::Generator::print_with)).
+/// Because the derived generator prints compositionally, a hand-written
+/// `Debug` implementation on the type is **not consulted** for its
+/// failing-example output; a type that wants a different printed
+/// representation implements [`DefaultGenerator`] by hand.
 ///
 /// For structs, the generated generator has:
 /// - `<field>(generator)` - builder method to customize each field's generator
@@ -466,50 +464,6 @@ pub use runner::TestLocation;
 /// ```
 pub use hegel_macros::DefaultGenerator;
 
-/// Derive [`PrettyPrintable`] for a struct or enum.
-///
-/// The generated implementation prints the value in Rust-expression syntax —
-/// `Name { field: value, … }`, `Name(value, …)`, and `Name::Variant …` for
-/// enums — using the printer's group machinery so values that do not fit on
-/// one line wrap with each field on its own line. Every generic type
-/// parameter is given a [`PrettyPrintable`] bound, mirroring how
-/// `derive(Debug)` bounds `Debug`.
-///
-/// For a type whose `Debug` output is already the representation you want
-/// (or one you cannot add a derive to), use
-/// [`pretty_print_as_debug!`](crate::pretty_print_as_debug) instead.
-///
-/// A field whose type cannot implement [`PrettyPrintable`] — a foreign type
-/// the orphan rule keeps out, say — can opt out with `#[pretty(debug)]`:
-/// that field prints its `Debug` representation (re-laid-out through the
-/// printer, like [`print_as_debug`](generators::Generator::print_as_debug)),
-/// and its type must implement `Debug` instead.
-///
-/// ```
-/// use hegel::{Document, PrettyPrintable};
-///
-/// #[derive(PrettyPrintable)]
-/// struct Person {
-///     name: String,
-///     age: u32,
-///     #[pretty(debug)]
-///     home: std::path::PathBuf,
-/// }
-///
-/// let person = Person {
-///     name: "Ada".to_string(),
-///     age: 36,
-///     home: "/home/ada".into(),
-/// };
-/// let mut doc = Document::new();
-/// person.pretty_print(doc.printer());
-/// assert_eq!(
-///     doc.finish(),
-///     "Person { name: \"Ada\".to_string(), age: 36, home: \"/home/ada\" }"
-/// );
-/// ```
-pub use hegel_macros::PrettyPrintable;
-
 /// Define a composite generator from a function.
 ///
 /// The first parameter must be a `&`[`TestCase`] and is passed automatically
@@ -548,7 +502,7 @@ pub use hegel_macros::PrettyPrintable;
 /// ```no_run
 /// use hegel::generators as gs;
 ///
-/// #[derive(Debug, Clone, hegel::PrettyPrintable)]
+/// #[derive(Debug, Clone)]
 /// enum Tree {
 ///     Leaf,
 ///     Branch(Box<Tree>, Box<Tree>),

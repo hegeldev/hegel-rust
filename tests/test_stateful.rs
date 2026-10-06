@@ -385,7 +385,7 @@ mod stateful {
         );
     }
 
-    #[derive(Debug, hegel::PrettyPrintable)]
+    #[derive(Debug)]
     struct DepthCharge {
         depth: i64,
     }
