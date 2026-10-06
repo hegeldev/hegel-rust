@@ -140,7 +140,7 @@ fn a_flaky_failure_over_a_collection_is_confirmed_and_shrunk() {
         "the failure must confirm by replay:\n{text}"
     );
     assert!(
-        text.contains("let draw_1 = vec![0, 0];"),
+        text.contains("let draw_1 = [0, 0];"),
         "the collection must shrink to the two elements the failure needs:\n{text}"
     );
 }
