@@ -2097,7 +2097,8 @@ hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
  `include_characters` / `exclude_characters`: UTF-8 buffers (pointer
    plus byte length) of individual characters. Characters in
    `include_characters` are included first, then characters in
-   `exclude_characters` are removed.
+   `exclude_characters` are removed. NULL with zero length means an
+   empty buffer; NULL with nonzero length is invalid.
 
  Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for constraints that leave
  no characters while `max_size > 0`.
