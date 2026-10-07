@@ -2110,6 +2110,10 @@ pub unsafe extern "C" fn hegel_settings_get_nondeterminism_strictness(
 /// - `HEGEL_FUZZ_REPRODUCE`: a prefix file replayed like a database entry
 ///   under the settings' database key, with no generation: a reproduced
 ///   failure is shrunk, reported and saved to the database.
+/// - `HEGEL_FUZZ_TRACE`: a file path. Every choice of the one test case is
+///   appended there as it is drawn, in the entry format without its count
+///   header, so a case that kills the process still leaves its choice
+///   sequence behind. A cloned stream is traced as an empty clone.
 /// - `HEGEL_FUZZ_TEST`: the database key the variables are for; a run
 ///   under any other key executes no test case.
 #[unsafe(no_mangle)]

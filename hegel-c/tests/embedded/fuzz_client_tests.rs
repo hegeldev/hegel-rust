@@ -51,10 +51,12 @@ fn an_output_path_selects_a_case_with_an_empty_prefix_and_random_misfits() {
             prefix,
             output,
             random_misfits,
+            trace,
         } => {
             assert!(prefix.is_empty());
             assert_eq!(output, "/some/record.json");
             assert!(random_misfits);
+            assert_eq!(trace, None);
         }
         _ => panic!("expected a case"),
     }
@@ -180,7 +182,91 @@ fn case(prefix: &[ChoiceValue], output: &std::path::Path) -> FuzzMode {
         prefix: prefix.to_vec(),
         output: output.to_str().unwrap().to_string(),
         random_misfits: true,
+        trace: None,
     }
+}
+
+fn traced_case(output: &std::path::Path, trace: &std::path::Path) -> FuzzMode {
+    FuzzMode::Case {
+        prefix: Vec::new(),
+        output: output.to_str().unwrap().to_string(),
+        random_misfits: true,
+        trace: Some(trace.to_str().unwrap().to_string()),
+    }
+}
+
+#[test]
+fn a_trace_path_is_read_from_the_environment() {
+    let mode = from_env_with(env_of(&[(OUTPUT_VAR, "/out"), (TRACE_VAR, "/trace")]), None)
+        .unwrap()
+        .unwrap();
+    match mode {
+        FuzzMode::Case { trace, .. } => assert_eq!(trace.as_deref(), Some("/trace")),
+        other => panic!("{other:?}"),
+    }
+    let mode = from_env_with(env_of(&[(OUTPUT_VAR, "/out"), (TRACE_VAR, "")]), None)
+        .unwrap()
+        .unwrap();
+    match mode {
+        FuzzMode::Case { trace, .. } => assert_eq!(trace, None),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_trace_holds_every_choice_as_it_is_drawn_without_the_count() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    let trace = dir.path().join("trace");
+    std::fs::write(&trace, b"stale").unwrap();
+    let seen = std::sync::Mutex::new(Vec::new());
+    drive_mode(traced_case(&out, &trace), &quiet_settings(), None, |ds| {
+        let a = draw_int(ds, 0, 100).unwrap();
+        seen.lock()
+            .unwrap()
+            .push(std::fs::read(&trace).unwrap().len());
+        ds.generate_boolean(0.5, None).unwrap();
+        seen.lock()
+            .unwrap()
+            .push(std::fs::read(&trace).unwrap().len());
+        let child = ds.clone_stream().unwrap();
+        draw_int(&*child, 0, 100).unwrap();
+        let _ = a;
+        TestCaseResult::Valid
+    })
+    .unwrap();
+    let record = read_record(&out);
+    assert_eq!(record["choices"][2]["kind"], "clone");
+    let expected = serialize_choices(&[
+        int(record["choices"][0]["value"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()),
+        ChoiceValue::Boolean(record["choices"][1]["value"].as_bool().unwrap()),
+    ])
+    .unwrap();
+    let traced = std::fs::read(&trace).unwrap();
+    assert_eq!(traced[..traced.len() - 5], expected[4..]);
+    assert_eq!(&traced[traced.len() - 5..], &[5, 0, 0, 0, 0]);
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[expected.len() - 4 - 2, expected.len() - 4]
+    );
+}
+
+#[test]
+fn an_unwritable_trace_path_is_a_usage_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    let trace = dir.path().join("missing").join("trace");
+    let err = drive_mode(traced_case(&out, &trace), &quiet_settings(), None, |_| {
+        TestCaseResult::Valid
+    })
+    .unwrap_err();
+    let message = usage_message(err);
+    assert!(message.contains("HEGEL_FUZZ_TRACE="), "{message}");
+    assert!(message.contains("could not be written"), "{message}");
 }
 
 fn read_record(path: &std::path::Path) -> serde_json::Value {

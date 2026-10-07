@@ -46,6 +46,20 @@ fn fuzz_output_runs_one_case_and_records_it() {
 }
 
 #[test]
+fn fuzz_trace_streams_the_choices_without_the_count() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    let trace = dir.path().join("trace");
+    fixture(BASIC_MAIN)
+        .env("HEGEL_FUZZ_OUTPUT", out.to_str().unwrap())
+        .env("HEGEL_FUZZ_TRACE", trace.to_str().unwrap())
+        .run();
+    let record = read_record(&out);
+    let entry = base64_decode(record["choices_base64"].as_str().unwrap());
+    assert_eq!(std::fs::read(&trace).unwrap(), entry[4..]);
+}
+
+#[test]
 fn fuzz_output_records_a_failure_and_the_run_fails_as_usual() {
     let dir = tempfile::TempDir::new().unwrap();
     let out = dir.path().join("record.json");

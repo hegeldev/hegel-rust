@@ -335,6 +335,7 @@ run first.
 | `HEGEL_FUZZ_PREFIX` | run start | Fuzzer client: a file holding the choice sequence the one test case replays before drawing randomly. |
 | `HEGEL_FUZZ_MISFIT` | run start | Fuzzer client: `random` (the default) or `simplest`, what replaces a prefix value that no longer fits its draw. |
 | `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking and persisting the failure it reproduces. |
+| `HEGEL_FUZZ_TRACE` | run start | Fuzzer client: a file every choice of the one test case is appended to as it is drawn, for recovering the sequence of a case that kills the process. |
 | `HEGEL_FUZZ_TEST` | run start | Fuzzer client: the database key of the test the `HEGEL_FUZZ_*` variables are for; every other test runs no test case. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
 
@@ -404,6 +405,13 @@ failure database, and the failure it reproduces is shrunk, reported and
 saved to the database, so the test's normal runs replay it from then on.
 Nothing is generated; a run with no failure means the entry no longer
 fails.
+
+`HEGEL_FUZZ_TRACE` names a file the case appends every choice to as it
+is drawn, in the entry format without its leading count, so a case that
+aborts or is killed before the record is written still leaves its choice
+sequence behind; a fuzzer runs a crashing prefix and seed once more with
+the variable set to learn what the case drew. A cloned stream is traced
+as an empty clone when it is opened.
 
 `HEGEL_FUZZ_TEST` names the database key of the test the variables are
 for (`module_path::function_name`, the `test` field of the record). Every

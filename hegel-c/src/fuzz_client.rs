@@ -43,6 +43,7 @@ const PREFIX_VAR: &str = "HEGEL_FUZZ_PREFIX";
 const REPRODUCE_VAR: &str = "HEGEL_FUZZ_REPRODUCE";
 const TEST_VAR: &str = "HEGEL_FUZZ_TEST";
 const MISFIT_VAR: &str = "HEGEL_FUZZ_MISFIT";
+const TRACE_VAR: &str = "HEGEL_FUZZ_TRACE";
 
 /// What the environment asks of this run.
 #[derive(Debug)]
@@ -52,6 +53,7 @@ pub(crate) enum FuzzMode {
         prefix: Vec<ChoiceValue>,
         output: String,
         random_misfits: bool,
+        trace: Option<String>,
     },
     /// Replay `entry` like a database entry: shrink and persist a failure.
     Reproduce { entry: Vec<u8> },
@@ -108,6 +110,7 @@ fn from_env_with(
         prefix,
         output,
         random_misfits,
+        trace: var(TRACE_VAR),
     }))
 }
 
@@ -148,11 +151,23 @@ pub(crate) async fn run(
             prefix,
             output,
             random_misfits,
+            trace,
         } => {
+            if let Some(path) = &trace {
+                if crate::sys::fs::write(path, &[]).is_err() {
+                    return Err(usage(format!("{TRACE_VAR}={path} could not be written")));
+                }
+            }
             let started = crate::sys::Instant::now();
-            let run =
-                test_runner::fuzz_case(settings, database_key, &prefix, random_misfits, exchange)
-                    .await?;
+            let run = test_runner::fuzz_case(
+                settings,
+                database_key,
+                &prefix,
+                random_misfits,
+                trace.as_deref(),
+                exchange,
+            )
+            .await?;
             let elapsed = started.map(|started| started.elapsed());
             let record = record_json(database_key, &prefix, &run, elapsed);
             if crate::sys::fs::write(&output, record.as_bytes()).is_err() {

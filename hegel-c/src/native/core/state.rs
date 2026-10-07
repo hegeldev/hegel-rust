@@ -1701,6 +1701,9 @@ pub struct NativeTestCase {
     /// unit value. Set by [`Self::random_misfits`]; copied into every
     /// cloned stream.
     random_misfits: bool,
+    /// A file every choice of this stream is appended to as it is drawn,
+    /// so the sequence survives the process: set by [`Self::trace_to`].
+    trace: Option<String>,
 }
 
 impl NativeTestCase {
@@ -1860,6 +1863,7 @@ impl NativeTestCase {
             observer,
             trailing_template,
             random_misfits: false,
+            trace: None,
         }
     }
 
@@ -1931,6 +1935,28 @@ impl NativeTestCase {
     pub fn random_misfits(mut self) -> Self {
         self.random_misfits = true;
         self
+    }
+
+    /// Append every choice drawn in this stream to the file at `path` as
+    /// it is drawn, in the entry encoding without its count header, so a
+    /// test that kills the process still leaves its choice sequence
+    /// behind. A clone stream is recorded as an empty clone when it is
+    /// opened; its own draws are not traced.
+    pub fn trace_to(mut self, path: String) -> Self {
+        self.trace = Some(path);
+        self
+    }
+
+    fn push_node(&mut self, node: ChoiceNode) {
+        if let Some(path) = &self.trace {
+            let mut buf = Vec::new();
+            if crate::native::database::serialize_one_choice(&mut buf, node.data.value_ref())
+                .is_some()
+            {
+                let _ = crate::sys::fs::append(path, &buf);
+            }
+        }
+        self.nodes.push(node);
     }
 
     /// The family state shared by every stream of this test case.
@@ -2025,7 +2051,7 @@ impl NativeTestCase {
         );
         child.random_misfits = self.random_misfits;
         let handle = Arc::new(Mutex::new(child));
-        self.nodes.push(ChoiceNode::clone_stream(
+        self.push_node(ChoiceNode::clone_stream(
             Arc::new(RealizedStream::empty()),
             false,
         ));
@@ -2304,8 +2330,7 @@ impl NativeTestCase {
             obs.draw_integer(&v, was_forced);
         }
 
-        self.nodes
-            .push(ChoiceNode::integer(kind.clone(), v.clone(), was_forced));
+        self.push_node(ChoiceNode::integer(kind.clone(), v.clone(), was_forced));
 
         Ok(v)
     }
@@ -2340,7 +2365,7 @@ impl NativeTestCase {
             obs.draw_integer(&v, true);
         }
 
-        self.nodes.push(ChoiceNode::integer(kind, v, true));
+        self.push_node(ChoiceNode::integer(kind, v, true));
 
         Ok(())
     }
@@ -2401,7 +2426,7 @@ impl NativeTestCase {
             max_value: BigInt::from(window_hi),
             shrink_towards: BigInt::zero(),
         };
-        self.nodes.push(ChoiceNode::integer(kind, v, was_forced));
+        self.push_node(ChoiceNode::integer(kind, v, was_forced));
         used.insert(id);
         Ok(id)
     }
@@ -2474,8 +2499,7 @@ impl NativeTestCase {
             obs.draw_integer(&value, was_forced);
         }
 
-        self.nodes
-            .push(ChoiceNode::integer(kind, value, was_forced));
+        self.push_node(ChoiceNode::integer(kind, value, was_forced));
         Ok(chosen)
     }
 
@@ -2514,7 +2538,7 @@ impl NativeTestCase {
             |rng| biased_float_sample(&kind, width, rng, params),
         )?;
 
-        self.nodes.push(ChoiceNode::float(kind, v, was_forced));
+        self.push_node(ChoiceNode::float(kind, v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_float(v, was_forced);
@@ -2541,8 +2565,7 @@ impl NativeTestCase {
             |rng| biased_bytes_sample(&kind, rng),
         )?;
 
-        self.nodes
-            .push(ChoiceNode::bytes(kind, v.clone(), was_forced));
+        self.push_node(ChoiceNode::bytes(kind, v.clone(), was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_bytes(&v, was_forced);
@@ -2581,8 +2604,7 @@ impl NativeTestCase {
             |rng| biased_string_sample(&kind, rng),
         )?;
 
-        self.nodes
-            .push(ChoiceNode::string(kind, v.clone(), was_forced));
+        self.push_node(ChoiceNode::string(kind, v.clone(), was_forced));
 
         let s = codepoints_to_string(&v);
         if let Some(ref mut obs) = self.observer {
@@ -2638,7 +2660,7 @@ impl NativeTestCase {
             )?
         };
 
-        self.nodes.push(ChoiceNode::boolean(kind, v, was_forced));
+        self.push_node(ChoiceNode::boolean(kind, v, was_forced));
 
         if let Some(ref mut obs) = self.observer {
             obs.draw_boolean(v, was_forced);

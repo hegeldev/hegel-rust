@@ -3119,12 +3119,16 @@ pub(crate) async fn fuzz_case(
     database_key: Option<&str>,
     prefix: &[ChoiceValue],
     random_misfits: bool,
+    trace: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<RunResult, RunError> {
     let rng = create_rng(settings, database_key);
     let mut ntc = NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?;
     if random_misfits {
         ntc = ntc.random_misfits();
+    }
+    if let Some(path) = trace {
+        ntc = ntc.trace_to(path.to_string());
     }
     ntc.set_should_capture();
     run_case(exchange, ntc).await
