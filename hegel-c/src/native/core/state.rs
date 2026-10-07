@@ -1696,6 +1696,11 @@ pub struct NativeTestCase {
     /// (`Status::EarlyStop` + `EngineError`). `None` means "no template" —
     /// draws past the prefix go to `rng` or panic, as before.
     trailing_template: Option<ChoiceTemplate>,
+    /// Whether a prefix value that does not fit its draw is replaced by a
+    /// fresh random value rather than punned to the draw's simplest or
+    /// unit value. Set by [`Self::random_misfits`]; copied into every
+    /// cloned stream.
+    random_misfits: bool,
 }
 
 impl NativeTestCase {
@@ -1854,6 +1859,7 @@ impl NativeTestCase {
             has_discards: false,
             observer,
             trailing_template,
+            random_misfits: false,
         }
     }
 
@@ -1914,6 +1920,16 @@ impl NativeTestCase {
         self.family.set_generation_parameters(params);
         self.rng = Some(rng);
         self.family.set_budget(self.max_size);
+        self
+    }
+
+    /// Replace every prefix value that does not fit its draw with a fresh
+    /// random value, where the default puns it to the draw's simplest or
+    /// unit value. For a test case built with an RNG, such as
+    /// [`Self::for_probe`]: a fuzzer mutating a prefix wants a misfit to
+    /// explore rather than to collapse to the simplest value.
+    pub fn random_misfits(mut self) -> Self {
+        self.random_misfits = true;
         self
     }
 
@@ -1997,7 +2013,7 @@ impl NativeTestCase {
         child_id.push(self.clone_counter);
         self.clone_counter += 1;
 
-        let child = Self::new_stream(
+        let mut child = Self::new_stream(
             child_replay,
             child_rng,
             child_template,
@@ -2007,6 +2023,7 @@ impl NativeTestCase {
             Arc::clone(&self.family),
             child_id,
         );
+        child.random_misfits = self.random_misfits;
         let handle = Arc::new(Mutex::new(child));
         self.nodes.push(ChoiceNode::clone_stream(
             Arc::new(RealizedStream::empty()),
@@ -2669,11 +2686,13 @@ impl NativeTestCase {
         {
             Resolved::Served(v) => return Ok((v, false)),
             Resolved::Misfit(stored, timeline) => {
-                let is_simplest = match self.replay.proposal_node(timeline, idx) {
-                    Some(pn) => *stored == pn.data.simplest_value()?,
-                    None => false,
-                };
-                return Ok((if is_simplest { simplest()? } else { unit()? }, false));
+                if !self.random_misfits {
+                    let is_simplest = match self.replay.proposal_node(timeline, idx) {
+                        Some(pn) => *stored == pn.data.simplest_value()?,
+                        None => false,
+                    };
+                    return Ok((if is_simplest { simplest()? } else { unit()? }, false));
+                }
             }
             Resolved::Exhausted => {}
         }

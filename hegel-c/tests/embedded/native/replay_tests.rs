@@ -364,3 +364,39 @@ fn a_cloned_stream_resolves_through_the_same_external_resolver() {
     assert_eq!(draw_int(&mut child.lock()), 2);
     assert_eq!(tc.divergence(), None);
 }
+
+#[test]
+fn the_pun_replay_puns_a_misfit_to_the_unit_value_whatever_the_seed() {
+    for seed in 0..32 {
+        let mut tc = NativeTestCase::for_probe(&[int(1000)], EngineRng::seeded(seed), 8).unwrap();
+        assert!(draw_bool(&mut tc));
+    }
+}
+
+#[test]
+fn random_misfits_replace_a_misfit_with_a_random_draw() {
+    let mut seen = crate::native::HashSet::default();
+    for seed in 0..32 {
+        let mut tc = NativeTestCase::for_probe(&[int(1000), int(7)], EngineRng::seeded(seed), 8)
+            .unwrap()
+            .random_misfits();
+        seen.insert(draw_bool(&mut tc));
+        assert_eq!(draw_int(&mut tc), 7, "the prefix continues past the misfit");
+        assert_eq!(tc.divergence(), None);
+    }
+    assert_eq!(seen.len(), 2, "both values must be drawn across seeds");
+}
+
+#[test]
+fn random_misfits_carry_into_cloned_streams() {
+    let mut seen = crate::native::HashSet::default();
+    for seed in 0..32 {
+        let mut tc =
+            NativeTestCase::for_probe(&[clone_of(vec![int(1000)])], EngineRng::seeded(seed), 8)
+                .unwrap()
+                .random_misfits();
+        let child = tc.clone_stream().unwrap();
+        seen.insert(draw_bool(&mut child.lock()));
+    }
+    assert_eq!(seen.len(), 2);
+}

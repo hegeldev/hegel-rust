@@ -331,4 +331,82 @@ run first.
 | `HEGEL_PRINT_BLOB` | profile resolution | Sets `print_blob` over the resolved profile. |
 | `HEGEL_NONDETERMINISM_STRICTNESS` | profile resolution | Sets `nondeterminism_strictness` over the resolved profile. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
+| `HEGEL_FUZZ_OUTPUT` | run start | Fuzzer client: the run executes exactly one test case and writes a JSON record of it to this path. See [Driving a test from a fuzzer](#driving-a-test-from-a-fuzzer). |
+| `HEGEL_FUZZ_PREFIX` | run start | Fuzzer client: a file holding the choice sequence the one test case replays before drawing randomly. |
+| `HEGEL_FUZZ_MISFIT` | run start | Fuzzer client: `random` (the default) or `simplest`, what replaces a prefix value that no longer fits its draw. |
+| `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking and persisting the failure it reproduces. |
+| `HEGEL_FUZZ_TEST` | run start | Fuzzer client: the database key of the test the `HEGEL_FUZZ_*` variables are for; every other test runs no test case. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
+
+# Driving a test from a fuzzer
+
+An external fuzzer — one that chooses each test case from what earlier
+ones did, rather than generating them independently — drives a test
+program one execution at a time through the `HEGEL_FUZZ_*` environment
+variables. They are read by the engine at run start, so they work for any
+entry point: a `#[hegel::main]` binary, a `#[hegel::test]` under
+`cargo test`, or a `Hegel` driver.
+
+When `HEGEL_FUZZ_OUTPUT` names a file, the run executes exactly one test
+case and writes a JSON record of it there. Database replay, the retry of
+`assume`-rejected cases, nondeterminism replays and shrinking are all
+skipped: the fuzzer wants one execution of one input, and it decides what
+to do next. A failing case is still the run's failure — the report is
+printed and the process exits as any failing run does — so the fuzzer can
+tell a failure from a pass by the exit status, and the record's `status`
+and `origin` say which failure it was.
+
+The record is one JSON object:
+
+- `engine_version`: the libhegel version that wrote the record. The choice
+  sequence encoding is only stable within one version.
+- `test`: the test's database key, as `HEGEL_FUZZ_TEST` names it.
+- `status`: `valid`, `invalid` (an `assume` rejected the case),
+  `interesting` (the property failed) or `overrun` (the case ran out of
+  its choice budget).
+- `origin`: for an interesting case, the failure's origin — the panic
+  location — and otherwise `null`.
+- `choices`: every choice the case made, in order, each with its `kind`
+  (`integer`, `boolean`, `float`, `bytes`, `string` or `clone`), its
+  `value`, the constraint it was drawn under (`min`, `max` and
+  `shrink_towards` for an integer, `p` for a boolean, `min`, `max`,
+  `allow_nan`, `allow_infinity` and `smallest_nonzero_magnitude` for a
+  float, `min_size` and `max_size` for bytes and strings), and `forced`.
+  Integers are decimal strings, bytes are hex, a float that JSON cannot
+  represent is the string `NaN`, `inf` or `-inf`, and a lone surrogate in
+  a string prints as U+FFFD (the encoded sequence keeps the exact value). A `clone` carries the
+  cloned stream's `children` and `spans`.
+- `choices_base64`: the same choice sequence in the failure database's
+  entry format, base64-encoded — what to write to a file and pass back as
+  `HEGEL_FUZZ_PREFIX`.
+- `spans`: the span tree over the choices, each with its `label`, `start`
+  and `end` choice indices, `depth`, `parent` span index and whether it was
+  `discarded`. A state machine's steps and every generator's draws are
+  spans, so a fuzzer can mutate a case at the boundaries that matter.
+- `prefix_length`, `prefix_consumed` and `misaligned_at`: how much of the
+  prefix the case used, and the first prefix position whose stored value
+  the case did not replay, or `null`.
+- `events` and `targets`: the case's `event` and `target` observations.
+- `elapsed_ms`: how long the case took.
+
+`HEGEL_FUZZ_PREFIX` names a file holding a choice sequence in the entry
+format. The case replays it as a prefix and draws randomly past its end,
+seeded as usual, so `HEGEL_SEED` makes a run reproducible from the prefix.
+A stored value that does not fit the draw made at its position — the
+prefix came from a different path through the test — is replaced by a
+fresh random value, or by the simplest value fitting the draw when
+`HEGEL_FUZZ_MISFIT=simplest`, and the prefix continues at the next
+position either way.
+
+`HEGEL_FUZZ_REPRODUCE` names a prefix file to run the ordinary way
+instead of in fuzz mode: the sequence is replayed like an entry of the
+failure database, and the failure it reproduces is shrunk, reported and
+saved to the database, so the test's normal runs replay it from then on.
+Nothing is generated; a run with no failure means the entry no longer
+fails.
+
+`HEGEL_FUZZ_TEST` names the database key of the test the variables are
+for (`module_path::function_name`, the `test` field of the record). Every
+other test in the process runs no test case, so a test binary holding
+several tests can be driven one test at a time. Without it every test the
+process runs is driven, and each overwrites the record.

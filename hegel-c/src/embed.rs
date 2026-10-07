@@ -60,6 +60,10 @@ pub(crate) async fn run_native_async(
     database_key: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(mode) = crate::fuzz_client::from_env(database_key)? {
+        return crate::fuzz_client::run(mode, settings, database_key, exchange).await;
+    }
     crate::native::test_runner::explore(settings, database_key, exchange).await
 }
 

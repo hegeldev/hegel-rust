@@ -765,6 +765,14 @@ pub use hegel_macros::test_helper;
 /// are evaluated, exactly like the `HEGEL_DEFAULT_PROFILE` environment
 /// variable, so compiled-in settings apply on top of the named profile.
 ///
+/// An external fuzzer drives the binary one execution at a time through
+/// the `HEGEL_FUZZ_*` environment variables: `HEGEL_FUZZ_OUTPUT` makes the
+/// run execute one test case from the choice-sequence prefix in
+/// `HEGEL_FUZZ_PREFIX` and write a JSON record of it, and
+/// `HEGEL_FUZZ_REPRODUCE` replays a prefix the ordinary way, shrinking and
+/// persisting its failure. See the
+/// [settings documentation](crate::docs::settings#driving-a-test-from-a-fuzzer).
+///
 /// ```no_run
 /// use hegel::TestCase;
 /// use hegel::generators as gs;

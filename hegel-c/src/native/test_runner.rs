@@ -356,8 +356,11 @@ impl<'a> Engine<'a> {
         let mut replay_aligned = false;
         let report_multiple = settings.report_multiple_failures;
 
+        let extra_entries = core::mem::take(&mut self.extra_entries);
         if settings.phases.contains(&Phase::Reuse) {
-            if let (Some(_), Some(key)) = (self.db(), database_key) {
+            if let Some(key) =
+                database_key.filter(|_| self.db().is_some() || !extra_entries.is_empty())
+            {
                 log_phase("Reuse", "Start");
                 let key_bytes = key.as_bytes().to_vec();
                 let secondary_key = crate::native::database::sub_key(&key_bytes, b"secondary");
@@ -389,6 +392,7 @@ impl<'a> Engine<'a> {
                     extra.sort_by(|a, b| shortlex(a, b));
                     values.extend(extra);
                 }
+                values.extend(extra_entries);
                 let mut found_interesting_in_primary = false;
                 for (i, raw) in values.into_iter().enumerate() {
                     if i >= primary_count && found_interesting_in_primary {
@@ -1467,6 +1471,11 @@ pub(crate) struct Engine<'a> {
     /// probes are measurement runs), and the case that itself flips the
     /// run (its stamp decision predates the flip).
     capture_discoveries: bool,
+    /// Choice-sequence entries the reuse phase replays after the
+    /// database's, as if they were secondary entries: a failure replayed
+    /// from one is shrunk and persisted like any discovered failure. The
+    /// fuzzer client's reproduce mode supplies them.
+    extra_entries: Vec<Vec<u8>>,
 }
 
 impl<'a> Engine<'a> {
@@ -1510,6 +1519,7 @@ impl<'a> Engine<'a> {
             reuse_replays: false,
             capture_replays: false,
             capture_discoveries: false,
+            extra_entries: Vec::new(),
         })
     }
 
@@ -3062,37 +3072,86 @@ impl<'a> Engine<'a> {
     /// resuming the engine without concluding the offered case (see
     /// [`NativeDataSource::take_outcome`]).
     async fn execute(&mut self, ntc: NativeTestCase) -> Result<RunResult, RunError> {
-        let (data_source, handle) = NativeDataSource::new(ntc);
-        self.exchange.offer(Box::new(data_source)).await;
-        let nodes = NativeDataSource::take_nodes(&handle);
-        let spans = NativeDataSource::take_spans(&handle);
-        let target_observations = NativeDataSource::take_target_observations(&handle);
-        let events = NativeDataSource::take_events(&handle);
-        let divergence = NativeDataSource::take_divergence(&handle);
-        let settled = NativeDataSource::take_settled(&handle);
-        let ended = NativeDataSource::take_ended(&handle);
-        let tc_result = NativeDataSource::take_outcome(&handle)?;
-
-        let (status, origin) = match tc_result {
-            TestCaseResult::Valid => (Status::Valid, None),
-            TestCaseResult::Invalid => (Status::Invalid, None),
-            TestCaseResult::Overrun => (Status::EarlyStop, None),
-            TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
-        };
-
-        Ok(RunResult {
-            status,
-            nodes,
-            spans,
-            origin,
-            target_observations,
-            events,
-            divergence,
-            settled,
-            ended,
-        })
+        run_case(self.exchange, ntc).await
     }
+}
 
+/// Offer `ntc` to the driver and read back the realised run once it has
+/// been concluded.
+async fn run_case(exchange: &CaseExchange, ntc: NativeTestCase) -> Result<RunResult, RunError> {
+    let (data_source, handle) = NativeDataSource::new(ntc);
+    exchange.offer(Box::new(data_source)).await;
+    let nodes = NativeDataSource::take_nodes(&handle);
+    let spans = NativeDataSource::take_spans(&handle);
+    let target_observations = NativeDataSource::take_target_observations(&handle);
+    let events = NativeDataSource::take_events(&handle);
+    let divergence = NativeDataSource::take_divergence(&handle);
+    let settled = NativeDataSource::take_settled(&handle);
+    let ended = NativeDataSource::take_ended(&handle);
+    let tc_result = NativeDataSource::take_outcome(&handle)?;
+
+    let (status, origin) = match tc_result {
+        TestCaseResult::Valid => (Status::Valid, None),
+        TestCaseResult::Invalid => (Status::Invalid, None),
+        TestCaseResult::Overrun => (Status::EarlyStop, None),
+        TestCaseResult::Interesting(f) => (Status::Interesting, Some(f.origin)),
+    };
+
+    Ok(RunResult {
+        status,
+        nodes,
+        spans,
+        origin,
+        target_observations,
+        events,
+        divergence,
+        settled,
+        ended,
+    })
+}
+
+/// One test case for the fuzzer client: `prefix` replayed, random draws
+/// past its end up to the settings' choice bound, and a misfitting prefix
+/// value replaced at random when `random_misfits` is set. Stamped for
+/// capture, so a failure carries its diagnostic into the report.
+pub(crate) async fn fuzz_case(
+    settings: &Settings,
+    database_key: Option<&str>,
+    prefix: &[ChoiceValue],
+    random_misfits: bool,
+    exchange: &CaseExchange,
+) -> Result<RunResult, RunError> {
+    let rng = create_rng(settings, database_key);
+    let mut ntc = NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?;
+    if random_misfits {
+        ntc = ntc.random_misfits();
+    }
+    ntc.set_should_capture();
+    run_case(exchange, ntc).await
+}
+
+/// Replay a stored choice sequence as if it were a database entry for
+/// `database_key`, with no generation: a failure it reproduces is shrunk,
+/// reported and reconciled into the database like any other, and a run
+/// with no failure means the entry is stale.
+pub(crate) async fn reproduce_entry(
+    settings: &Settings,
+    database_key: Option<&str>,
+    entry: Vec<u8>,
+    exchange: &CaseExchange,
+) -> Result<TestRunResult, RunError> {
+    let settings = settings.clone().phases([Phase::Reuse, Phase::Shrink]);
+    let mut engine = Engine::new(&settings, database_key, exchange)?;
+    engine.extra_entries.push(entry);
+    engine
+        .run(
+            TOO_SLOW_THRESHOLD,
+            core::time::Duration::from_secs(MAX_SHRINKING_SECONDS),
+        )
+        .await
+}
+
+impl<'a> Engine<'a> {
     /// The single replay chokepoint — Hypothesis's `cached_test_function` —
     /// shared by generation-phase span mutation and shrinking. Replays
     /// `choices` (drawing up to `extend` further choices beyond them) and

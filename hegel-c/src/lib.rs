@@ -37,6 +37,8 @@ mod control;
 mod embed;
 /// cbindgen:ignore
 mod exchange;
+#[cfg(not(target_family = "wasm"))]
+mod fuzz_client;
 /// cbindgen:ignore
 mod native;
 /// cbindgen:ignore
@@ -998,6 +1000,10 @@ fn cstring_lossy(s: &str) -> CString {
 /// An empty variable is ignored. A malformed one makes this function (and
 /// `hegel_settings_new_for_profile`) fail with `HEGEL_E_INVALID_ARG` and a
 /// message naming the variable.
+///
+/// A further set of variables is read at run start rather than here: the
+/// `HEGEL_FUZZ_*` variables an external fuzzer drives a run with. See
+/// `hegel_run_start`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_settings_new(
     ctx: *mut HegelContext,
@@ -2084,6 +2090,28 @@ pub unsafe extern "C" fn hegel_settings_get_nondeterminism_strictness(
 /// call, so the callback is invoked on whichever thread makes it. Because
 /// it runs inside `hegel_next_test_case`, the callback must not call back
 /// into libhegel on the same run.
+///
+/// The run reads the fuzzer-client environment variables when it starts
+/// (a malformed one surfaces as the run's usage error):
+///
+/// - `HEGEL_FUZZ_OUTPUT`: a file path. The run executes exactly one test
+///   case — no database replay, no retry of invalid cases, no
+///   nondeterminism replays, no shrinking — and writes a JSON record of
+///   it there: `status`, `origin`, every choice with its constraint,
+///   `spans`, `events`, `targets`, and `choices_base64`, the choice
+///   sequence in the database entry format for feeding back as a prefix.
+///   An interesting case is still the run's failure, stamped for capture
+///   and carrying a reproduce blob.
+/// - `HEGEL_FUZZ_PREFIX`: a file holding a choice sequence in the database
+///   entry format, replayed as the case's prefix with random draws past
+///   its end. A stored value that does not fit its draw is replaced by a
+///   random value, or by the simplest fitting value under
+///   `HEGEL_FUZZ_MISFIT=simplest`.
+/// - `HEGEL_FUZZ_REPRODUCE`: a prefix file replayed like a database entry
+///   under the settings' database key, with no generation: a reproduced
+///   failure is shrunk, reported and saved to the database.
+/// - `HEGEL_FUZZ_TEST`: the database key the variables are for; a run
+///   under any other key executes no test case.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_run_start(
     ctx: *mut HegelContext,
