@@ -5465,14 +5465,8 @@ unsafe fn printer_text_arg(
     p: *const u8,
     len: usize,
 ) -> Result<String, hegel_result_t> {
-    let text = match unsafe { optional_utf8_buffer_arg(ctx, fn_name, arg_name, p, len) }? {
-        Some(s) => s,
-        None if len == 0 => String::new(),
-        None => {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
-            return Err(HEGEL_E_INVALID_ARG);
-        }
-    };
+    let text =
+        unsafe { optional_utf8_buffer_arg(ctx, fn_name, arg_name, p, len) }?.unwrap_or_default();
     if text.contains('\n') {
         set_last_error(
             ctx,
@@ -5855,12 +5849,7 @@ pub unsafe extern "C" fn hegel_printer_reflow(
         Err(rc) => return rc,
     };
     let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
-        Ok(Some(text)) => text,
-        Ok(None) if len == 0 => String::new(),
-        Ok(None) => {
-            set_last_error(ctx, &format!("{FN}: text is null"));
-            return HEGEL_E_INVALID_ARG;
-        }
+        Ok(text) => text.unwrap_or_default(),
         Err(rc) => return rc,
     };
     let default_options = ReflowOptions::default();
@@ -6249,12 +6238,7 @@ pub unsafe extern "C" fn hegel_note(
         return HEGEL_E_INVALID_HANDLE;
     };
     let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
-        Ok(Some(s)) => s,
-        Ok(None) if len == 0 => String::new(),
-        Ok(None) => {
-            set_last_error(ctx, "hegel_note: text is null");
-            return HEGEL_E_INVALID_ARG;
-        }
+        Ok(text) => text.unwrap_or_default(),
         Err(rc) => return rc,
     };
     let attribution = Attribution {
