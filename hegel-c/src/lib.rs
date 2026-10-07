@@ -4489,8 +4489,8 @@ unsafe fn required_utf8_arg(
 }
 
 /// Read an optional length-delimited UTF-8 buffer argument. A NULL pointer
-/// means "absent". Length-delimited so the buffer may contain NUL bytes
-/// (U+0000 is a valid character to include or exclude).
+/// with zero length means "absent". Length-delimited so the buffer may
+/// contain NUL bytes (U+0000 is a valid character to include or exclude).
 unsafe fn optional_utf8_buffer_arg(
     ctx: *mut HegelContext,
     fn_name: &str,
@@ -4499,6 +4499,10 @@ unsafe fn optional_utf8_buffer_arg(
     len: usize,
 ) -> Result<Option<String>, hegel_result_t> {
     if p.is_null() {
+        if len > 0 {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
+            return Err(HEGEL_E_INVALID_ARG);
+        }
         return Ok(None);
     }
     let bytes = unsafe { core::slice::from_raw_parts(p, len) };
@@ -4652,8 +4656,8 @@ pub unsafe extern "C" fn hegel_string_generator_text(
 /// `alphabet`: Optional (NULL for none). Must be a text generator. Its
 ///   character set constrains the padding and wildcard characters.
 ///
-/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a NULL or non-UTF-8
-/// pattern, a pattern that does not parse, or an alphabet that is not a
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid string
+/// buffer, a pattern that does not parse, or an alphabet that is not a
 /// text generator.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_string_generator_regex(
@@ -4674,10 +4678,7 @@ pub unsafe extern "C" fn hegel_string_generator_regex(
     let pattern =
         match unsafe { optional_utf8_buffer_arg(ctx, FN, "pattern", pattern, pattern_len) } {
             Ok(Some(s)) => s,
-            Ok(None) => {
-                set_last_error(ctx, "hegel_string_generator_regex: pattern is null");
-                return HEGEL_E_INVALID_ARG;
-            }
+            Ok(None) => String::new(),
             Err(rc) => return rc,
         };
     let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &g.spec);
@@ -5454,8 +5455,7 @@ fn translate_printer_error(
 }
 
 /// Read a required length-delimited UTF-8 text argument for a printer call.
-/// A NULL pointer is accepted only with `len == 0` (the empty string), and
-/// the text must not contain newlines — line structure is expressed through
+/// The text must not contain newlines — line structure is expressed through
 /// `hegel_printer_hard_break` and breakable points so the printer's column
 /// accounting stays correct.
 unsafe fn printer_text_arg(
@@ -5465,14 +5465,8 @@ unsafe fn printer_text_arg(
     p: *const u8,
     len: usize,
 ) -> Result<String, hegel_result_t> {
-    let text = match unsafe { optional_utf8_buffer_arg(ctx, fn_name, arg_name, p, len) }? {
-        Some(s) => s,
-        None if len == 0 => String::new(),
-        None => {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
-            return Err(HEGEL_E_INVALID_ARG);
-        }
-    };
+    let text =
+        unsafe { optional_utf8_buffer_arg(ctx, fn_name, arg_name, p, len) }?.unwrap_or_default();
     if text.contains('\n') {
         set_last_error(
             ctx,
@@ -5573,7 +5567,7 @@ pub unsafe extern "C" fn hegel_printer_if_break(
 /// stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
 /// `hegel_context_last_error` — for a NULL `printer` or a handle whose
 /// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
-/// or newline-containing text or a NULL `text` with `len > 0`.
+/// or newline-containing text.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_text(
     ctx: *mut HegelContext,
@@ -5602,8 +5596,7 @@ pub unsafe extern "C" fn hegel_printer_text(
 /// indentation if the group breaks.
 ///
 /// `sep` follows the same rules as `hegel_printer_text` (UTF-8, no
-/// newlines, NULL only with `len == 0`), and errors are reported the same
-/// way.
+/// newlines), and errors are reported the same way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_breakable(
     ctx: *mut HegelContext,
@@ -5641,8 +5634,7 @@ pub unsafe extern "C" fn hegel_printer_breakable(
 /// whitespace.
 ///
 /// `text` follows the same rules as `hegel_printer_text` (UTF-8, no
-/// newlines, NULL only with `len == 0`), and errors are reported the same
-/// way.
+/// newlines), and errors are reported the same way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_comment(
     ctx: *mut HegelContext,
@@ -5841,7 +5833,7 @@ pub unsafe extern "C" fn hegel_reflow_options_free(
 /// `options` may be NULL for defaults (see `hegel_reflow_options_t`).
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
 /// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
-/// text or a NULL `text` with `len > 0`.
+/// text.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_reflow(
     ctx: *mut HegelContext,
@@ -5857,12 +5849,7 @@ pub unsafe extern "C" fn hegel_printer_reflow(
         Err(rc) => return rc,
     };
     let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
-        Ok(Some(text)) => text,
-        Ok(None) if len == 0 => String::new(),
-        Ok(None) => {
-            set_last_error(ctx, &format!("{FN}: text is null"));
-            return HEGEL_E_INVALID_ARG;
-        }
+        Ok(text) => text.unwrap_or_default(),
         Err(rc) => return rc,
     };
     let default_options = ReflowOptions::default();
@@ -6236,8 +6223,7 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
 /// region is dead (the document was already read), and
-/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
-/// `text` with `len > 0`.
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for invalid string buffers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_note(
     ctx: *mut HegelContext,
@@ -6252,12 +6238,7 @@ pub unsafe extern "C" fn hegel_note(
         return HEGEL_E_INVALID_HANDLE;
     };
     let text = match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text, len) } {
-        Ok(Some(s)) => s,
-        Ok(None) if len == 0 => String::new(),
-        Ok(None) => {
-            set_last_error(ctx, "hegel_note: text is null");
-            return HEGEL_E_INVALID_ARG;
-        }
+        Ok(text) => text.unwrap_or_default(),
         Err(rc) => return rc,
     };
     let attribution = Attribution {
