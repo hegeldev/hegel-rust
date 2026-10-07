@@ -48,6 +48,9 @@ header = """
  * out-parameter, inverted bounds, a non-UTF-8 string, and so on). The
  * functions below leave these implicit.
  *
+ * For UTF-8 strings passed as a pointer and byte length, NULL with length
+ * zero means the empty string. NULL with nonzero length is invalid.
+ *
  * A NULL context is always allowed and opts out of error messages. The call
  * still returns its usual error code. A context must not be used
  * concurrently from multiple threads, since each fallible call overwrites

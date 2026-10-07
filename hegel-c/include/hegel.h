@@ -46,6 +46,9 @@
  * out-parameter, inverted bounds, a non-UTF-8 string, and so on). The
  * functions below leave these implicit.
  *
+ * For UTF-8 strings passed as a pointer and byte length, NULL with length
+ * zero means the empty string. NULL with nonzero length is invalid.
+ *
  * A NULL context is always allowed and opts out of error messages. The call
  * still returns its usual error code. A context must not be used
  * concurrently from multiple threads, since each fallible call overwrites
@@ -2097,8 +2100,7 @@ hegel_result_t hegel_generate_bytes_result_free(hegel_context_t *ctx,
  `include_characters` / `exclude_characters`: UTF-8 buffers (pointer
    plus byte length) of individual characters. Characters in
    `include_characters` are included first, then characters in
-   `exclude_characters` are removed. NULL with zero length means an
-   empty buffer; NULL with nonzero length is invalid.
+   `exclude_characters` are removed.
 
  Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for constraints that leave
  no characters while `max_size > 0`.
@@ -2123,16 +2125,15 @@ hegel_result_t hegel_string_generator_text(hegel_context_t *ctx,
  Parameters:
  `pattern` / `pattern_len`: UTF-8 buffer (pointer plus byte length) of
    the pattern to match, in Python `re` syntax. Length-delimited so the
-   pattern may contain the NUL character, which `re` accepts. NULL with
-   zero length means an empty pattern.
+   pattern may contain the NUL character, which `re` accepts.
  `fullmatch`: When true, the whole string must match the pattern.
    Otherwise, the match may be padded on either side.
  `alphabet`: Optional (NULL for none). Must be a text generator. Its
    character set constrains the padding and wildcard characters.
 
- Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a NULL pattern with
- nonzero length, a non-UTF-8 pattern, a pattern that does not parse, or
- an alphabet that is not a text generator.
+ Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid string
+ buffer, a pattern that does not parse, or an alphabet that is not a
+ text generator.
  */
 hegel_result_t hegel_string_generator_regex(hegel_context_t *ctx,
                                             const uint8_t *pattern,
@@ -2419,7 +2420,7 @@ hegel_result_t hegel_printer_if_break(hegel_context_t *ctx,
  stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
  `hegel_context_last_error` — for a NULL `printer` or a handle whose
  deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
- or newline-containing text or a NULL `text` with `len > 0`.
+ or newline-containing text.
  */
 hegel_result_t hegel_printer_text(hegel_context_t *ctx,
                                   hegel_printer_t *printer,
@@ -2432,8 +2433,7 @@ hegel_result_t hegel_printer_text(hegel_context_t *ctx,
  indentation if the group breaks.
 
  `sep` follows the same rules as `hegel_printer_text` (UTF-8, no
- newlines, NULL only with `len == 0`), and errors are reported the same
- way.
+ newlines), and errors are reported the same way.
  */
 hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
                                        hegel_printer_t *printer,
@@ -2455,8 +2455,7 @@ hegel_result_t hegel_printer_breakable(hegel_context_t *ctx,
  whitespace.
 
  `text` follows the same rules as `hegel_printer_text` (UTF-8, no
- newlines, NULL only with `len == 0`), and errors are reported the same
- way.
+ newlines), and errors are reported the same way.
  */
 hegel_result_t hegel_printer_comment(hegel_context_t *ctx,
                                      hegel_printer_t *printer,
@@ -2549,7 +2548,7 @@ hegel_result_t hegel_reflow_options_free(hegel_context_t *ctx, hegel_reflow_opti
  `options` may be NULL for defaults (see `hegel_reflow_options_t`).
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
  deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
- text or a NULL `text` with `len > 0`.
+ text.
  */
 hegel_result_t hegel_printer_reflow(hegel_context_t *ctx,
                                     hegel_printer_t *printer,
@@ -2719,8 +2718,7 @@ hegel_result_t hegel_test_case_printer(hegel_context_t *ctx,
 
  Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
  region is dead (the document was already read), and
- `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
- `text` with `len > 0`.
+ `HEGEL_E_INVALID_ARG` — with a diagnostic — for invalid string buffers.
  */
 hegel_result_t hegel_note(hegel_context_t *ctx,
                           hegel_test_case_t *tc,

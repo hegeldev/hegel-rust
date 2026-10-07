@@ -4556,8 +4556,7 @@ unsafe fn write_string_generator(
 /// `include_characters` / `exclude_characters`: UTF-8 buffers (pointer
 ///   plus byte length) of individual characters. Characters in
 ///   `include_characters` are included first, then characters in
-///   `exclude_characters` are removed. NULL with zero length means an
-///   empty buffer; NULL with nonzero length is invalid.
+///   `exclude_characters` are removed.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for constraints that leave
 /// no characters while `max_size > 0`.
@@ -4651,16 +4650,15 @@ pub unsafe extern "C" fn hegel_string_generator_text(
 /// Parameters:
 /// `pattern` / `pattern_len`: UTF-8 buffer (pointer plus byte length) of
 ///   the pattern to match, in Python `re` syntax. Length-delimited so the
-///   pattern may contain the NUL character, which `re` accepts. NULL with
-///   zero length means an empty pattern.
+///   pattern may contain the NUL character, which `re` accepts.
 /// `fullmatch`: When true, the whole string must match the pattern.
 ///   Otherwise, the match may be padded on either side.
 /// `alphabet`: Optional (NULL for none). Must be a text generator. Its
 ///   character set constrains the padding and wildcard characters.
 ///
-/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for a NULL pattern with
-/// nonzero length, a non-UTF-8 pattern, a pattern that does not parse, or
-/// an alphabet that is not a text generator.
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` for an invalid string
+/// buffer, a pattern that does not parse, or an alphabet that is not a
+/// text generator.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_string_generator_regex(
     ctx: *mut HegelContext,
@@ -5457,8 +5455,7 @@ fn translate_printer_error(
 }
 
 /// Read a required length-delimited UTF-8 text argument for a printer call.
-/// A NULL pointer is accepted only with `len == 0` (the empty string), and
-/// the text must not contain newlines — line structure is expressed through
+/// The text must not contain newlines — line structure is expressed through
 /// `hegel_printer_hard_break` and breakable points so the printer's column
 /// accounting stays correct.
 unsafe fn printer_text_arg(
@@ -5576,7 +5573,7 @@ pub unsafe extern "C" fn hegel_printer_if_break(
 /// stays correct. Returns `HEGEL_E_INVALID_HANDLE` — with a diagnostic in
 /// `hegel_context_last_error` — for a NULL `printer` or a handle whose
 /// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
-/// or newline-containing text or a NULL `text` with `len > 0`.
+/// or newline-containing text.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_text(
     ctx: *mut HegelContext,
@@ -5605,8 +5602,7 @@ pub unsafe extern "C" fn hegel_printer_text(
 /// indentation if the group breaks.
 ///
 /// `sep` follows the same rules as `hegel_printer_text` (UTF-8, no
-/// newlines, NULL only with `len == 0`), and errors are reported the same
-/// way.
+/// newlines), and errors are reported the same way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_breakable(
     ctx: *mut HegelContext,
@@ -5644,8 +5640,7 @@ pub unsafe extern "C" fn hegel_printer_breakable(
 /// whitespace.
 ///
 /// `text` follows the same rules as `hegel_printer_text` (UTF-8, no
-/// newlines, NULL only with `len == 0`), and errors are reported the same
-/// way.
+/// newlines), and errors are reported the same way.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_comment(
     ctx: *mut HegelContext,
@@ -5844,7 +5839,7 @@ pub unsafe extern "C" fn hegel_reflow_options_free(
 /// `options` may be NULL for defaults (see `hegel_reflow_options_t`).
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `printer` or a handle whose
 /// deferred slot is already dead, and `HEGEL_E_INVALID_ARG` for non-UTF-8
-/// text or a NULL `text` with `len > 0`.
+/// text.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_printer_reflow(
     ctx: *mut HegelContext,
@@ -6239,8 +6234,7 @@ pub unsafe extern "C" fn hegel_test_case_printer(
 ///
 /// Returns `HEGEL_E_INVALID_HANDLE` for a NULL `tc` or a handle whose
 /// region is dead (the document was already read), and
-/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for non-UTF-8 text or a NULL
-/// `text` with `len > 0`.
+/// `HEGEL_E_INVALID_ARG` — with a diagnostic — for invalid string buffers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_note(
     ctx: *mut HegelContext,
