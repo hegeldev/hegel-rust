@@ -919,6 +919,28 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("include_characters is not valid UTF-8"));
 
+        assert_eq!(
+            hegel_string_generator_text(
+                ctx,
+                0,
+                10,
+                ptr::null(),
+                0,
+                u32::MAX,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                1,
+                ptr::null(),
+                0,
+                &mut g,
+            ),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("include_characters is null"));
+
         let empty_cats: [*const c_char; 0] = [];
         assert_eq!(
             hegel_string_generator_text(
@@ -1091,7 +1113,20 @@ fn regex_email_url_domain_generators_draw_valid_values() {
     unsafe {
         let mut regex_g: *mut HegelStringGenerator = ptr::null_mut();
         assert_eq!(
-            hegel_string_generator_regex(ctx, ptr::null(), 0, false, ptr::null(), &mut regex_g),
+            hegel_string_generator_regex(ctx, ptr::null(), 0, true, ptr::null(), &mut regex_g),
+            HEGEL_OK
+        );
+        let empty_settings = make_settings_no_db(ctx);
+        let empty_run = start(ctx, empty_settings);
+        let empty_case = next_case(ctx, empty_run);
+        assert_eq!(draw_string(ctx, empty_case, regex_g), "");
+        complete_valid(ctx, empty_case);
+        ok(hegel_run_free(ctx, empty_run));
+        ok(hegel_settings_free(ctx, empty_settings));
+        ok(hegel_string_generator_free(ctx, regex_g));
+        regex_g = ptr::null_mut();
+        assert_eq!(
+            hegel_string_generator_regex(ctx, ptr::null(), 1, true, ptr::null(), &mut regex_g),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("pattern is null"));
