@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.1 - 2026-10-07
+
+This patch lets C callers pass `NULL` with a zero byte length to `hegel_string_generator_regex` to match an empty pattern. A `NULL` string buffer with a nonzero length now returns an invalid argument error.
+
 ## 0.45.0 - 2026-10-06
 
 This release changes `hegel_string_generator_regex` to take its pattern as a UTF-8 buffer with an explicit byte length, `const uint8_t *pattern, size_t pattern_len`, in place of a NUL-terminated `const char *`. Python's `re` accepts the NUL character in a pattern, and a NUL-terminated string could not carry it, so bindings had to substitute U+FFFD and the generated strings did not match the pattern. Bindings pass the length at their one call site; the other string-generator constructors are unchanged.

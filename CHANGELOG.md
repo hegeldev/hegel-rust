@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.49.2 - 2026-10-07
+
+This release updates the `hegeltest-c` dependency to 0.45.1.
+
 ## 0.49.1 - 2026-10-06
 
 This patch fixes several ways `from_regex` could generate a string that does not match its pattern as Python's `re` reads it, or reject a string it could have generated:
