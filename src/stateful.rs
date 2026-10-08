@@ -642,6 +642,20 @@ fn machine_should_check_invariant(
 /// (rounds, for a concurrent machine) per test case.
 pub const DEFAULT_STEP_COUNT: i64 = 50;
 
+/// The environment variable that replaces every machine's step count for
+/// the run, so a suite can be driven deeper without editing source.
+pub const STEP_COUNT_VAR: &str = "HEGEL_STATEFUL_STEPS";
+
+fn effective_step_count(configured: i64) -> i64 {
+    match std::env::var(STEP_COUNT_VAR) {
+        Ok(value) if !value.is_empty() => match value.parse::<i64>() {
+            Ok(n) if n >= 1 => n,
+            _ => panic!("{STEP_COUNT_VAR}={value:?} is not a positive integer"),
+        },
+        _ => configured,
+    }
+}
+
 /// A state machine model paired with the configuration for running it: the
 /// step count and, for concurrent machines, the concurrency bounds. Wrap the
 /// model with [`machine()`] (or [`Machine::new`]), adjust the configuration
@@ -735,9 +749,10 @@ impl<M: StateMachine> Machine<M> {
     /// model, and nothing restores model state on rejection anyway).
     ///
     /// Each test case runs at least one rule and at most this machine's step
-    /// count ([`Self::steps`]).
+    /// count ([`Self::steps`]), or the count the `HEGEL_STATEFUL_STEPS`
+    /// environment variable sets for the whole run when it is set.
     pub fn run(self, tc: TestCase) {
-        run_sequential(self.model, tc, self.step_count)
+        run_sequential(self.model, tc, effective_step_count(self.step_count))
     }
 }
 
@@ -841,7 +856,7 @@ impl<M: ConcurrentStateMachine + Sync> Machine<M> {
             tc,
             self.min_concurrency,
             self.max_concurrency,
-            self.step_count,
+            effective_step_count(self.step_count),
         )
     }
 }

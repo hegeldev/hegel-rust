@@ -50,6 +50,7 @@ layers below it set and leaves the rest alone:
    | `HEGEL_SEED` | Sets `seed`: an integer is the seed, `none` clears one the profile set. |
    | `HEGEL_DERANDOMIZE` | Sets `derandomize`: `true`, `1` or `yes`, or `false`, `0` or `no`. |
    | `HEGEL_PRINT_BLOB` | Sets `print_blob`, with the same vocabulary. |
+   | `HEGEL_STATEFUL_STEPS` | Replaces every state machine's step count ([`stateful::Machine::steps`](crate::stateful::Machine::steps)). Must be a positive integer. |
    | `HEGEL_NONDETERMINISM_STRICTNESS` | Sets `nondeterminism_strictness`: `quiet`, `warn` or `error`. |
 
    An empty variable is ignored; any other malformed value is an error,
@@ -330,6 +331,7 @@ run first.
 | `HEGEL_DERANDOMIZE` | profile resolution | Sets `derandomize` over the resolved profile. |
 | `HEGEL_PRINT_BLOB` | profile resolution | Sets `print_blob` over the resolved profile. |
 | `HEGEL_NONDETERMINISM_STRICTNESS` | profile resolution | Sets `nondeterminism_strictness` over the resolved profile. |
+| `HEGEL_STATEFUL_STEPS` | `Machine::run` and `Machine::run_concurrent` | Replaces every state machine's step count for the run. |
 | `ANTITHESIS_OUTPUT_DIR` | environment detection | Selects the `workload` profile, and each test's verdict is reported to the `sdk.jsonl` inside it. Must name an existing directory. |
 | `HEGEL_FUZZ_OUTPUT` | run start | Fuzzer client: the run executes exactly one test case and writes a JSON record of it to this path. See [Driving a test from a fuzzer](#driving-a-test-from-a-fuzzer). |
 | `HEGEL_FUZZ_PREFIX` | run start | Fuzzer client: a file holding the choice sequence the one test case replays before drawing randomly. |
