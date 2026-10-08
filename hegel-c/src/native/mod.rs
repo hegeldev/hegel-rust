@@ -19,6 +19,7 @@ pub mod labels;
 pub(crate) mod nd;
 pub mod printer;
 pub mod re;
+pub mod realized;
 pub mod reflow;
 pub mod rng;
 pub mod shrinker;

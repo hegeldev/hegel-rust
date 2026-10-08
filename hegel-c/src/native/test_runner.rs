@@ -3110,23 +3110,33 @@ async fn run_case(exchange: &CaseExchange, ntc: NativeTestCase) -> Result<RunRes
     })
 }
 
-/// One test case for the fuzzer client: `prefix` replayed, random draws
-/// past its end up to the settings' choice bound, and a misfitting prefix
-/// value replaced at random when `random_misfits` is set. Stamped for
-/// capture, so a failure carries its diagnostic into the report.
+/// One test case for the fuzzer client: `prefix` replayed, then either
+/// random draws past its end up to the settings' choice bound, with a
+/// misfitting prefix value replaced at random when `random_misfits` is
+/// set, or, when `exact`, no draws at all past its end (the case overruns
+/// instead) and a misfit punned as the shrinker's own replays pun it.
+/// Stamped for capture, so a failure carries its diagnostic into the
+/// report.
 pub(crate) async fn fuzz_case(
     settings: &Settings,
     database_key: Option<&str>,
     prefix: &[ChoiceValue],
     random_misfits: bool,
+    exact: bool,
     trace: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<RunResult, RunError> {
-    let rng = create_rng(settings, database_key);
-    let mut ntc = NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?;
-    if random_misfits {
-        ntc = ntc.random_misfits();
-    }
+    let mut ntc = if exact {
+        NativeTestCase::for_choices(prefix, None, None)
+    } else {
+        let rng = create_rng(settings, database_key);
+        let ntc = NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?;
+        if random_misfits {
+            ntc.random_misfits()
+        } else {
+            ntc
+        }
+    };
     if let Some(path) = trace {
         ntc = ntc.trace_to(path.to_string());
     }

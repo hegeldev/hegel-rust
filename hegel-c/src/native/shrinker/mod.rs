@@ -131,7 +131,7 @@ pub type DebugFn<'a> = dyn FnMut(&str) + Send + 'a;
 /// surfaces from [`Shrinker::shrink`] as a run-level error instead of
 /// being absorbed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ShrinkHalt {
+pub enum ShrinkHalt {
     Stop,
     Error(RunError),
 }
@@ -150,7 +150,7 @@ impl From<RunError> for ShrinkHalt {
 
 /// Result of a shrinker operation that the deadline (or an internal error)
 /// may cut short.
-pub(crate) type ShrinkResult<T = ()> = Result<T, ShrinkHalt>;
+pub type ShrinkResult<T = ()> = Result<T, ShrinkHalt>;
 
 /// Signal that ends one pass's work on a single node.
 ///
@@ -269,6 +269,11 @@ pub struct Shrinker<'a> {
     /// a gauntleted probe's rerun cost, the clock always does. Tests set a
     /// past instant to exercise the timeout path without waiting.
     pub deadline: Option<Instant>,
+    /// Cap on `calls`, the logical candidate count: once reached, every
+    /// further execution request stops the shrink where it stands, as the
+    /// deadline does, for a driver whose executions are too costly to
+    /// bound by the clock alone. `None` (the default) disables it.
+    pub max_calls: Option<usize>,
     /// Latched once `deadline` is first observed to have passed. The runner
     /// reads it after `shrink()` to emit the slow-shrink warning.
     pub timed_out: bool,
@@ -304,6 +309,7 @@ impl<'a> Shrinker<'a> {
             all_changed_nodes: HashSet::default(),
             debug: None,
             deadline: None,
+            max_calls: None,
             timed_out: false,
             sweep: SweepMode::Fast,
         }
@@ -438,7 +444,7 @@ impl<'a> Shrinker<'a> {
         &mut self,
         run: ShrinkRun<'_>,
     ) -> ShrinkResult<(bool, Vec<ChoiceNode>, Spans)> {
-        if self.past_deadline() {
+        if self.past_deadline() || self.max_calls.is_some_and(|max| self.calls >= max) {
             return Err(ShrinkHalt::Stop);
         }
         self.test_fn.run(run).await
@@ -822,3 +828,7 @@ mod defensive_branch_tests;
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_internal_error_tests.rs"]
 mod internal_error_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_max_calls_tests.rs"]
+mod max_calls_tests;

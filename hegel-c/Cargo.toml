@@ -53,6 +53,11 @@ windows-sys = { version = "0.61", features = [
 
 [features]
 default = ["std"]
+# Expose the shrinker, the realized form of a test case and the choice
+# serialisers as a Rust API, for a fuzzing harness that replays candidates
+# one process at a time. Internal: the API is the engine's own and changes
+# with it.
+fuzz-driver = []
 # Link the Rust standard library into the built artifacts. The crate's own
 # code is `#![no_std]` either way; this feature only makes std provide the
 # global allocator, panic handling, and unwinding support that a final

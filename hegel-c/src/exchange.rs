@@ -115,7 +115,7 @@ pub(crate) fn drive<F: Future>(
 
 /// Test helper: run a future that must complete without offering any test
 /// case — e.g. a shrinker driven by a synchronous probe.
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzz-driver"))]
 pub(crate) fn drive_no_yield<F: Future>(fut: F) -> F::Output {
     let mut fut = core::pin::pin!(fut);
     match fut

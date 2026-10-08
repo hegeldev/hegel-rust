@@ -337,6 +337,7 @@ run first.
 | `HEGEL_FUZZ_PREFIX` | run start | Fuzzer client: a file holding the choice sequence the one test case replays before drawing randomly. |
 | `HEGEL_FUZZ_MISFIT` | run start | Fuzzer client: `random` (the default) or `simplest`, what replaces a prefix value that no longer fits its draw. |
 | `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking and persisting the failure it reproduces. |
+| `HEGEL_FUZZ_TAIL` | run start | Fuzzer client: `random` (the default) or `none`, whether the one test case draws randomly past its prefix or overruns there, with a misfit punned as the shrinker puns it. |
 | `HEGEL_FUZZ_TRACE` | run start | Fuzzer client: a file every choice of the one test case is appended to as it is drawn, for recovering the sequence of a case that kills the process. |
 | `HEGEL_FUZZ_TEST` | run start | Fuzzer client: the database key of the test the `HEGEL_FUZZ_*` variables are for; every other test runs no test case. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
@@ -379,6 +380,10 @@ The record is one JSON object:
   represent is the string `NaN`, `inf` or `-inf`, and a lone surrogate in
   a string prints as U+FFFD (the encoded sequence keeps the exact value). A `clone` carries the
   cloned stream's `children` and `spans`.
+- `realized_base64`: the case's realized form, its choices with the
+  constraints they were drawn under and its spans, in the encoding the
+  `fuzz-driver` feature of `hegeltest-c` reads back for seeding its
+  shrinker.
 - `choices_base64`: the same choice sequence in the failure database's
   entry format, base64-encoded — what to write to a file and pass back as
   `HEGEL_FUZZ_PREFIX`.

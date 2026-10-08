@@ -18,7 +18,7 @@ impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
     /// they can re-randomise (and thus enlarge) the test case.  Called
     /// from `test_runner.rs` once, before the main `shrink()` loop.
-    pub(crate) async fn initial_coarse_reduction(&mut self) -> ShrinkResult<()> {
+    pub async fn initial_coarse_reduction(&mut self) -> ShrinkResult<()> {
         self.reduce_each_alternative().await
     }
 

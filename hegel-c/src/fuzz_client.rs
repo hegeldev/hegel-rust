@@ -15,7 +15,12 @@
 //! failure database's entry format. The case replays it as a prefix and
 //! draws randomly past its end. A stored value that does not fit its draw
 //! is replaced by a fresh random one, or by the simplest fitting value when
-//! `HEGEL_FUZZ_MISFIT=simplest`.
+//! `HEGEL_FUZZ_MISFIT=simplest`. With `HEGEL_FUZZ_TAIL=none` the case
+//! draws nothing past the prefix's end: a case that asks for more
+//! overruns, and a misfit is punned as the shrinker's own replays pun it,
+//! so a fuzzer that shrinks by replaying candidates sees exactly what the
+//! engine's shrinker would see. The record then also carries the case's
+//! realized form, nodes with constraints and spans, for seeding a shrink.
 //!
 //! `HEGEL_FUZZ_REPRODUCE` names a prefix file to run the ordinary way
 //! instead: the sequence is replayed like a database entry, and a failure
@@ -35,6 +40,7 @@ use crate::exchange::CaseExchange;
 use crate::native::base64::base64_encode;
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, Span, Status};
 use crate::native::database::{deserialize_choices, serialize_nodes};
+use crate::native::realized::serialize_realized;
 use crate::native::test_runner::{self, RunResult};
 use crate::settings::Settings;
 
@@ -44,6 +50,7 @@ const REPRODUCE_VAR: &str = "HEGEL_FUZZ_REPRODUCE";
 const TEST_VAR: &str = "HEGEL_FUZZ_TEST";
 const MISFIT_VAR: &str = "HEGEL_FUZZ_MISFIT";
 const TRACE_VAR: &str = "HEGEL_FUZZ_TRACE";
+const TAIL_VAR: &str = "HEGEL_FUZZ_TAIL";
 
 /// What the environment asks of this run.
 #[derive(Debug)]
@@ -53,6 +60,7 @@ pub(crate) enum FuzzMode {
         prefix: Vec<ChoiceValue>,
         output: String,
         random_misfits: bool,
+        exact: bool,
         trace: Option<String>,
     },
     /// Replay `entry` like a database entry: shrink and persist a failure.
@@ -106,10 +114,20 @@ fn from_env_with(
             )));
         }
     };
+    let exact = match var(TAIL_VAR).as_deref() {
+        None | Some("random") => false,
+        Some("none") => true,
+        Some(other) => {
+            return Err(usage(format!(
+                "{TAIL_VAR} must be random or none, got {other:?}"
+            )));
+        }
+    };
     Ok(output.map(|output| FuzzMode::Case {
         prefix,
         output,
         random_misfits,
+        exact,
         trace: var(TRACE_VAR),
     }))
 }
@@ -151,6 +169,7 @@ pub(crate) async fn run(
             prefix,
             output,
             random_misfits,
+            exact,
             trace,
         } => {
             if let Some(path) = &trace {
@@ -164,6 +183,7 @@ pub(crate) async fn run(
                 database_key,
                 &prefix,
                 random_misfits,
+                exact,
                 trace.as_deref(),
                 exchange,
             )
@@ -228,6 +248,13 @@ fn record_json(
             optional(serialize_nodes(&run.nodes).map(|bytes| quoted(&base64_encode(&bytes)))),
         ),
         ("spans", array(run.spans.iter().map(span_json))),
+        (
+            "realized_base64",
+            optional(
+                serialize_realized(&run.nodes, &run.spans)
+                    .map(|bytes| quoted(&base64_encode(&bytes))),
+            ),
+        ),
         (
             "events",
             array(run.events.iter().map(|(name, value)| {

@@ -51,11 +51,13 @@ fn an_output_path_selects_a_case_with_an_empty_prefix_and_random_misfits() {
             prefix,
             output,
             random_misfits,
+            exact,
             trace,
         } => {
             assert!(prefix.is_empty());
             assert_eq!(output, "/some/record.json");
             assert!(random_misfits);
+            assert!(!exact);
             assert_eq!(trace, None);
         }
         _ => panic!("expected a case"),
@@ -182,6 +184,17 @@ fn case(prefix: &[ChoiceValue], output: &std::path::Path) -> FuzzMode {
         prefix: prefix.to_vec(),
         output: output.to_str().unwrap().to_string(),
         random_misfits: true,
+        exact: false,
+        trace: None,
+    }
+}
+
+fn exact_case(prefix: &[ChoiceValue], output: &std::path::Path) -> FuzzMode {
+    FuzzMode::Case {
+        prefix: prefix.to_vec(),
+        output: output.to_str().unwrap().to_string(),
+        random_misfits: true,
+        exact: true,
         trace: None,
     }
 }
@@ -191,8 +204,87 @@ fn traced_case(output: &std::path::Path, trace: &std::path::Path) -> FuzzMode {
         prefix: Vec::new(),
         output: output.to_str().unwrap().to_string(),
         random_misfits: true,
+        exact: false,
         trace: Some(trace.to_str().unwrap().to_string()),
     }
+}
+
+#[test]
+fn the_tail_policy_is_parsed_and_defaults_to_random() {
+    for (vars, expected) in [
+        (vec![(OUTPUT_VAR, "/out")], false),
+        (vec![(OUTPUT_VAR, "/out"), (TAIL_VAR, "random")], false),
+        (vec![(OUTPUT_VAR, "/out"), (TAIL_VAR, "none")], true),
+    ] {
+        match from_env_with(env_of(&vars), None).unwrap() {
+            Some(FuzzMode::Case { exact, .. }) => assert_eq!(exact, expected),
+            other => panic!("{other:?}"),
+        }
+    }
+    let err = from_env_with(env_of(&[(OUTPUT_VAR, "/out"), (TAIL_VAR, "some")]), None).unwrap_err();
+    assert_eq!(
+        usage_message(err),
+        "HEGEL_FUZZ_TAIL must be random or none, got \"some\""
+    );
+}
+
+#[test]
+fn an_exact_case_overruns_past_its_prefix_and_puns_a_misfit() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    let seen = std::sync::Mutex::new(Vec::new());
+    drive_mode(
+        exact_case(&[int(7), int(500)], &out),
+        &quiet_settings(),
+        Some("k"),
+        |ds| {
+            let a = match draw_int(ds, 0, 100) {
+                Ok(n) => n,
+                Err(r) => return r,
+            };
+            let b = match draw_int(ds, 0, 100) {
+                Ok(n) => n,
+                Err(r) => return r,
+            };
+            seen.lock().unwrap().push((a, b));
+            match draw_int(ds, 0, 100) {
+                Ok(_) => TestCaseResult::Valid,
+                Err(r) => r,
+            }
+        },
+    )
+    .unwrap();
+    let record = read_record(&out);
+    assert_eq!(record["status"], "overrun");
+    assert_eq!(record["misaligned_at"], 1);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0, 7);
+    assert!((0..=100).contains(&seen[0].1));
+}
+
+#[test]
+fn the_record_carries_the_realized_form_of_the_case() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    drive_mode(case(&[int(3)], &out), &quiet_settings(), Some("k"), |ds| {
+        ds.start_span(5).unwrap();
+        if let Err(r) = draw_int(ds, 0, 10) {
+            return r;
+        }
+        ds.stop_span(false).unwrap();
+        TestCaseResult::Valid
+    })
+    .unwrap();
+    let record = read_record(&out);
+    let bytes =
+        crate::native::base64::base64_decode(record["realized_base64"].as_str().unwrap()).unwrap();
+    let (nodes, spans) = crate::native::realized::deserialize_realized(&bytes).unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].value(), int(3));
+    assert!(matches!(&nodes[0].data, ChoiceData::Integer(c, _) if c.max_value == BigInt::from(10)));
+    assert_eq!(spans.len(), record["spans"].as_array().unwrap().len());
+    assert!(spans.iter().any(|s| s.label == 5));
 }
 
 #[test]

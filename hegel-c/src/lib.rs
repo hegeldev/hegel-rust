@@ -50,6 +50,30 @@ mod sys;
 /// cbindgen:ignore
 mod unicodedata;
 
+/// The shrinker and the realized form of a test case, for a fuzzing
+/// harness that replays each candidate in a fresh process: it seeds
+/// [`fuzz_driver::Shrinker`] with the nodes and spans a fuzz-mode record
+/// carries in `realized_base64`, supplies a [`fuzz_driver::ShrinkProbe`]
+/// that runs the program with `HEGEL_FUZZ_TAIL=none`, and drives the
+/// shrink with [`fuzz_driver::drive`].
+/// cbindgen:ignore
+#[cfg(feature = "fuzz-driver")]
+pub mod fuzz_driver {
+    pub use crate::backend::RunError;
+    pub use crate::native::core::{
+        ChoiceData, ChoiceNode, ChoiceValue, NodesSortKey, Span, Spans, flattened_len, sort_key,
+    };
+    pub use crate::native::database::{deserialize_choices, serialize_choices};
+    pub use crate::native::realized::{deserialize_realized, serialize_realized};
+    pub use crate::native::shrinker::{ShrinkHalt, ShrinkProbe, ShrinkResult, ShrinkRun, Shrinker};
+
+    /// Run a shrinker future to completion. A probe that executes the
+    /// candidate itself never yields, so one poll finishes it.
+    pub fn drive<F: core::future::Future>(fut: F) -> F::Output {
+        crate::exchange::drive_no_yield(fut)
+    }
+}
+
 /// cbindgen:ignore
 #[cfg(feature = "__bench")]
 #[doc(hidden)]
