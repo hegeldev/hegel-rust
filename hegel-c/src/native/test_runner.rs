@@ -3130,13 +3130,11 @@ pub(crate) async fn fuzz_case(
         NativeTestCase::for_choices(prefix, None, None)
     } else {
         let rng = create_rng(settings, database_key);
-        let ntc = NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?;
-        if random_misfits {
-            ntc.random_misfits()
-        } else {
-            ntc
-        }
+        NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?
     };
+    if random_misfits && !exact {
+        ntc = ntc.random_misfits();
+    }
     if let Some(path) = trace {
         ntc = ntc.trace_to(path.to_string());
     }

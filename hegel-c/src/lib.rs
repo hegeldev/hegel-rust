@@ -60,6 +60,8 @@ mod unicodedata;
 #[cfg(feature = "fuzz-driver")]
 pub mod fuzz_driver {
     pub use crate::backend::RunError;
+    pub use crate::native::bignum::BigInt;
+    pub use crate::native::core::choices::{BooleanChoice, IntegerChoice};
     pub use crate::native::core::{
         ChoiceData, ChoiceNode, ChoiceValue, NodesSortKey, Span, Spans, flattened_len, sort_key,
     };
