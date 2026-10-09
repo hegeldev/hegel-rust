@@ -798,7 +798,14 @@ impl<'a> Shrinker<'a> {
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
         let outcome = match self.delete_first().await {
-            Ok(()) => self.fixate_shrink_passes(&mut passes).await,
+            Ok(()) => match self.initial_coarse_reduction().await {
+                Ok(()) => {
+                    let line = counted("Coarse reduction", self.calls, self.current_nodes.len());
+                    self.debug_msg(&line);
+                    self.fixate_shrink_passes(&mut passes).await
+                }
+                Err(halt) => Err(halt),
+            },
             Err(halt) => Err(halt),
         };
         self.emit_profile_report(&passes, initial_size, initial_calls);
@@ -808,7 +815,10 @@ impl<'a> Shrinker<'a> {
     /// Run the deletion passes to a fixed point before anything else: a
     /// pass that cannot shorten a long sequence still walks all of it,
     /// so on a target whose executions are slow, the value passes would
-    /// spend the budget between the deletions that matter. Each round
+    /// spend the budget between the deletions that matter. The coarse
+    /// reduction, which probes every small integer with an execution,
+    /// also waits for this, since most of those integers go with the
+    /// deleted spans. Each round
     /// restarts the stall window and widens it to the sequence's spans,
     /// since a round with no improvement is a walk over every span.
     async fn delete_first(&mut self) -> ShrinkResult<()> {
@@ -820,12 +830,22 @@ impl<'a> Shrinker<'a> {
             self.delete_span_runs().await?;
             self.delete_spans().await?;
             if self.improvements == epoch {
-                let (calls, len) = (self.calls, self.current_nodes.len());
-                self.debug_msg(&format!("Deletion first: {calls} calls, {len} choices left"));
+                let line = counted("Deletion first", self.calls, self.current_nodes.len());
+                self.debug_msg(&line);
                 return Ok(());
             }
         }
     }
+}
+
+/// A phase's debug line: its calls so far and the choices it left.
+fn counted(phase: &str, calls: usize, len: usize) -> alloc::string::String {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    alloc::format!(
+        "{phase}: {calls} call{}, {len} choice{} left",
+        plural(calls),
+        plural(len)
+    )
 }
 
 /// Box a shrink-pass step future behind the object type

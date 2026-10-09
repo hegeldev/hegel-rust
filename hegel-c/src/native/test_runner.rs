@@ -50,7 +50,7 @@ use crate::native::graph_shrink::{
 };
 use crate::native::nd;
 use crate::native::rng::EngineRng;
-use crate::native::shrinker::{ShrinkHalt, ShrinkProbe, ShrinkRun, Shrinker, absorb_stop};
+use crate::native::shrinker::{ShrinkHalt, ShrinkProbe, ShrinkRun, Shrinker};
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::Database;
 use crate::settings::{
@@ -1819,7 +1819,6 @@ impl<'a> Engine<'a> {
                 let mut shrinker =
                     Shrinker::with_probe(Box::new(probe), verify.nodes, Spans::from(verify.spans));
                 shrinker.deadline = shrink_deadline;
-                absorb_stop(shrinker.initial_coarse_reduction().await)?;
                 if verbosity == Verbosity::Debug {
                     let output = output.clone();
                     shrinker.set_debug(move |msg| output.line(msg));

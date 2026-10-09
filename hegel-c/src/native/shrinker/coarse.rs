@@ -1,6 +1,7 @@
 //! Pre-shrink coarse reduction phase.
 //!
-//! The coarse reduction runs *once* before the main fixate loop, and
+//! The coarse reduction runs *once*, after the deletion passes have
+//! reached a fixed point and before the main fixate loop, and
 //! re-randomises small integer choices that look like they might be
 //! `one_of` branch selectors. Lowering such a branch can require
 //! regenerating everything after it, so this work doesn't compose well
@@ -17,7 +18,7 @@ use crate::control::hegel_internal_debug_assert;
 impl<'a> Shrinker<'a> {
     /// Coarse pre-shrink reductions that need their own phase because
     /// they can re-randomise (and thus enlarge) the test case.  Called
-    /// from `test_runner.rs` once, before the main `shrink()` loop.
+    /// from `shrink()` once, between its deletion phase and its main loop.
     pub async fn initial_coarse_reduction(&mut self) -> ShrinkResult<()> {
         self.reduce_each_alternative().await
     }

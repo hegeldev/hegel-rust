@@ -640,9 +640,12 @@ fn reproduce_replays_the_entry_shrinks_the_failure_and_persists_it() {
 fn reproduce_without_the_shrink_phase_reports_the_entry_as_replayed() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("db").to_str().unwrap().to_string();
-    let settings = quiet_settings()
-        .database(Some(db_path.clone()))
-        .phases([Phase::Explicit, Phase::Reuse, Phase::Generate, Phase::Target]);
+    let settings = quiet_settings().database(Some(db_path.clone())).phases([
+        Phase::Explicit,
+        Phase::Reuse,
+        Phase::Generate,
+        Phase::Target,
+    ]);
     let entry = serialize_choices(&[int(60)]).unwrap();
     let result = drive_mode(
         FuzzMode::Reproduce { entry },
@@ -663,7 +666,11 @@ fn reproduce_without_the_shrink_phase_reports_the_entry_as_replayed() {
     let blob = result.failures[0].reproduce_blob.as_deref().unwrap();
     match crate::native::blob::decode_blob(blob).unwrap() {
         crate::native::blob::DecodedBlob::Choices(choices) => {
-            assert_eq!(choices, vec![int(60)], "the failure is reported as replayed");
+            assert_eq!(
+                choices,
+                vec![int(60)],
+                "the failure is reported as replayed"
+            );
         }
         _ => panic!("expected a choices blob"),
     }

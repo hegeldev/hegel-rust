@@ -18,10 +18,12 @@ use crate::native::core::choices::IntegerChoice;
 use crate::native::core::{ChoiceNode, ChoiceValue, Span, Spans};
 use crate::native::shrinker::{ShrinkRun, Shrinker};
 use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 fn int_node(value: i128) -> ChoiceNode {
     ChoiceNode::integer(
@@ -97,7 +99,11 @@ fn a_run_of_sibling_steps_is_deleted_in_a_handful_of_calls() {
     );
     drive_no_yield(shrinker.delete_span_runs()).unwrap();
     assert_eq!(values(&shrinker.current_nodes), [1, 7]);
-    assert!(calls.load(Ordering::Relaxed) < 16, "{} calls", calls.load(Ordering::Relaxed));
+    assert!(
+        calls.load(Ordering::Relaxed) < 16,
+        "{} calls",
+        calls.load(Ordering::Relaxed)
+    );
 }
 
 /// Two parents at depth 1, each with children at depth 2, over a sequence
@@ -196,7 +202,55 @@ fn shrink_deletes_first_and_a_halt_in_that_phase_ends_it() {
         );
         shrinker.max_calls = max_calls;
         drive_no_yield(shrinker.shrink()).unwrap();
-        let expected: &[i128] = if max_calls.is_none() { &[0, 7] } else { &[1, 0, 1, 0, 1, 0, 1, 0, 1, 7] };
-        assert_eq!(values(&shrinker.current_nodes), expected, "max_calls {max_calls:?}");
+        let expected: &[i128] = if max_calls.is_none() {
+            &[0, 7]
+        } else {
+            &[1, 0, 1, 0, 1, 0, 1, 0, 1, 7]
+        };
+        assert_eq!(
+            values(&shrinker.current_nodes),
+            expected,
+            "max_calls {max_calls:?}"
+        );
     }
+}
+
+#[test]
+fn shrink_reduces_coarsely_only_after_deleting() {
+    let initial = vec![
+        int_node(1),
+        int_node(2),
+        int_node(1),
+        int_node(3),
+        int_node(1),
+        int_node(2),
+    ];
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let vals = values(nodes);
+                let interesting = vals.len() % 2 == 0 && vals.chunks(2).any(|s| s[1] == 3);
+                (interesting, nodes.to_vec(), step_spans(nodes.len()))
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        step_spans(6),
+    );
+    let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    shrinker.set_debug(move |line| sink.lock().unwrap().push(line.to_string()));
+    drive_no_yield(shrinker.shrink()).unwrap();
+    assert_eq!(values(&shrinker.current_nodes), [0, 3]);
+    let lines = lines.lock().unwrap();
+    let deletion = lines
+        .iter()
+        .position(|l| l.starts_with("Deletion first: "))
+        .unwrap();
+    let coarse = lines
+        .iter()
+        .position(|l| l.starts_with("Coarse reduction: "))
+        .unwrap();
+    assert!(deletion < coarse, "{lines:?}");
+    assert!(lines[coarse].ends_with(" 2 choices left"), "{lines:?}");
 }

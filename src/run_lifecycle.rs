@@ -20,8 +20,7 @@ use std::sync::{Arc, Once};
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
     AssumeFailed, Failed, InternalError, InvalidArgument, LoopDone, StopTest,
-    currently_in_test_context,
-    hegel_internal_error, with_test_context,
+    currently_in_test_context, hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
 use crate::runner::{Settings, TestLocation, Verbosity};
