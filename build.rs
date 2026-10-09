@@ -13,6 +13,10 @@
 //! search path. The pinned engine version is always baked in as
 //! `HEGEL_C_EXPECTED_VERSION`, which the loader checks against the loaded
 //! library's `hegel_version`.
+//!
+//! It also sets the `hegel_coverage` cfg when the build instruments for
+//! LLVM coverage, which is when the fuzzer's coverage sink
+//! (`src/llvm_coverage.rs`) has counters to write.
 
 use std::env;
 use std::fs;
@@ -24,6 +28,12 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-env-changed=HEGEL_C_LIB_DIR");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+    println!("cargo:rerun-if-env-changed=CARGO_LLVM_COV");
+    println!("cargo:rustc-check-cfg=cfg(hegel_coverage)");
+    if instrumented() {
+        println!("cargo:rustc-cfg=hegel_coverage");
+    }
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     println!(
@@ -47,6 +57,17 @@ fn main() {
         Err(_) => build_engine().display().to_string(),
     };
     println!("cargo:rustc-env=HEGEL_C_BAKED_LIB_DIR={lib_dir}");
+}
+
+/// Whether this build instruments the frontend for LLVM coverage, so the
+/// profiling runtime's counters exist for `src/llvm_coverage.rs` to sink:
+/// `-C instrument-coverage` among the rustflags, or a cargo-llvm-cov run,
+/// which instruments through a rustc wrapper the flags do not show.
+fn instrumented() -> bool {
+    env::var("CARGO_ENCODED_RUSTFLAGS")
+        .map(|flags| flags.contains("instrument-coverage"))
+        .unwrap_or(false)
+        || env::var_os("CARGO_LLVM_COV").is_some()
 }
 
 fn build_engine() -> PathBuf {

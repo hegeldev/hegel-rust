@@ -1704,7 +1704,16 @@ pub struct NativeTestCase {
     /// A file every choice of this stream is appended to as it is drawn,
     /// so the sequence survives the process: set by [`Self::trace_to`].
     trace: Option<String>,
+    /// Decides the choice source at the first draw, for a test case whose
+    /// prefix and RNG are not known when it is built: the fuzz server's,
+    /// which serves requests at that point and lets the child that answers
+    /// one adopt the source it asked for.
+    deferred: Option<Deferred>,
 }
+
+/// A decision deferred to a test case's first draw: see
+/// [`NativeTestCase::defer_source`].
+pub(crate) type Deferred = Box<dyn FnOnce(&mut NativeTestCase) + Send>;
 
 impl NativeTestCase {
     /// A fresh randomly generated test case: the replay primitive's
@@ -1863,6 +1872,7 @@ impl NativeTestCase {
             observer,
             trailing_template,
             random_misfits: false,
+            deferred: None,
             trace: None,
         }
     }
@@ -1925,6 +1935,26 @@ impl NativeTestCase {
         self.rng = Some(rng);
         self.family.set_budget(self.max_size);
         self
+    }
+
+    /// Leave the choice source to `decide`, called with this test case at
+    /// its first draw, before the draw consults any prefix or RNG.
+    pub fn defer_source(mut self, decide: Deferred) -> Self {
+        self.deferred = Some(decide);
+        self
+    }
+
+    /// Take the choice source of `source` (its prefix, RNG, draw budget,
+    /// misfit handling and generation parameters) for this test case,
+    /// keeping everything it has recorded so far, such as the spans opened
+    /// before its first draw.
+    pub fn adopt_source(&mut self, source: NativeTestCase) {
+        self.replay = source.replay;
+        self.rng = source.rng;
+        self.max_size = source.max_size;
+        self.random_misfits = source.random_misfits;
+        self.trailing_template = source.trailing_template;
+        self.family = source.family;
     }
 
     /// Replace every prefix value that does not fit its draw with a fresh
@@ -2698,6 +2728,9 @@ impl NativeTestCase {
         from_prefix: impl Fn(&ChoiceValue) -> Option<V>,
         random: impl FnOnce(&mut EngineRng) -> Result<V, InternalError>,
     ) -> Result<(V, bool), EngineError> {
+        if let Some(decide) = self.deferred.take() {
+            decide(self);
+        }
         self.pre_choice()?;
 
         let idx = self.nodes.len();

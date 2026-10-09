@@ -39,6 +39,8 @@ mod embed;
 mod exchange;
 #[cfg(not(target_family = "wasm"))]
 mod fuzz_client;
+#[cfg(unix)]
+mod fuzz_server;
 /// cbindgen:ignore
 mod native;
 /// cbindgen:ignore

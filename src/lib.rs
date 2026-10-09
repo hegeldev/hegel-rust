@@ -327,6 +327,7 @@ pub mod explicit_test_case;
 pub mod extras;
 pub(crate) mod ffi;
 pub mod generators;
+mod llvm_coverage;
 pub mod pretty;
 #[doc(hidden)]
 pub mod run_lifecycle;

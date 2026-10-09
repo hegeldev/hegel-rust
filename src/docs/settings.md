@@ -339,6 +339,9 @@ run first.
 | `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking and persisting the failure it reproduces. |
 | `HEGEL_FUZZ_TAIL` | run start | Fuzzer client: `random` (the default) or `none`, whether the one test case draws randomly past its prefix or overruns there, with a misfit punned as the shrinker puns it. |
 | `HEGEL_FUZZ_TRACE` | run start | Fuzzer client: a file every choice of the one test case is appended to as it is drawn, for recovering the sequence of a case that kills the process. |
+| `HEGEL_FUZZ_SERVER` | run start | Fuzzer client: two named pipes, `requests,replies`, that turn the process into a fuzz server running one test case per request, forked at the test's first draw. |
+| `HEGEL_FUZZ_COVERAGE` | run start | Fuzzer client: a file each test case's addition to the program's LLVM coverage counters is written to, one AFL-bucketed byte per counter. Needs a `-C instrument-coverage` build. |
+| `HEGEL_FUZZ_RECORD` | run start | Fuzzer client: `full` (the default) or `compact`, which leaves the `choices` and `spans` arrays out of the record for a fuzzer that reads them from `realized_base64`. |
 | `HEGEL_FUZZ_TEST` | run start | Fuzzer client: the database key of the test the `HEGEL_FUZZ_*` variables are for; every other test runs no test case. |
 | `CI`, `GITHUB_ACTIONS`, … | environment detection | Selects the `ci` profile. |
 
@@ -419,6 +422,46 @@ aborts or is killed before the record is written still leaves its choice
 sequence behind; a fuzzer runs a crashing prefix and seed once more with
 the variable set to learn what the case drew. A cloned stream is traced
 as an empty clone when it is opened.
+
+`HEGEL_FUZZ_SERVER` names two named pipes, `requests,replies`, and
+turns the process into a fuzz server. The selected test starts as usual
+and, when its test case makes the first draw, reads requests from the
+first pipe instead of drawing, one per line: tab-separated `key=value`
+fields `output` (the record file, as `HEGEL_FUZZ_OUTPUT`), `prefix` (a
+choice-sequence file, as `HEGEL_FUZZ_PREFIX`), `seed` (the seed for the
+draws past the prefix), `tail` and `misfit` (as `HEGEL_FUZZ_TAIL` and
+`HEGEL_FUZZ_MISFIT`) and `stderr` (a file the case's standard error goes
+to). For each request the process forks: the child continues from that
+draw exactly as a `HEGEL_FUZZ_OUTPUT` run would, writes its record and
+exits, while the parent writes `pid <n>` to the reply pipe, waits for the
+child, writes `exit <code>` or `signal <n>`, and reads the next request.
+A request it cannot read or serve gets `error <message>` and no child.
+End of file on the request pipe ends the server. The child ends its
+process as soon as its run does, with status 0 or 101, rather than
+returning to whatever started the test: under `cargo test` that is
+libtest, whose channels do not survive a fork. Whatever the test does
+before its first draw — loading the program, opening a database — is
+done once and shared by every case, so a fuzzer whose executions are
+dominated by process start-up gets them back. A test that never draws
+cannot serve, and the run is a usage error.
+
+`HEGEL_FUZZ_COVERAGE` names a file the program's LLVM coverage counters
+are written to after every test case, for a fuzzer that wants the
+case's coverage without parsing the raw profile the process writes at
+exit. The counters are noted before each case and, once it has run,
+what the case added to each is written, one byte per counter holding
+the count bucketed as AFL buckets it: 0, 1, 2 and 3 kept, 4–7, 8–15,
+16–31 and 32–127 becoming 4 to 7, and anything larger 8. The counters
+themselves are left alone, so the profile the process writes at exit is
+unaffected. The program must be built with
+`-C instrument-coverage`, so the counters exist; setting the variable
+for a program built without it is an error. Under `HEGEL_FUZZ_SERVER`
+every served case writes the map.
+
+`HEGEL_FUZZ_RECORD=compact` leaves the `choices` and `spans` arrays out
+of the record. They are its bulk for a long case, and a fuzzer that
+reads the choice sequence from `choices_base64` and the spans from
+`realized_base64` has no use for them. The default, `full`, keeps them.
 
 `HEGEL_FUZZ_TEST` names the database key of the test the variables are
 for (`module_path::function_name`, the `test` field of the record). Every

@@ -3126,18 +3126,46 @@ pub(crate) async fn fuzz_case(
     trace: Option<&str>,
     exchange: &CaseExchange,
 ) -> Result<RunResult, RunError> {
-    let mut ntc = if exact {
-        NativeTestCase::for_choices(prefix, None, None)
-    } else {
-        let rng = create_rng(settings, database_key);
-        NativeTestCase::for_probe(prefix, rng, settings.choice_bound())?
-    };
-    if random_misfits && !exact {
-        ntc = ntc.random_misfits();
-    }
+    let rng = create_rng(settings, database_key);
+    let mut ntc = fuzz_source(prefix, random_misfits, exact, rng, settings.choice_bound())?;
     if let Some(path) = trace {
         ntc = ntc.trace_to(path.to_string());
     }
+    ntc.set_should_capture();
+    run_case(exchange, ntc).await
+}
+
+/// The choice source of a fuzzer's test case: `prefix` replayed, then
+/// either random draws from `rng` up to `bound` choices in all, with a
+/// misfitting prefix value replaced at random when `random_misfits` is
+/// set, or, when `exact`, nothing past the prefix.
+pub(crate) fn fuzz_source(
+    prefix: &[ChoiceValue],
+    random_misfits: bool,
+    exact: bool,
+    rng: EngineRng,
+    bound: usize,
+) -> Result<NativeTestCase, InternalError> {
+    if exact {
+        return Ok(NativeTestCase::for_choices(prefix, None, None));
+    }
+    let ntc = NativeTestCase::for_probe(prefix, rng, bound)?;
+    Ok(if random_misfits {
+        ntc.random_misfits()
+    } else {
+        ntc
+    })
+}
+
+/// One test case whose choice source `decide` settles at its first draw:
+/// the fuzz server's, which answers a request there. Stamped for capture
+/// as [`fuzz_case`] is.
+#[cfg(unix)]
+pub(crate) async fn fuzz_server_case(
+    decide: Box<dyn FnOnce(&mut NativeTestCase) + Send>,
+    exchange: &CaseExchange,
+) -> Result<RunResult, RunError> {
+    let mut ntc = NativeTestCase::for_choices(&[], None, None).defer_source(decide);
     ntc.set_should_capture();
     run_case(exchange, ntc).await
 }

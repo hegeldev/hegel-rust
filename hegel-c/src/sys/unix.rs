@@ -342,6 +342,72 @@ pub(super) unsafe fn dealloc(ptr: *mut u8, _layout: core::alloc::Layout) {
     unsafe { free(ptr.cast()) }
 }
 
+pub(super) type Fd = rustix::fd::OwnedFd;
+
+unsafe extern "C" {
+    #[link_name = "fork"]
+    fn libc_fork() -> i32;
+    #[link_name = "exit"]
+    fn libc_exit(code: i32) -> !;
+}
+
+pub(super) fn fork() -> Result<Option<u32>, Error> {
+    // SAFETY: `fork` has no preconditions; the child only ever continues
+    // the single-threaded engine's work and exits.
+    let pid = unsafe { libc_fork() };
+    (pid >= 0)
+        .then_some((pid > 0).then_some(pid as u32))
+        .ok_or(Error)
+}
+
+pub(super) fn wait(pid: u32) -> Result<super::process::Exit, Error> {
+    use rustix::process::{Pid, WaitOptions, waitpid};
+    let pid = Pid::from_raw(pid as i32).ok_or(Error)?;
+    let (_, status) = retry_intr(|| waitpid(Some(pid), WaitOptions::empty()))?.ok_or(Error)?;
+    if let Some(code) = status.exit_status() {
+        return Ok(super::process::Exit::Code(code));
+    }
+    status
+        .terminating_signal()
+        .map(super::process::Exit::Signal)
+        .ok_or(Error)
+}
+
+pub(super) fn exit(code: i32) -> ! {
+    // SAFETY: `exit` has no preconditions.
+    unsafe { libc_exit(code) }
+}
+
+pub(super) fn redirect_stderr(path: &str) -> Result<(), Error> {
+    let fd = open_write(path)?;
+    rustix::stdio::dup2_stderr(&fd)?;
+    Ok(())
+}
+
+pub(super) fn open_read(path: &str) -> Result<Fd, Error> {
+    Ok(retry_intr(|| {
+        rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
+    })?)
+}
+
+pub(super) fn open_write(path: &str) -> Result<Fd, Error> {
+    Ok(retry_intr(|| {
+        rustix::fs::open(
+            path,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
+        )
+    })?)
+}
+
+pub(super) fn read_fd(fd: &Fd, buf: &mut [u8]) -> Result<usize, Error> {
+    Ok(retry_intr(|| rustix::io::read(fd, &mut *buf))?)
+}
+
+pub(super) fn write_fd(fd: &Fd, data: &[u8]) -> Result<(), Error> {
+    write_all(data, |chunk| rustix::io::write(fd, chunk))
+}
+
 /// Abort the process without unwinding or running any cleanup.
 #[cfg(all(feature = "runtime", not(feature = "std"), not(test)))]
 pub(super) fn abort_process() -> ! {

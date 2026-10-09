@@ -44,6 +44,34 @@ fn no_fuzz_variables_means_no_fuzz_mode() {
 }
 
 #[test]
+fn a_server_variable_names_the_two_pipes() {
+    let env = env_of(&[("HEGEL_FUZZ_SERVER", "/req,/rep")]);
+    match from_env_with(env, Some("k")).unwrap().unwrap() {
+        FuzzMode::Server {
+            requests,
+            replies,
+            compact,
+        } => {
+            assert_eq!(requests, "/req");
+            assert_eq!(replies, "/rep");
+            assert!(!compact);
+        }
+        _ => panic!("expected the server"),
+    }
+    let env = env_of(&[("HEGEL_FUZZ_SERVER", "/req")]);
+    let message = usage_message(from_env_with(env, Some("k")).unwrap_err());
+    assert!(message.contains("HEGEL_FUZZ_SERVER"), "{message}");
+    let env = env_of(&[
+        ("HEGEL_FUZZ_SERVER", "/req,/rep"),
+        ("HEGEL_FUZZ_TEST", "other"),
+    ]);
+    assert!(matches!(
+        from_env_with(env, Some("k")).unwrap(),
+        Some(FuzzMode::Skip)
+    ));
+}
+
+#[test]
 fn an_output_path_selects_a_case_with_an_empty_prefix_and_random_misfits() {
     let env = env_of(&[("HEGEL_FUZZ_OUTPUT", "/some/record.json")]);
     match from_env_with(env, Some("k")).unwrap().unwrap() {
@@ -53,8 +81,10 @@ fn an_output_path_selects_a_case_with_an_empty_prefix_and_random_misfits() {
             random_misfits,
             exact,
             trace,
+            compact,
         } => {
             assert!(prefix.is_empty());
+            assert!(!compact);
             assert_eq!(output, "/some/record.json");
             assert!(random_misfits);
             assert!(!exact);
@@ -186,6 +216,7 @@ fn case(prefix: &[ChoiceValue], output: &std::path::Path) -> FuzzMode {
         random_misfits: true,
         exact: false,
         trace: None,
+        compact: false,
     }
 }
 
@@ -196,6 +227,7 @@ fn exact_case(prefix: &[ChoiceValue], output: &std::path::Path) -> FuzzMode {
         random_misfits: true,
         exact: true,
         trace: None,
+        compact: false,
     }
 }
 
@@ -206,6 +238,7 @@ fn traced_case(output: &std::path::Path, trace: &std::path::Path) -> FuzzMode {
         random_misfits: true,
         exact: false,
         trace: Some(trace.to_str().unwrap().to_string()),
+        compact: false,
     }
 }
 
@@ -708,7 +741,7 @@ fn every_choice_kind_renders_with_its_constraint() {
         ended: false,
     };
     let record: serde_json::Value =
-        serde_json::from_str(&record_json(None, &[], &run, None)).unwrap();
+        serde_json::from_str(&record_json(None, &[], &run, None, false)).unwrap();
     let choices = &record["choices"];
     assert_eq!(choices[0]["kind"], "float");
     assert_eq!(choices[0]["value"], "NaN");
@@ -748,4 +781,60 @@ fn a_lone_surrogate_in_a_string_choice_prints_as_the_replacement_character() {
     );
     assert_eq!(number(f64::NEG_INFINITY), "\"-inf\"");
     assert_eq!(number(-0.0), "-0.0");
+}
+
+#[test]
+fn the_record_shape_is_parsed_and_defaults_to_full() {
+    for (vars, expected) in [
+        (vec![(OUTPUT_VAR, "/out")], false),
+        (vec![(OUTPUT_VAR, "/out"), (RECORD_VAR, "full")], false),
+        (vec![(OUTPUT_VAR, "/out"), (RECORD_VAR, "compact")], true),
+    ] {
+        match from_env_with(env_of(&vars), None).unwrap() {
+            Some(FuzzMode::Case { compact, .. }) => assert_eq!(compact, expected),
+            other => panic!("{other:?}"),
+        }
+    }
+    let env = env_of(&[("HEGEL_FUZZ_SERVER", "/req,/rep"), (RECORD_VAR, "compact")]);
+    assert!(matches!(
+        from_env_with(env, Some("k")).unwrap(),
+        Some(FuzzMode::Server { compact: true, .. })
+    ));
+    let err =
+        from_env_with(env_of(&[(OUTPUT_VAR, "/out"), (RECORD_VAR, "tiny")]), None).unwrap_err();
+    assert_eq!(
+        usage_message(err),
+        "HEGEL_FUZZ_RECORD must be full or compact, got \"tiny\""
+    );
+}
+
+#[test]
+fn a_compact_record_leaves_the_choice_and_span_arrays_to_the_realized_form() {
+    let run = RunResult {
+        status: Status::Valid,
+        nodes: vec![ChoiceNode::boolean(BooleanChoice { p: 0.5 }, true, false)],
+        spans: vec![Span {
+            start: 0,
+            end: 1,
+            label: 3,
+            depth: 0,
+            parent: None,
+            discarded: false,
+        }],
+        origin: None,
+        target_observations: crate::native::HashMap::default(),
+        events: Vec::new(),
+        divergence: None,
+        settled: Vec::new(),
+        ended: false,
+    };
+    let full: serde_json::Value =
+        serde_json::from_str(&record_json(None, &[], &run, None, false)).unwrap();
+    let compact: serde_json::Value =
+        serde_json::from_str(&record_json(None, &[], &run, None, true)).unwrap();
+    assert!(full.get("choices").is_some() && full.get("spans").is_some());
+    assert!(compact.get("choices").is_none() && compact.get("spans").is_none());
+    assert_eq!(compact["realized_base64"], full["realized_base64"]);
+    assert_eq!(compact["choices_base64"], full["choices_base64"]);
+    assert_eq!(compact["status"], "valid");
 }

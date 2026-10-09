@@ -7,3 +7,9 @@ When `HEGEL_FUZZ_OUTPUT` names a file, the run executes exactly one test case an
 It also adds `HEGEL_STATEFUL_STEPS`, which replaces every state machine's step count for the run (whatever `Machine::steps` set), so a suite's stateful tests can be driven deeper, as a fuzzer wants, without editing source. The variable must be a positive integer; anything else is a usage error.
 
 For a fuzzer that shrinks by replaying candidates itself, `HEGEL_FUZZ_TAIL=none` makes the one test case draw nothing past its prefix, overrunning instead and punning a misfit as the engine's shrinker does, and the record carries `realized_base64`, the case's choices with their constraints and its spans. The internal `fuzz-driver` feature of `hegeltest-c` exposes the shrinker, that realized form and the choice serialisers as a Rust API, with a call budget on the shrinker for drivers whose executions are too costly to bound by the clock alone.
+
+`HEGEL_FUZZ_SERVER=<requests>,<replies>` turns the process into a fuzz server: the test starts as usual and, at its first draw, serves one test case per request line read from the first named pipe, forking so that each case continues from that draw as a `HEGEL_FUZZ_OUTPUT` run would while the parent reports the child's pid and exit status on the second pipe. Everything the test does before its first draw is done once, so a fuzzer whose executions are dominated by process start-up no longer pays it per case.
+
+`HEGEL_FUZZ_COVERAGE` names a file a program built with `-C instrument-coverage` writes each test case's addition to its LLVM coverage counters to, bucketed to a byte per counter as AFL buckets them, so a fuzzer reads a case's coverage as a flat map instead of parsing the raw profile at process exit.
+
+`HEGEL_FUZZ_RECORD=compact` leaves the `choices` and `spans` arrays out of the record, for a fuzzer that reads them from the realized form.

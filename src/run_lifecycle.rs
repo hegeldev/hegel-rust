@@ -572,7 +572,9 @@ fn drive_run<F: FnMut(TestCase)>(
     let quiet = verbosity == Verbosity::Quiet;
     let verbose = matches!(verbosity, Verbosity::Verbose | Verbosity::Debug);
     let mut captured: HashMap<String, CapturedReport> = HashMap::new();
+    let mut coverage = crate::llvm_coverage::Sink::from_env();
     while let Some(c_tc) = run.next_test_case() {
+        crate::llvm_coverage::begin_case(&mut coverage);
         let buffer: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
         let live: Option<RunOutput> = if verbose { Some(output.clone()) } else { None };
         let case_sink: Option<crate::test_case::OutputSink> = if quiet {
@@ -591,6 +593,7 @@ fn drive_run<F: FnMut(TestCase)>(
         };
         let (tc_result, payload, diagnostic) =
             run_test_case(c_tc, test_fn, false, verbosity, output, case_sink);
+        crate::llvm_coverage::end_case(&mut coverage);
         if let TestCaseResult::Interesting(failure) = &tc_result {
             let records = std::mem::take(&mut *buffer.lock().unwrap_or_else(|e| e.into_inner()));
             store_capture(
@@ -612,6 +615,7 @@ fn drive_run<F: FnMut(TestCase)>(
             if let Some(message) = stale_message {
                 panic!("{message}");
             }
+            served_case_ends(false);
         }
         RunStatus::HEGEL_RUN_STATUS_ERROR => {
             let message = result
@@ -653,6 +657,7 @@ fn drive_run<F: FnMut(TestCase)>(
                 last_payload = Some(report.payload);
             }
 
+            served_case_ends(true);
             if multiple {
                 std::panic::resume_unwind(Box::new(format!(
                     "Property-based test failed with {count} distinct failures."
@@ -664,6 +669,18 @@ fn drive_run<F: FnMut(TestCase)>(
                 );
             }
         }
+    }
+}
+
+/// End the process here if this run was a fuzz server's child. Only such a
+/// child reaches the end of a run with `HEGEL_FUZZ_SERVER` set, the server
+/// itself leaving at the test's first draw, and it cannot return to the
+/// harness that started its test: a fork leaves libtest's channels dead in
+/// the child. The report has been printed and the coverage map written, so
+/// the case ends as a failing or passing test process would.
+fn served_case_ends(failed: bool) {
+    if std::env::var_os("HEGEL_FUZZ_SERVER").is_some() {
+        std::process::exit(if failed { 101 } else { 0 });
     }
 }
 

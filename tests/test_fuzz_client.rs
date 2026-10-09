@@ -187,3 +187,251 @@ fn base64_decode(text: &str) -> Vec<u8> {
     }
     out
 }
+
+#[test]
+fn a_compact_record_has_the_realized_form_but_no_choice_or_span_arrays() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    fixture(BASIC_MAIN)
+        .env("HEGEL_FUZZ_OUTPUT", out.to_str().unwrap())
+        .env("HEGEL_FUZZ_RECORD", "compact")
+        .run();
+    let record = read_record(&out);
+    assert!(record.get("choices").is_none());
+    assert!(record.get("spans").is_none());
+    assert!(record["realized_base64"].is_string());
+    assert!(record["choices_base64"].is_string());
+    assert_eq!(record["status"], "valid");
+}
+
+#[test]
+fn fuzz_coverage_writes_the_case_s_counter_map_or_refuses_an_uninstrumented_program() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("record.json");
+    let map = dir.path().join("coverage.map");
+    let command = fixture(BASIC_MAIN)
+        .env("HEGEL_FUZZ_OUTPUT", out.to_str().unwrap())
+        .env("HEGEL_FUZZ_COVERAGE", map.to_str().unwrap());
+    if cfg!(hegel_coverage) {
+        command.run();
+        assert_eq!(read_record(&out)["status"], "valid");
+        let bytes = std::fs::read(&map).unwrap();
+        assert!(bytes.iter().all(|&b| b <= 8));
+        assert!(bytes.iter().any(|&b| b > 0));
+    } else {
+        command
+            .expect_failure("HEGEL_FUZZ_COVERAGE=.* not built with -C instrument-coverage")
+            .run();
+        assert!(!map.exists());
+    }
+}
+
+#[cfg(unix)]
+mod server {
+    use super::{BASIC_MAIN, MAIN_FAILING, integer_entry, read_record};
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    const MAIN_NODRAW: &str = env!("CARGO_BIN_EXE_fixture_main_nodraw");
+    const MAIN_SLOW: &str = env!("CARGO_BIN_EXE_fixture_main_slow");
+
+    /// A fuzz server over two named pipes in `dir`. The request pipe is
+    /// held open for reading and writing so the server never sees its end
+    /// early; the reply pipe is read without blocking, so a server that
+    /// dies before replying fails the test instead of hanging it.
+    struct Server {
+        child: std::process::Child,
+        requests: std::fs::File,
+        replies: BufReader<std::fs::File>,
+    }
+
+    #[cfg(target_os = "macos")]
+    const O_NONBLOCK: i32 = 0x4;
+    #[cfg(not(target_os = "macos"))]
+    const O_NONBLOCK: i32 = 0x800;
+
+    fn start(exe: &str, dir: &std::path::Path) -> Server {
+        let requests = dir.join("requests");
+        let replies = dir.join("replies");
+        for pipe in [&requests, &replies] {
+            assert!(Command::new("mkfifo").arg(pipe).status().unwrap().success());
+        }
+        let mut command = Command::new(exe);
+        if cfg!(hegel_coverage) {
+            command.env("HEGEL_FUZZ_COVERAGE", dir.join("coverage.map"));
+        }
+        let child = command
+            .current_dir(dir)
+            .env(
+                "HEGEL_FUZZ_SERVER",
+                format!("{},{}", requests.display(), replies.display()),
+            )
+            .env("HEGEL_DATABASE", "disabled")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::os::unix::fs::OpenOptionsExt;
+        let requests = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&requests)
+            .unwrap();
+        let replies = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(O_NONBLOCK)
+            .open(&replies)
+            .unwrap();
+        Server {
+            child,
+            requests,
+            replies: BufReader::new(replies),
+        }
+    }
+
+    impl Server {
+        fn reply(&mut self) -> String {
+            let mut line = String::new();
+            loop {
+                match self.replies.read_line(&mut line) {
+                    Ok(0) | Err(_) if line.ends_with('\n') => break,
+                    Ok(n) if n > 0 && line.ends_with('\n') => break,
+                    Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => panic!("{e}"),
+                    _ => {}
+                }
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    panic!("server exited with {status} before replying {line:?}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            line.trim_end().to_string()
+        }
+
+        fn request(&mut self, line: &str) -> (String, String) {
+            writeln!(self.requests, "{line}").unwrap();
+            let pid = self.reply();
+            assert!(pid.starts_with("pid "), "{pid}");
+            (pid, self.reply())
+        }
+
+        fn finish(self) -> std::process::Output {
+            drop(self.requests);
+            drop(self.replies);
+            let output = self.child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            output
+        }
+    }
+
+    #[test]
+    fn a_server_runs_one_case_per_request_and_ends_with_the_requests() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut server = start(BASIC_MAIN, dir.path());
+        let out1 = dir.path().join("1.json");
+        let out2 = dir.path().join("2.json");
+        let prefix = dir.path().join("prefix");
+        std::fs::write(&prefix, integer_entry(&[7])).unwrap();
+        let (_, ended) = server.request(&format!("output={}\tseed=1", out1.display()));
+        assert_eq!(ended, "exit 0");
+        if cfg!(hegel_coverage) {
+            let map = std::fs::read(dir.path().join("coverage.map")).unwrap();
+            assert!(map.iter().any(|&b| b > 0));
+        }
+        let (_, ended) = server.request(&format!(
+            "output={}\tprefix={}\ttail=none\tmisfit=simplest",
+            out2.display(),
+            prefix.display()
+        ));
+        assert_eq!(ended, "exit 0");
+        let out3 = dir.path().join("3.json");
+        let (_, ended) = server.request(&format!(
+            "output={}\tprefix={}\tmisfit=simplest\tseed=2",
+            out3.display(),
+            prefix.display()
+        ));
+        assert_eq!(ended, "exit 0");
+        assert_eq!(read_record(&out3)["choices"][0]["value"], "7");
+        let first = read_record(&out1);
+        assert_eq!(first["status"], "valid");
+        assert_eq!(first["prefix_length"], 0);
+        let second = read_record(&out2);
+        assert_eq!(second["status"], "valid");
+        assert_eq!(second["prefix_length"], 1);
+        assert_eq!(second["choices"][0]["value"], "7");
+        server.finish();
+    }
+
+    #[test]
+    fn a_failing_case_is_the_child_s_failure_with_its_own_stderr() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut server = start(MAIN_FAILING, dir.path());
+        let out = dir.path().join("out.json");
+        let err = dir.path().join("err.txt");
+        let (_, ended) = server.request(&format!(
+            "output={}\tstderr={}\tseed=3",
+            out.display(),
+            err.display()
+        ));
+        assert_eq!(ended, "exit 101");
+        assert_eq!(read_record(&out)["status"], "interesting");
+        let stderr = std::fs::read_to_string(&err).unwrap();
+        assert!(stderr.contains("panicked"), "{stderr}");
+        writeln!(server.requests, "nonsense").unwrap();
+        let ended = server.reply();
+        assert!(ended.starts_with("error "), "{ended}");
+        let output = server.finish();
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
+    }
+
+    #[test]
+    fn a_case_killed_by_a_signal_is_reported_as_that_signal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut server = start(MAIN_SLOW, dir.path());
+        let slow = dir.path().join("slow.json");
+        writeln!(server.requests, "output={}\tseed=1", slow.display()).unwrap();
+        let pid = server.reply();
+        let pid = pid.strip_prefix("pid ").unwrap();
+        assert!(
+            Command::new("kill")
+                .args(["-9", pid])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(server.reply(), "signal 9");
+        assert!(!slow.exists());
+        server.finish();
+    }
+
+    #[test]
+    fn unopenable_pipes_end_the_server() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let output = Command::new(BASIC_MAIN)
+            .current_dir(dir.path())
+            .env(
+                "HEGEL_FUZZ_SERVER",
+                format!(
+                    "{},{}",
+                    dir.path().join("missing").join("requests").display(),
+                    dir.path().join("missing").join("replies").display()
+                ),
+            )
+            .env("HEGEL_DATABASE", "disabled")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("could not open"), "{stderr}");
+    }
+
+    #[test]
+    fn a_test_that_draws_nothing_cannot_serve() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let server = start(MAIN_NODRAW, dir.path());
+        let output = server.child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("drew nothing"), "{stderr}");
+    }
+}

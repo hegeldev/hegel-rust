@@ -244,6 +244,98 @@ pub fn pid() -> u32 {
     imp::pid()
 }
 
+/// Process control for the fuzz server: forking a child per test case,
+/// waiting for it, and the named pipes the requests and replies travel
+/// on. Unix only, as the fuzz server is.
+#[cfg(unix)]
+pub mod process {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    use super::{Error, imp};
+
+    /// How a child ended.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Exit {
+        Code(i32),
+        Signal(i32),
+    }
+
+    /// Fork: `Some(pid)` in the parent, `None` in the child.
+    pub fn fork() -> Result<Option<u32>, Error> {
+        imp::fork()
+    }
+
+    /// Wait for the child `pid` to end.
+    pub fn wait(pid: u32) -> Result<Exit, Error> {
+        imp::wait(pid)
+    }
+
+    /// End the process with `code`, running its exit handlers (so an
+    /// instrumented process still writes its profile) but unwinding
+    /// nothing.
+    pub fn exit(code: i32) -> ! {
+        imp::exit(code)
+    }
+
+    /// Send the process's standard error to the file at `path` from now
+    /// on.
+    pub fn redirect_stderr(path: &str) -> Result<(), Error> {
+        imp::redirect_stderr(path)
+    }
+
+    /// A file opened for reading, line by line.
+    pub struct Lines {
+        fd: imp::Fd,
+        pending: Vec<u8>,
+    }
+
+    impl Lines {
+        pub fn open(path: &str) -> Result<Lines, Error> {
+            Ok(Lines {
+                fd: imp::open_read(path)?,
+                pending: Vec::new(),
+            })
+        }
+
+        /// The next line without its newline, `None` at end of file, and
+        /// an error for a line that is not UTF-8.
+        pub fn next_line(&mut self) -> Result<Option<String>, Error> {
+            loop {
+                if let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = self.pending.drain(..=end).collect();
+                    return String::from_utf8(line[..end].to_vec())
+                        .map(Some)
+                        .map_err(|_| Error);
+                }
+                let mut chunk = [0u8; 256];
+                let n = imp::read_fd(&self.fd, &mut chunk)?;
+                if n == 0 {
+                    return Ok(None);
+                }
+                self.pending.extend_from_slice(&chunk[..n]);
+            }
+        }
+    }
+
+    /// A file opened for writing.
+    pub struct Writer {
+        fd: imp::Fd,
+    }
+
+    impl Writer {
+        pub fn open(path: &str) -> Result<Writer, Error> {
+            Ok(Writer {
+                fd: imp::open_write(path)?,
+            })
+        }
+
+        pub fn write_all(&mut self, data: &[u8]) -> Result<(), Error> {
+            imp::write_fd(&self.fd, data)
+        }
+    }
+}
+
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "../../tests/embedded/sys_tests.rs"]
 mod tests;

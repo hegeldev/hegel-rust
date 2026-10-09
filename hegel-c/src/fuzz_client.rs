@@ -27,6 +27,14 @@
 //! is shrunk, reported and saved to the database, so the test's normal runs
 //! replay it from then on.
 //!
+//! `HEGEL_FUZZ_SERVER` names two pipes and turns the process into a fuzz
+//! server that runs one such case per request, forking at the test's
+//! first draw so that the work before it is done once (see
+//! [`crate::fuzz_server`]).
+//!
+//! `HEGEL_FUZZ_RECORD=compact` leaves the `choices` and `spans` arrays out
+//! of the record, for a fuzzer that reads them from the realized form.
+//!
 //! `HEGEL_FUZZ_TEST` names the database key of the test the variables are
 //! for; any other test in the process runs no test case at all, so a test
 //! binary holding several tests can be driven one test at a time.
@@ -51,6 +59,8 @@ const TEST_VAR: &str = "HEGEL_FUZZ_TEST";
 const MISFIT_VAR: &str = "HEGEL_FUZZ_MISFIT";
 const TRACE_VAR: &str = "HEGEL_FUZZ_TRACE";
 const TAIL_VAR: &str = "HEGEL_FUZZ_TAIL";
+const SERVER_VAR: &str = "HEGEL_FUZZ_SERVER";
+const RECORD_VAR: &str = "HEGEL_FUZZ_RECORD";
 
 /// What the environment asks of this run.
 #[derive(Debug)]
@@ -62,9 +72,16 @@ pub(crate) enum FuzzMode {
         random_misfits: bool,
         exact: bool,
         trace: Option<String>,
+        compact: bool,
     },
     /// Replay `entry` like a database entry: shrink and persist a failure.
     Reproduce { entry: Vec<u8> },
+    /// Serve test cases from the `requests` pipe, replying on `replies`.
+    Server {
+        requests: String,
+        replies: String,
+        compact: bool,
+    },
     /// The variables are for another test: run nothing.
     Skip,
 }
@@ -84,7 +101,8 @@ fn from_env_with(
     let var = |name: &str| env(name).filter(|value| !value.is_empty());
     let output = var(OUTPUT_VAR);
     let reproduce = var(REPRODUCE_VAR);
-    if output.is_none() && reproduce.is_none() {
+    let server = var(SERVER_VAR);
+    if output.is_none() && reproduce.is_none() && server.is_none() {
         return Ok(None);
     }
     if let Some(test) = var(TEST_VAR) {
@@ -100,6 +118,30 @@ fn from_env_with(
         }
         let (entry, _) = read_entry(REPRODUCE_VAR, &path)?;
         return Ok(Some(FuzzMode::Reproduce { entry }));
+    }
+    let compact = match var(RECORD_VAR).as_deref() {
+        None | Some("full") => false,
+        Some("compact") => true,
+        Some(other) => {
+            return Err(usage(format!(
+                "{RECORD_VAR} must be full or compact, got {other:?}"
+            )));
+        }
+    };
+    if let Some(pipes) = server {
+        #[cfg(not(unix))]
+        return Err(usage(format!("{SERVER_VAR} is only supported on Unix")));
+        #[cfg(unix)]
+        let Some((requests, replies)) = pipes.split_once(',') else {
+            return Err(usage(format!(
+                "{SERVER_VAR} must name the request and reply pipes as path,path"
+            )));
+        };
+        return Ok(Some(FuzzMode::Server {
+            requests: requests.to_string(),
+            replies: replies.to_string(),
+            compact,
+        }));
     }
     let prefix = match var(PREFIX_VAR) {
         Some(path) => read_entry(PREFIX_VAR, &path)?.1,
@@ -129,6 +171,7 @@ fn from_env_with(
         random_misfits,
         exact,
         trace: var(TRACE_VAR),
+        compact,
     }))
 }
 
@@ -171,6 +214,7 @@ pub(crate) async fn run(
             random_misfits,
             exact,
             trace,
+            compact,
         } => {
             if let Some(path) = &trace {
                 if crate::sys::fs::write(path, &[]).is_err() {
@@ -189,32 +233,132 @@ pub(crate) async fn run(
             )
             .await?;
             let elapsed = started.map(|started| started.elapsed());
-            let record = record_json(database_key, &prefix, &run, elapsed);
-            if crate::sys::fs::write(&output, record.as_bytes()).is_err() {
-                return Err(usage(format!("{OUTPUT_VAR}={output} could not be written")));
-            }
-            let failures = match (run.status, run.origin) {
-                (Status::Interesting, Some(origin)) => {
-                    let values: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
-                    alloc::vec![Failure {
-                        origin,
-                        reproduce_blob: crate::native::blob::encode_failure(&values),
-                        caveat: None,
-                    }]
-                }
-                _ => Vec::new(),
-            };
-            Ok(TestRunResult { failures })
+            finish_case(database_key, &prefix, &output, run, elapsed, compact)
         }
+        #[cfg(unix)]
+        FuzzMode::Server {
+            requests,
+            replies,
+            compact,
+        } => {
+            let decide = server::decide(requests, replies, settings.choice_bound());
+            let run = test_runner::fuzz_server_case(decide, exchange).await?;
+            let Some((request, started)) = server::SERVED.lock().take() else {
+                return Err(usage(format!(
+                    "{SERVER_VAR}: the test drew nothing, so no request was served"
+                )));
+            };
+            let elapsed = started.map(|started| started.elapsed());
+            finish_case(
+                database_key,
+                &request.prefix,
+                &request.output,
+                run,
+                elapsed,
+                compact,
+            )
+        }
+        #[cfg(not(unix))]
+        FuzzMode::Server { .. } => Err(usage(format!("{SERVER_VAR} is only supported on Unix"))),
     }
 }
 
-/// The JSON record of one fuzz-mode execution.
+/// Write the record of a finished case to `output` and report its
+/// failure, if it failed, as the run's.
+fn finish_case(
+    database_key: Option<&str>,
+    prefix: &[ChoiceValue],
+    output: &str,
+    run: RunResult,
+    elapsed: Option<core::time::Duration>,
+    compact: bool,
+) -> Result<TestRunResult, RunError> {
+    let record = record_json(database_key, prefix, &run, elapsed, compact);
+    if crate::sys::fs::write(output, record.as_bytes()).is_err() {
+        return Err(usage(format!("{OUTPUT_VAR}={output} could not be written")));
+    }
+    let failures = match (run.status, run.origin) {
+        (Status::Interesting, Some(origin)) => {
+            let values: Vec<ChoiceValue> = run.nodes.iter().map(|n| n.value()).collect();
+            alloc::vec![Failure {
+                origin,
+                reproduce_blob: crate::native::blob::encode_failure(&values),
+                caveat: None,
+            }]
+        }
+        _ => Vec::new(),
+    };
+    Ok(TestRunResult { failures })
+}
+
+/// The server's side of the first draw: serve requests until this
+/// process is the child of one, then adopt that request's source.
+#[cfg(unix)]
+mod server {
+    use alloc::boxed::Box;
+    use alloc::string::String;
+
+    use crate::fuzz_server::{OsProcess, Request, Served, serve};
+    use crate::native::core::NativeTestCase;
+    use crate::native::rng::EngineRng;
+    use crate::native::test_runner::fuzz_source;
+    use crate::sys::process::{Lines, Writer, exit};
+    use crate::sys::sync::Mutex;
+    use crate::sys::{Instant, stderr_line};
+
+    /// The request the child is answering, and when it started.
+    pub(super) static SERVED: Mutex<Option<(Request, Option<Instant>)>> = Mutex::new(None);
+
+    pub(super) fn decide(
+        requests: String,
+        replies: String,
+        bound: usize,
+    ) -> Box<dyn FnOnce(&mut NativeTestCase) + Send> {
+        Box::new(move |ntc| {
+            let (Ok(mut lines), Ok(mut writer)) = (Lines::open(&requests), Writer::open(&replies))
+            else {
+                stderr_line(&alloc::format!(
+                    "HEGEL_FUZZ_SERVER: could not open {requests} and {replies}"
+                ));
+                exit(2);
+            };
+            let served = serve(
+                &mut || lines.next_line(),
+                &mut |line| {
+                    let _ = writer.write_all(line.as_bytes());
+                },
+                &|path| crate::sys::fs::read(path).ok(),
+                &|request| {
+                    fuzz_source(
+                        &request.prefix,
+                        request.random_misfits,
+                        request.exact,
+                        EngineRng::seeded(request.seed),
+                        bound,
+                    )
+                    .map_err(|e| alloc::format!("{e:?}"))
+                },
+                &mut OsProcess,
+            );
+            match served {
+                Served::Finished => exit(0),
+                Served::Child(request, source) => {
+                    ntc.adopt_source(*source);
+                    *SERVED.lock() = Some((request, Instant::now()));
+                }
+            }
+        })
+    }
+}
+
+/// The JSON record of one fuzz-mode execution. A `compact` record leaves
+/// out the `choices` and `spans` arrays, which `realized_base64` carries.
 fn record_json(
     database_key: Option<&str>,
     prefix: &[ChoiceValue],
     run: &RunResult,
     elapsed: Option<core::time::Duration>,
+    compact: bool,
 ) -> String {
     let status = match run.status {
         Status::EarlyStop => "overrun",
@@ -228,7 +372,7 @@ fn record_json(
         .position(|(stored, node)| *stored != node.value());
     let mut targets: Vec<(&String, &f64)> = run.target_observations.iter().collect();
     targets.sort_by(|a, b| a.0.cmp(b.0));
-    object(&[
+    let fields = [
         ("engine_version", quoted(env!("CARGO_PKG_VERSION"))),
         ("test", optional(database_key.map(quoted))),
         ("status", quoted(status)),
@@ -277,7 +421,13 @@ fn record_json(
             "elapsed_ms",
             optional(elapsed.map(|elapsed| number(elapsed.as_secs_f64() * 1000.0))),
         ),
-    ])
+    ];
+    object(
+        &fields
+            .into_iter()
+            .filter(|(key, _)| !compact || (*key != "choices" && *key != "spans"))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn node_json(node: &ChoiceNode) -> String {
