@@ -24,8 +24,9 @@
 //!
 //! `HEGEL_FUZZ_REPRODUCE` names a prefix file to run the ordinary way
 //! instead: the sequence is replayed like a database entry, and a failure
-//! is shrunk, reported and saved to the database, so the test's normal runs
-//! replay it from then on.
+//! is shrunk (unless the settings leave the shrink phase out, for a fuzzer
+//! that has reduced it already), reported and saved to the database, so
+//! the test's normal runs replay it from then on.
 //!
 //! `HEGEL_FUZZ_SERVER` names two pipes and turns the process into a fuzz
 //! server that runs one such case per request, forking at the test's

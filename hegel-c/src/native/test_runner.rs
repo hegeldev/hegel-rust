@@ -3171,16 +3171,22 @@ pub(crate) async fn fuzz_server_case(
 }
 
 /// Replay a stored choice sequence as if it were a database entry for
-/// `database_key`, with no generation: a failure it reproduces is shrunk,
-/// reported and reconciled into the database like any other, and a run
-/// with no failure means the entry is stale.
+/// `database_key`, with no generation: a failure it reproduces is shrunk
+/// (when the settings' phases include shrinking; a fuzzer that has
+/// reduced the entry itself leaves it out, and the failure is reported as
+/// replayed), reported and reconciled into the database like any other,
+/// and a run with no failure means the entry is stale.
 pub(crate) async fn reproduce_entry(
     settings: &Settings,
     database_key: Option<&str>,
     entry: Vec<u8>,
     exchange: &CaseExchange,
 ) -> Result<TestRunResult, RunError> {
-    let settings = settings.clone().phases([Phase::Reuse, Phase::Shrink]);
+    let shrink = settings.phases.contains(&Phase::Shrink);
+    let phases = [Phase::Reuse, Phase::Shrink]
+        .into_iter()
+        .take(if shrink { 2 } else { 1 });
+    let settings = settings.clone().phases(phases);
     let mut engine = Engine::new(&settings, database_key, exchange)?;
     engine.extra_entries.push(entry);
     engine

@@ -336,7 +336,7 @@ run first.
 | `HEGEL_FUZZ_OUTPUT` | run start | Fuzzer client: the run executes exactly one test case and writes a JSON record of it to this path. See [Driving a test from a fuzzer](#driving-a-test-from-a-fuzzer). |
 | `HEGEL_FUZZ_PREFIX` | run start | Fuzzer client: a file holding the choice sequence the one test case replays before drawing randomly. |
 | `HEGEL_FUZZ_MISFIT` | run start | Fuzzer client: `random` (the default) or `simplest`, what replaces a prefix value that no longer fits its draw. |
-| `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking and persisting the failure it reproduces. |
+| `HEGEL_FUZZ_REPRODUCE` | run start | Fuzzer client: a prefix file to replay like a database entry, shrinking (when `phases` includes `shrink`) and persisting the failure it reproduces. |
 | `HEGEL_FUZZ_TAIL` | run start | Fuzzer client: `random` (the default) or `none`, whether the one test case draws randomly past its prefix or overruns there, with a misfit punned as the shrinker puns it. |
 | `HEGEL_FUZZ_TRACE` | run start | Fuzzer client: a file every choice of the one test case is appended to as it is drawn, for recovering the sequence of a case that kills the process. |
 | `HEGEL_FUZZ_SERVER` | run start | Fuzzer client: two named pipes, `requests,replies`, that turn the process into a fuzz server running one test case per request, forked at the test's first draw. |
