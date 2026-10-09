@@ -661,6 +661,10 @@ impl<'a> Shrinker<'a> {
                 "remove_discarded",
                 Box::new(|sh| boxed_pass(async move { sh.remove_discarded().await.map(|_| ()) })),
             ),
+            ShrinkPass::new(
+                "delete_span_runs",
+                Box::new(|sh| boxed_pass(sh.delete_span_runs())),
+            ),
             ShrinkPass::new("delete_spans", Box::new(|sh| boxed_pass(sh.delete_spans()))),
             ShrinkPass::new(
                 "shrink_duplicates",
@@ -793,9 +797,34 @@ impl<'a> Shrinker<'a> {
         ];
         let initial_size = self.current_nodes.len();
         let initial_calls = self.calls;
-        let outcome = self.fixate_shrink_passes(&mut passes).await;
+        let outcome = match self.delete_first().await {
+            Ok(()) => self.fixate_shrink_passes(&mut passes).await,
+            Err(halt) => Err(halt),
+        };
         self.emit_profile_report(&passes, initial_size, initial_calls);
         absorb_stop(outcome)
+    }
+
+    /// Run the deletion passes to a fixed point before anything else: a
+    /// pass that cannot shorten a long sequence still walks all of it,
+    /// so on a target whose executions are slow, the value passes would
+    /// spend the budget between the deletions that matter. Each round
+    /// restarts the stall window and widens it to the sequence's spans,
+    /// since a round with no improvement is a walk over every span.
+    async fn delete_first(&mut self) -> ShrinkResult<()> {
+        loop {
+            let epoch = self.improvements;
+            self.calls_at_last_shrink = self.calls;
+            self.max_stall = self.max_stall.max(4 * self.current_spans.len());
+            self.remove_discarded().await?;
+            self.delete_span_runs().await?;
+            self.delete_spans().await?;
+            if self.improvements == epoch {
+                let (calls, len) = (self.calls, self.current_nodes.len());
+                self.debug_msg(&format!("Deletion first: {calls} calls, {len} choices left"));
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -812,6 +841,10 @@ fn boxed_pass<'s>(
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_spans_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/embedded/native/shrinker_delete_span_runs_tests.rs"]
+mod delete_span_runs_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/embedded/native/shrinker_forced_node_tests.rs"]

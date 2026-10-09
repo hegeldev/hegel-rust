@@ -1,5 +1,5 @@
 use crate::control::{
-    AssumeFailed, InternalError, InvalidArgument, LeafBudgetExceeded, LoopDone, StopTest,
+    AssumeFailed, Failed, InternalError, InvalidArgument, LeafBudgetExceeded, LoopDone, StopTest,
     hegel_internal_assert, hegel_internal_error, raise_control,
 };
 use crate::ffi::CTestCase;
@@ -649,6 +649,36 @@ impl TestCase {
     /// ```
     pub fn reject(&self) -> ! {
         raise_control(AssumeFailed);
+    }
+
+    /// Fail the test case, with `label` as the failure's identity.
+    ///
+    /// A panic is a failure identified by where it was raised, so a
+    /// helper that checks several things reports them all as one, and
+    /// the same check in two places reports as two. A labelled failure
+    /// is identified by its label instead: Hegel finds, shrinks and
+    /// reports each distinct label on its own, as it does each distinct
+    /// panic site, and the label heads the failure's report in place of
+    /// a panic message. Put what differs between kinds of failure in the
+    /// label and the particulars in a [`note`](Self::note) before it.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use hegel::generators as gs;
+    ///
+    /// #[hegel::test]
+    /// fn my_test(tc: hegel::TestCase) {
+    ///     let n: i32 = tc.draw(gs::integers());
+    ///     if n % 7 == 0 {
+    ///         tc.note(&format!("n = {n}"));
+    ///         tc.fail("a multiple of seven");
+    ///     }
+    /// }
+    /// ```
+    #[track_caller]
+    pub fn fail(&self, label: impl Into<String>) -> ! {
+        std::panic::panic_any(Failed(label.into()))
     }
 
     /// Note a message which will be displayed with the reported failing test case.

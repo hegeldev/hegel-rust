@@ -19,7 +19,8 @@ use std::sync::{Arc, Once};
 
 use crate::backend::{Failure, TestCaseResult};
 use crate::control::{
-    AssumeFailed, InternalError, InvalidArgument, LoopDone, StopTest, currently_in_test_context,
+    AssumeFailed, Failed, InternalError, InvalidArgument, LoopDone, StopTest,
+    currently_in_test_context,
     hegel_internal_error, with_test_context,
 };
 use crate::ffi::{CTestCase, RunHandle, SettingsHandle};
@@ -233,6 +234,8 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         s.to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
+    } else if let Some(Failed(label)) = payload.downcast_ref::<Failed>() {
+        label.clone()
     } else {
         "Unknown panic".to_string()
     }
@@ -347,9 +350,11 @@ pub(crate) fn run_test_case(
                 }
                 None
             };
-            let failure = TestCaseResult::Interesting(Failure {
-                origin: format!("Panic at {}", location),
-            });
+            let origin = match e.downcast_ref::<Failed>() {
+                Some(Failed(label)) => format!("Failure: {label}"),
+                None => format!("Panic at {location}"),
+            };
+            let failure = TestCaseResult::Interesting(Failure { origin });
             (failure, Some(e), captured)
         }
     };

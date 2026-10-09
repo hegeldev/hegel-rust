@@ -7,6 +7,11 @@ pub(crate) struct AssumeFailed;
 /// The engine ran out of data for this test case: conclude it as `Overrun`.
 pub(crate) struct StopTest;
 
+/// A failure the test raised through `tc.fail(label)`: reported under the
+/// label as its origin, wherever it was raised from, so one helper can
+/// raise distinct failures and distinct sites the same one.
+pub(crate) struct Failed(pub(crate) String);
+
 /// A recursive generation attempt drew more than its `max_leaves` budget
 /// (`HEGEL_E_RETRY` from `hegel_recursion_leaf`): unwind back to the
 /// `RecursiveGenerator` draw that opened the recursion scope, which

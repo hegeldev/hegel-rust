@@ -8,6 +8,7 @@ use common::exec::fixture;
 
 const BASIC_MAIN: &str = env!("CARGO_BIN_EXE_fixture_basic_main");
 const MAIN_FAILING: &str = env!("CARGO_BIN_EXE_fixture_main_failing");
+const MAIN_LABELLED: &str = env!("CARGO_BIN_EXE_fixture_main_labelled");
 
 /// A one-integer choice sequence in the failure database's entry format:
 /// the choice count, the integer tag, the big-integer sub-tag, the byte
@@ -80,6 +81,22 @@ fn fuzz_output_records_a_failure_and_the_run_fails_as_usual() {
         record["origin"].as_str().unwrap().starts_with("Panic at "),
         "{record}"
     );
+}
+
+#[test]
+fn fuzz_output_records_a_labelled_failure_under_its_label() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let prefix = dir.path().join("prefix");
+    std::fs::write(&prefix, integer_entry(&[0])).unwrap();
+    let out = dir.path().join("record.json");
+    fixture(MAIN_LABELLED)
+        .env("HEGEL_FUZZ_PREFIX", prefix.to_str().unwrap())
+        .env("HEGEL_FUZZ_OUTPUT", out.to_str().unwrap())
+        .expect_failure("even")
+        .run();
+    let record = read_record(&out);
+    assert_eq!(record["status"], "interesting");
+    assert_eq!(record["origin"], "Failure: even", "{record}");
 }
 
 #[test]

@@ -21,7 +21,8 @@
 pub struct Failure {
     /// Opaque per-bug origin tag — currently `"Panic at file:line:col"` from
     /// the captured panic site (with `<unknown>` for the location when
-    /// `take_panic_info` returns nothing). Passed to the engine through
+    /// `take_panic_info` returns nothing), or `"Failure: label"` for a
+    /// failure raised through `tc.fail(label)`. Passed to the engine through
     /// `hegel_mark_complete` so it can group test cases by which bug they
     /// trigger and shrink each origin to its own minimal counterexample.
     pub origin: String,

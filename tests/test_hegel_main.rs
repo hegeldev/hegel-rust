@@ -11,6 +11,7 @@ use common::utils::assert_matches_regex;
 const BASIC_MAIN: &str = env!("CARGO_BIN_EXE_fixture_basic_main");
 const MAIN_SIMPLE: &str = env!("CARGO_BIN_EXE_fixture_main_simple");
 const MAIN_FAILING: &str = env!("CARGO_BIN_EXE_fixture_main_failing");
+const MAIN_LABELLED: &str = env!("CARGO_BIN_EXE_fixture_main_labelled");
 const MAIN_REWRITE: &str = env!("CARGO_BIN_EXE_fixture_main_rewrite");
 const MAIN_EXPLICIT: &str = env!("CARGO_BIN_EXE_fixture_main_explicit");
 
@@ -26,6 +27,19 @@ fn test_main_env_var_cannot_override_the_test_case_count() {
     let output = fixture(BASIC_MAIN).env("HEGEL_TEST_CASES", "50").run();
     let count = output.stderr.matches("ran").count();
     assert_eq!(count, 1, "stderr:\n{}", output.stderr);
+}
+
+#[test]
+fn test_main_labelled_failure_reports_the_label_and_the_note() {
+    let output = fixture(MAIN_LABELLED)
+        .expect_failure("panicked at tests/fixtures/main_labelled.rs")
+        .run();
+    assert!(output.stderr.contains("x = "), "stderr:\n{}", output.stderr);
+    assert!(
+        output.stderr.contains("\neven\n") || output.stderr.contains("\nodd\n"),
+        "stderr:\n{}",
+        output.stderr
+    );
 }
 
 #[test]

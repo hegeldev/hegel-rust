@@ -5,10 +5,11 @@
 //! nodes.
 
 use super::ordering::{PermutationJudge, shrink_ordering};
+use super::search::FindInteger;
 use super::{ShrinkResult, ShrinkRun, Shrinker};
 use crate::control::{hegel_internal_debug_assert, hegel_internal_debug_assert_eq};
 use crate::native::HashSet;
-use crate::native::core::{ChoiceData, ChoiceNode, sort_key};
+use crate::native::core::{ChoiceData, ChoiceNode, Span, sort_key};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -46,6 +47,84 @@ impl PermutationJudge for ReorderJudge<'_, '_> {
 }
 
 impl<'a> Shrinker<'a> {
+    /// Delete runs of sibling spans: from each span, try deleting it
+    /// together with the siblings after it, the run grown by doubling and
+    /// narrowed by bisection to the longest that still leaves the sequence
+    /// interesting. A stateful test's steps are siblings, and a failure
+    /// that needs three of two hundred is reached by deleting the rest
+    /// dozens at a time, where [`delete_spans`](Self::delete_spans) pays a
+    /// call per step. A run's extent ends where the sibling after it
+    /// starts, so the spanless choices between siblings go with it, or at
+    /// its last span's end when no sibling follows. Each depth of the span
+    /// tree is walked in turn, shallowest first, so the widest deletions
+    /// come first.
+    pub(crate) async fn delete_span_runs(&mut self) -> ShrinkResult<()> {
+        let mut depth = 0;
+        loop {
+            let mut i = 0;
+            let mut level = self.spans_at_depth(depth);
+            if level.is_empty() {
+                return Ok(());
+            }
+            while i < level.len() {
+                let run = level[i..]
+                    .iter()
+                    .take_while(|s| s.parent == level[i].parent)
+                    .count();
+                let snapshot = self.current_nodes.clone();
+                let mut search = FindInteger::new();
+                let mut deleted = 0;
+                while let Some(k) = search.probe() {
+                    let ok = k <= run && self.delete_run(&snapshot, &level, i, k).await?;
+                    if ok {
+                        deleted = k;
+                    }
+                    search.record(ok);
+                }
+                if deleted == 0 {
+                    i += 1;
+                } else {
+                    level = self.spans_at_depth(depth);
+                }
+            }
+            depth += 1;
+        }
+    }
+
+    /// The spans at `depth` of the tree, in order of their start.
+    fn spans_at_depth(&self, depth: u32) -> Vec<Span> {
+        let mut level: Vec<Span> = self
+            .current_spans
+            .iter()
+            .filter(|s| s.depth == depth)
+            .cloned()
+            .collect();
+        level.sort_by_key(|s| s.start);
+        level
+    }
+
+    /// Try `snapshot` without the `k` sibling spans of `level` from `i`.
+    async fn delete_run(
+        &mut self,
+        snapshot: &[ChoiceNode],
+        level: &[Span],
+        i: usize,
+        k: usize,
+    ) -> ShrinkResult<bool> {
+        let start = level[i].start;
+        let last = i + k - 1;
+        let end = match level.get(last + 1) {
+            Some(next) if next.parent == level[i].parent => next.start,
+            _ => level[last].end,
+        };
+        if start >= end || end > snapshot.len() || (start == 0 && end == snapshot.len()) {
+            return Ok(false);
+        }
+        let mut attempt = snapshot[..start].to_vec();
+        attempt.extend_from_slice(&snapshot[end..]);
+        self.consider(&attempt).await
+    }
+
     /// Try deleting each span outright: first the span's own extent, then,
     /// when that fails, the extent widened to the start of the next span,
     /// which also removes any spanless choices recorded after the span
