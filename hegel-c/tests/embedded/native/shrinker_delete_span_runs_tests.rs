@@ -148,7 +148,7 @@ fn a_run_stops_at_its_parents_boundary() {
     );
     drive_no_yield(shrinker.delete_span_runs()).unwrap();
     assert_eq!(values(&shrinker.current_nodes), [2, 5, 9]);
-    assert_eq!(calls.load(Ordering::Relaxed), 7);
+    assert_eq!(calls.load(Ordering::Relaxed), 8);
 }
 
 #[test]
@@ -253,4 +253,39 @@ fn shrink_reduces_coarsely_only_after_deleting() {
         .unwrap();
     assert!(deletion < coarse, "{lines:?}");
     assert!(lines[coarse].ends_with(" 2 choices left"), "{lines:?}");
+}
+
+#[test]
+fn a_pair_of_steps_is_deleted_when_neither_can_go_alone() {
+    let initial = vec![
+        int_node(1),
+        int_node(2),
+        int_node(1),
+        int_node(2),
+        int_node(7),
+    ];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+    let mut shrinker = Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                counter.fetch_add(1, Ordering::Relaxed);
+                let vals = values(nodes);
+                let ones = vals.iter().filter(|&&v| v == 1).count();
+                let twos = vals.iter().filter(|&&v| v == 2).count();
+                let interesting = vals.last() == Some(&7) && ones == twos;
+                (interesting, nodes.to_vec(), step_spans(nodes.len()))
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        initial,
+        step_spans(5),
+    );
+    drive_no_yield(shrinker.delete_span_runs()).unwrap();
+    assert_eq!(values(&shrinker.current_nodes), [7]);
+    assert!(
+        calls.load(Ordering::Relaxed) <= 8,
+        "{}",
+        calls.load(Ordering::Relaxed)
+    );
 }

@@ -57,7 +57,10 @@ impl<'a> Shrinker<'a> {
     /// starts, so the spanless choices between siblings go with it, or at
     /// its last span's end when no sibling follows. Each depth of the span
     /// tree is walked in turn, shallowest first, so the widest deletions
-    /// come first.
+    /// come first. A run whose first span cannot go alone is also tried
+    /// without its first two, since a step is often paired with the one
+    /// that undoes it: a table's creation and its drop, a transaction's
+    /// begin and its commit.
     pub(crate) async fn delete_span_runs(&mut self) -> ShrinkResult<()> {
         let mut depth = 0;
         loop {
@@ -80,6 +83,9 @@ impl<'a> Shrinker<'a> {
                         deleted = k;
                     }
                     search.record(ok);
+                }
+                if deleted == 0 && run >= 2 && self.delete_run(&snapshot, &level, i, 2).await? {
+                    deleted = 2;
                 }
                 if deleted == 0 {
                     i += 1;
