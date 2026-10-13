@@ -27,10 +27,11 @@ use hegel_c::{
     hegel_recursion_finish, hegel_recursion_free, hegel_recursion_leaf, hegel_recursion_retry,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_start_blob, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_phases,
-    hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
+    hegel_run_result_target_score, hegel_run_result_target_score_count, hegel_run_start,
+    hegel_run_start_blob, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
+    hegel_settings_set_backend, hegel_settings_set_database, hegel_settings_set_database_key,
+    hegel_settings_set_phases, hegel_settings_set_report_multiple_failures,
+    hegel_settings_set_suppress_health_check, hegel_settings_set_test_cases,
     hegel_settings_set_test_location, hegel_start_span, hegel_state_machine_free,
     hegel_state_machine_next_group, hegel_state_machine_next_rule,
     hegel_state_machine_rule_rejected, hegel_state_machine_should_check_invariant, hegel_status_t,
@@ -107,6 +108,35 @@ unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *con
     let mut p: *const c_char = ptr::null();
     assert_eq!(unsafe { hegel_run_result_error(ctx, r, &mut p) }, HEGEL_OK);
     p
+}
+
+unsafe fn target_score_count_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> usize {
+    let mut n = 0usize;
+    assert_eq!(
+        unsafe { hegel_run_result_target_score_count(ctx, r, &mut n) },
+        HEGEL_OK
+    );
+    n
+}
+
+/// The `index`-th (label, score) pair of a run result; `index` must be in
+/// range.
+unsafe fn target_score_at(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    index: usize,
+) -> (String, f64) {
+    let mut label: *const c_char = ptr::null();
+    let mut score = f64::NAN;
+    assert_eq!(
+        unsafe { hegel_run_result_target_score(ctx, r, index, &mut label, &mut score) },
+        HEGEL_OK
+    );
+    let label = unsafe { std::ffi::CStr::from_ptr(label) }
+        .to_str()
+        .unwrap()
+        .to_string();
+    (label, score)
 }
 
 #[test]
@@ -667,6 +697,7 @@ fn run_start_blob_replays_and_reports_the_failure() {
         let res = result(ctx, run);
         assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_FAILED);
         assert_eq!(failure_count_of(ctx, res), 1);
+        assert_eq!(target_score_count_of(ctx, res), 0);
         let f = failure_at(ctx, res, 0);
         assert_eq!(
             std::ffi::CStr::from_ptr(origin_of(ctx, f))
@@ -3798,6 +3829,119 @@ fn settings_getters_reject_null_handles_and_null_outs() {
             HEGEL_E_INVALID_HANDLE
         );
 
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// The run result carries the highest score observed per `hegel_target`
+/// label, in label order, with targeting having driven the climbable
+/// score to its maximum; the accessors reject null and out-of-range
+/// arguments.
+#[test]
+fn run_result_reports_the_highest_target_score_per_label() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_settings_set_test_cases(ctx, s, 300));
+        let run = start(ctx, s);
+        let mut highest_seen = i64::MIN;
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut value = 0i64;
+            let mut status = hegel_status_t::HEGEL_STATUS_VALID as u32;
+            if hegel_generate_integer(ctx, tc, 0, 1_000_000, &mut value) == HEGEL_OK {
+                highest_seen = highest_seen.max(value);
+                ok(hegel_target(ctx, tc, value as f64, c"x".as_ptr()));
+                ok(hegel_target(ctx, tc, -(value as f64), c"minus x".as_ptr()));
+            } else {
+                status = hegel_status_t::HEGEL_STATUS_OVERRUN as u32;
+            }
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_PASSED);
+        assert_eq!(target_score_count_of(ctx, res), 2);
+        let (label, score) = target_score_at(ctx, res, 0);
+        assert_eq!(label, "minus x");
+        assert!(score <= 0.0);
+        let (label, score) = target_score_at(ctx, res, 1);
+        assert_eq!(label, "x");
+        assert_eq!(score, highest_seen as f64);
+        assert_eq!(score, 1_000_000.0);
+
+        let mut label: *const c_char = ptr::null();
+        let mut value = 0.0;
+        assert_eq!(
+            hegel_run_result_target_score(ctx, res, 2, &mut label, &mut value),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("index 2 is out of range"));
+        assert_eq!(
+            hegel_run_result_target_score(ctx, res, 0, ptr::null_mut(), &mut value),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        assert_eq!(
+            hegel_run_result_target_score(ctx, res, 0, &mut label, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_run_result_target_score_count(ctx, res, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        let mut n = 0usize;
+        assert_eq!(
+            hegel_run_result_target_score_count(ctx, ptr::null(), &mut n),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert_eq!(
+            hegel_run_result_target_score(ctx, ptr::null(), 0, &mut label, &mut value),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("result pointer is null"));
+
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A run that errors before any verdict reports no target scores.
+#[test]
+fn errored_run_result_reports_no_target_scores() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        let run = start(ctx, s);
+        loop {
+            let tc = next_case(ctx, run);
+            if tc.is_null() {
+                break;
+            }
+            let mut value = 0i64;
+            let _ = hegel_generate_integer(ctx, tc, 0, 100, &mut value);
+            ok(hegel_target(ctx, tc, value as f64, c"x".as_ptr()));
+            ok(hegel_mark_complete(
+                ctx,
+                tc,
+                hegel_status_t::HEGEL_STATUS_INVALID as u32,
+                ptr::null(),
+            ));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+        let res = result(ctx, run);
+        assert!(status_of(ctx, res) == hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+        assert!(!run_error_of(ctx, res).is_null());
+        assert_eq!(target_score_count_of(ctx, res), 0);
+        ok(hegel_run_result_free(ctx, res));
+        ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
     }

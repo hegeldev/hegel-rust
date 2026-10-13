@@ -1730,6 +1730,32 @@ impl RunResult {
             failure
         })
     }
+
+    /// The highest score the run observed per `target()` label, sorted by
+    /// label; empty when nothing was targeted.
+    pub(crate) fn target_scores(&self) -> Vec<(String, f64)> {
+        let mut count = 0;
+        // SAFETY: self.raw is this snapshot's live pointer; &mut count is valid.
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_run_result_target_score_count(ctx, self.raw, &mut count)
+        }));
+        (0..count)
+            .map(|index| {
+                let mut label: *const c_char = ptr::null();
+                let mut score = 0.0;
+                // SAFETY: self.raw is this snapshot's live pointer, index is
+                // below the count it reported, and both out pointers are valid.
+                require_ok(with_context(|ctx| unsafe {
+                    hegel_c::hegel_run_result_target_score(
+                        ctx, self.raw, index, &mut label, &mut score,
+                    )
+                }));
+                let label = cstr_opt(label)
+                    .unwrap_or_else(|| hegel_internal_error!("target score {index} has no label"));
+                (label, score)
+            })
+            .collect()
+    }
 }
 
 impl Drop for RunResult {

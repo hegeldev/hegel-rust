@@ -5,6 +5,7 @@ mod common;
 use common::utils::expect_panic;
 use hegel::generators as gs;
 use hegel::{Hegel, Settings};
+use std::panic::AssertUnwindSafe;
 
 /// `tc.target_labelled(observation, label)` compiles and runs without panicking.
 #[test]
@@ -77,7 +78,7 @@ fn test_respects_max_pool_size() {
 #[test]
 fn test_max_examples_is_not_exceeded() {
     let m: u64 = 10000;
-    for max_examples in [1usize, 5, 25, 99] {
+    for max_examples in [1usize, 5, 25, 99, 1000] {
         let mut calls: usize = 0;
         Hegel::new(|tc| {
             calls += 1;
@@ -293,4 +294,167 @@ fn test_targeting_rejects_growing_lateral_move() {
             .derandomize(true),
     )
     .run();
+}
+
+/// A threshold bug that only random generation would take the whole budget
+/// to hit: the sum of a list of integers up to 1000 reaching 30,000.
+/// Targeting the sum must interleave with generation from early in the run,
+/// so the failure is found well before halfway through the budget.
+#[test]
+fn test_finds_threshold_bug_quickly_with_large_budget() {
+    for seed in [0, 1, 2] {
+        let mut calls: u64 = 0;
+        let mut found_at: Option<u64> = None;
+        expect_panic(
+            AssertUnwindSafe(|| {
+                Hegel::new(|tc| {
+                    let xs: Vec<u64> = tc.draw(gs::vecs(gs::integers::<u64>().max_value(1000)));
+                    calls += 1;
+                    let total: u64 = xs.iter().sum();
+                    tc.target(total.min(50_000) as f64);
+                    if total >= 30_000 {
+                        if found_at.is_none() {
+                            found_at = Some(calls);
+                        }
+                        panic!("sum reached {total}");
+                    }
+                })
+                .settings(
+                    Settings::new()
+                        .test_cases(10_000)
+                        .seed(Some(seed))
+                        .database(None),
+                )
+                .run();
+            }),
+            "sum reached",
+        );
+        let found_at = found_at.unwrap();
+        assert!(found_at < 4_000, "seed {seed}: found at case {found_at}");
+    }
+}
+
+/// With a moderate budget targeting still drives the list sum far beyond
+/// what random generation reaches.
+#[test]
+fn test_reaches_high_scores_with_moderate_budget() {
+    for seed in [0, 1, 2] {
+        let mut best: u64 = 0;
+        Hegel::new(|tc| {
+            let xs: Vec<u64> = tc.draw(gs::vecs(gs::integers::<u64>().max_value(1000)));
+            let total: u64 = xs.iter().sum::<u64>().min(100_000);
+            best = best.max(total);
+            tc.target(total as f64);
+        })
+        .settings(
+            Settings::new()
+                .test_cases(2_000)
+                .seed(Some(seed))
+                .database(None),
+        )
+        .run();
+        assert!(best >= 50_000, "seed {seed}: best sum {best}");
+    }
+}
+
+/// A failing run reports the highest score observed per label below the
+/// failure, so a shrunk example cannot hide how far the score was driven.
+#[test]
+fn test_failing_run_reports_the_highest_target_score() {
+    let lines = capture_failing_run(Settings::new(), |tc| {
+        let x: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(200_000));
+        tc.target(x as f64);
+        assert!(x <= 100);
+    });
+    let report = lines
+        .iter()
+        .find(|l| l.starts_with("Highest target score: "))
+        .unwrap();
+    let score: f64 = report
+        .strip_prefix("Highest target score: ")
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(score > 100.0, "{report}");
+    assert!(report.ends_with("  (label=\"\")"), "{report}");
+    let position = lines.iter().position(|l| l == report).unwrap();
+    assert!(
+        lines[..position]
+            .iter()
+            .any(|l| l.contains("assertion failed: x <= 100")),
+        "{lines:?}"
+    );
+}
+
+/// Several labels are tabulated by score.
+#[test]
+fn test_failing_run_tabulates_several_target_scores() {
+    let lines = capture_failing_run(Settings::new(), |tc| {
+        let x: u64 = tc.draw(gs::integers::<u64>().min_value(1).max_value(100));
+        tc.target_labelled(x as f64, "x");
+        tc.target_labelled(-(x as f64), "minus x");
+        assert!(x != 7);
+    });
+    let position = lines
+        .iter()
+        .position(|l| l == "Highest target scores:")
+        .unwrap();
+    assert_eq!(lines[position + 1].trim_start(), "-1  (label=\"minus x\")");
+    assert_eq!(lines[position + 2].trim_start(), "100  (label=\"x\")");
+}
+
+/// Quiet verbosity suppresses the target report like the rest of the output.
+#[test]
+fn test_quiet_failing_run_reports_no_target_scores() {
+    let lines = capture_failing_run(Settings::new().verbosity(hegel::Verbosity::Quiet), |tc| {
+        let x: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(100));
+        tc.target(x as f64);
+        assert!(x <= 50);
+    });
+    assert!(!lines.iter().any(|l| l.contains("Highest target score")));
+}
+
+/// A failing run that never targeted a score reports none.
+#[test]
+fn test_failing_run_without_targets_reports_no_scores() {
+    let lines = capture_failing_run(Settings::new(), |tc| {
+        let x: u64 = tc.draw(gs::integers::<u64>().min_value(0).max_value(100));
+        assert!(x <= 50);
+    });
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("assertion failed: x <= 50"))
+    );
+    assert!(!lines.iter().any(|l| l.contains("Highest target score")));
+}
+
+/// Run a failing test with `settings` and return every line it printed.
+fn capture_failing_run(
+    settings: Settings,
+    body: impl FnMut(hegel::TestCase) + 'static,
+) -> Vec<String> {
+    use std::sync::{Arc, Mutex};
+    let buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let writer = Arc::clone(&buf);
+    let sink: Arc<dyn Fn(&str) + Send + Sync> =
+        Arc::new(move |s: &str| writer.lock().unwrap().push(s.to_string()));
+    hegel::with_output_override(sink, || {
+        expect_panic(
+            AssertUnwindSafe(|| {
+                Hegel::new(body)
+                    .settings(settings.test_cases(500).database(None).derandomize(true))
+                    .run();
+            }),
+            "assertion failed",
+        );
+    });
+    let lines = buf.lock().unwrap().clone();
+    lines
+        .iter()
+        .flat_map(|chunk| chunk.lines().map(str::to_string))
+        .collect()
 }

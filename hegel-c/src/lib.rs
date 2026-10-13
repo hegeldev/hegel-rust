@@ -861,6 +861,9 @@ pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
     error: Option<CString>,
+    /// The highest score observed per `hegel_target` label, sorted by
+    /// label; read via `hegel_run_result_target_score`.
+    target_scores: Vec<(CString, f64)>,
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -903,6 +906,11 @@ impl From<TestRunResult> for HegelRunResult {
         HegelRunResult {
             failures: r.failures.into_iter().map(HegelFailure::from).collect(),
             error: None,
+            target_scores: r
+                .target_scores
+                .into_iter()
+                .map(|(label, score)| (cstring_lossy(&label), score))
+                .collect(),
         }
     }
 }
@@ -914,6 +922,7 @@ impl HegelRunResult {
         HegelRunResult {
             failures: Vec::new(),
             error: Some(cstring_lossy(message)),
+            target_scores: Vec::new(),
         }
     }
 
@@ -6477,6 +6486,82 @@ pub unsafe extern "C" fn hegel_run_result_failure(
         return HEGEL_E_INVALID_ARG;
     };
     unsafe { *out_failure = into_raw_send_sync(f.clone()) };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_count`: Receives the number of `hegel_target` labels the run
+///   observed a score for. Zero when the test never targeted a score, and
+///   always zero for a blob replay.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_target_score_count(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_count: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_target_score_count") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_count.is_null() {
+        set_last_error(
+            ctx,
+            "hegel_run_result_target_score_count: out parameter is null",
+        );
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_count = r.target_scores.len() };
+    HEGEL_OK
+}
+
+/// The highest score the run observed for one `hegel_target` label. Labels
+/// are indexed in sorted order. Hypothesis prints these below a failing
+/// test case as `Highest target score: 101  (label='')`, so the shrunk
+/// example cannot hide how far the score was driven, and bindings are
+/// encouraged to do the same.
+///
+/// Parameters:
+/// `index`: 0-based; must be less than the target score count.
+/// `out_label`: Receives the label. Owned by the run result and valid until
+///   `hegel_run_result_free`.
+/// `out_score`: Receives the highest score observed for the label.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_target_score(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    index: usize,
+    out_label: *mut *const c_char,
+    out_score: *mut f64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_target_score") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_label.is_null() || out_score.is_null() {
+        set_last_error(ctx, "hegel_run_result_target_score: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let Some((label, score)) = r.target_scores.get(index) else {
+        set_last_error(
+            ctx,
+            &format!(
+                "hegel_run_result_target_score: index {index} is out of range \
+                 (the result has {} target scores)",
+                r.target_scores.len()
+            ),
+        );
+        return HEGEL_E_INVALID_ARG;
+    };
+    unsafe {
+        *out_label = label.as_ptr();
+        *out_score = *score;
+    }
     HEGEL_OK
 }
 

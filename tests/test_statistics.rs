@@ -85,3 +85,41 @@ fn test_statistics_without_events_point_at_the_recording_api() {
     });
     assert!(lines.iter().any(|l| l.contains("no events were recorded")));
 }
+
+#[test]
+fn test_statistics_report_the_highest_target_score_per_label() {
+    let lines = capture_run(settings().show_statistics(true), |tc: TestCase| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(1).max_value(9));
+        tc.target_labelled(n as f64, "n");
+        tc.target_labelled(-(n as f64), "minus n");
+    });
+    let position = lines
+        .iter()
+        .position(|l| l == "Highest target scores:")
+        .unwrap();
+    assert!(
+        lines[..position]
+            .iter()
+            .any(|l| l.starts_with("Statistics (over "))
+    );
+    assert_eq!(lines[position + 1].trim_start(), "-1  (label=\"minus n\")");
+    assert_eq!(lines[position + 2].trim_start(), "9  (label=\"n\")");
+}
+
+#[test]
+fn test_statistics_report_a_single_target_label_on_one_line() {
+    let lines = capture_run(settings().show_statistics(true), |tc: TestCase| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(9));
+        tc.target(n as f64);
+    });
+    assert!(lines.contains(&"Highest target score: 9  (label=\"\")".to_string()));
+}
+
+#[test]
+fn test_target_scores_are_not_reported_without_statistics() {
+    let lines = capture_run(settings(), |tc: TestCase| {
+        let n: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(9));
+        tc.target(n as f64);
+    });
+    assert!(!lines.iter().any(|l| l.contains("Highest target score")));
+}

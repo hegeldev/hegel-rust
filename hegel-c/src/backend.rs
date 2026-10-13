@@ -442,6 +442,10 @@ pub struct TestRunResult {
     /// One entry per distinct interesting example surfaced by the run, one
     /// per distinct bug origin, in report order. Empty for a passing run.
     pub failures: Vec<Failure>,
+    /// The highest score the run observed for each `target()` label,
+    /// sorted by label. Empty when the test never targeted a score, and
+    /// always empty for a blob replay.
+    pub target_scores: Vec<(String, f64)>,
 }
 
 #[cfg(test)]
