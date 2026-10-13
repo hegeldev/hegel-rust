@@ -3,7 +3,7 @@ mod common;
 use common::utils::{assert_matches_regex, capture_hegel_output};
 use hegel::generators as gs;
 use hegel::stateful::{ConcurrentPool, concurrent_pool, machine};
-use hegel::{HealthCheck, Hegel, Settings, TestCase, Verbosity};
+use hegel::{Generator, HealthCheck, Hegel, Settings, TestCase, Verbosity};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -557,6 +557,47 @@ fn test_concurrent_pool_across_workers(tc: TestCase) {
         next: AtomicI64::new(0),
     };
     machine(m).max_concurrency(3).run_concurrent(tc);
+}
+
+struct FilteringConsumer {
+    pool: ConcurrentPool<i64>,
+    taken: Mutex<Vec<i64>>,
+}
+
+#[hegel::concurrent_state_machine]
+impl FilteringConsumer {
+    #[rule]
+    fn take_even(&self, tc: TestCase) {
+        let value: i64 = tc.draw_silent(self.pool.values_consumed().filter(|v| v % 2 == 0));
+        assert_eq!(value % 2, 0);
+        self.taken.lock().unwrap().push(value);
+    }
+
+    #[invariant]
+    fn only_accepted_values_leave_the_pool(&self, _: TestCase) {
+        assert_eq!(self.pool.len(), 6 - self.taken.lock().unwrap().len());
+    }
+}
+
+#[hegel::test]
+fn test_concurrent_filters_put_back_the_consumed_values_they_reject(tc: TestCase) {
+    let pool = concurrent_pool(&tc);
+    for value in 0..6 {
+        pool.add(&tc, value);
+    }
+    let m = FilteringConsumer {
+        pool,
+        taken: Mutex::new(Vec::new()),
+    };
+    machine(m).max_concurrency(3).steps(5).run_concurrent(tc);
+}
+
+#[hegel::test]
+#[should_panic(expected = "pool_restore called with no consumed variable to put back")]
+fn test_concurrent_rejecting_a_value_that_was_not_drawn_is_an_error(tc: TestCase) {
+    let pool: ConcurrentPool<i64> = concurrent_pool(&tc);
+    pool.add(&tc, 1);
+    pool.values_consumed().reject(&tc, 1);
 }
 
 struct RacyCounter {

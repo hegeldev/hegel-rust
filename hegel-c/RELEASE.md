@@ -1,0 +1,3 @@
+RELEASE_TYPE: patch
+
+This release adds `hegel_pool_restore`, which puts back the variable the calling test case's stream most recently removed from a pool with a consuming `hegel_pool_generate` and has not yet put back, making it drawable again and reporting its id. A binding calls it when it throws away a consumed value unused, as a filter does with a rejected attempt, so the pool is left as if the draw had never happened. Each call undoes one consume, most recent first, and only consumes made through the calling handle's own stream; with nothing left to put back it fails with `HEGEL_E_INVALID_ARG`. Consumption is otherwise unchanged: libhegel never puts a variable back of its own accord, so a consumed variable stays consumed unless the binding restores it.

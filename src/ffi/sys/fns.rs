@@ -49,6 +49,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_pool_add(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, out_variable_id: *mut i64) -> hegel_result_t;
             fn hegel_pool_free(ctx: *mut HegelContext, pool: *mut HegelPool) -> hegel_result_t;
             fn hegel_pool_generate(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, consume: bool, out_variable_id: *mut i64) -> hegel_result_t;
+            fn hegel_pool_restore(ctx: *mut HegelContext, tc: *mut HegelTestCase, pool: *mut HegelPool, out_variable_id: *mut i64) -> hegel_result_t;
             fn hegel_printer_abort_speculative(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;
             fn hegel_printer_begin_group(ctx: *mut HegelContext, printer: *mut HegelPrinter, indent: u64, open: *const u8, open_len: usize) -> hegel_result_t;
             fn hegel_printer_begin_speculative(ctx: *mut HegelContext, printer: *mut HegelPrinter) -> hegel_result_t;

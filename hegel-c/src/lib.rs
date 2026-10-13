@@ -3566,8 +3566,9 @@ pub unsafe extern "C" fn hegel_pool_add(
 /// additions never changes which variable a recorded choice refers to.
 ///
 /// Parameters:
-/// `consume`: When `true` the drawn variable is removed from the pool.
-///   When `false` it is not removed.
+/// `consume`: When `true` the drawn variable is removed from the pool, and
+///   stays removed unless `hegel_pool_restore` puts it back. When `false`
+///   it is not removed.
 /// `out_variable_id`: Receives the variable id libhegel chose.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` if the pool
@@ -3595,6 +3596,52 @@ pub unsafe extern "C" fn hegel_pool_generate(
     }
     let mut variables = pool.variables.lock();
     match tc.stream.pool_generate(&mut variables, consume) {
+        Ok(id) => {
+            unsafe { *out_variable_id = id };
+            HEGEL_OK
+        }
+        Err(e) => translate_ds_error(ctx, e),
+    }
+}
+
+/// Puts back the variable that `tc`'s stream most recently removed from the
+/// pool with a consuming `hegel_pool_generate` and has not yet put back,
+/// so it can be drawn again, and reports which one it was. Call it when
+/// the value drawn with that consuming draw is being thrown away unused,
+/// as a filter does with a rejected attempt, so the pool is left as if the
+/// draw had never happened. Each call undoes one consume, most recent
+/// first, and only consumes made through `tc`'s own stream: a clone handle
+/// cannot put back what another clone consumed. libhegel never puts a
+/// variable back of its own accord, so a consumed variable stays consumed
+/// until this is called for it.
+///
+/// Parameters:
+/// `out_variable_id`: Receives the id of the variable put back.
+///
+/// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_INVALID_ARG` when
+/// `tc`'s stream has no consumed variable from the pool left to put back.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_restore(
+    ctx: *mut HegelContext,
+    tc: *mut HegelTestCase,
+    pool: *mut HegelPool,
+    out_variable_id: *mut i64,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_pool_restore", tc) } {
+        Ok(t) => t,
+        Err(rc) => return rc,
+    };
+    let pool = match unsafe { pool_ref(ctx, "hegel_pool_restore", pool) } {
+        Ok(p) => p,
+        Err(rc) => return rc,
+    };
+    if out_variable_id.is_null() {
+        set_last_error(ctx, "hegel_pool_restore: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let mut variables = pool.variables.lock();
+    match tc.stream.pool_restore(&mut variables) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK

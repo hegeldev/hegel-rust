@@ -57,6 +57,17 @@ pub trait Generator<T> {
         label_from_name(std::any::type_name::<Self>())
     }
 
+    /// Give back a value drawn from this generator that is being thrown
+    /// away unused.
+    ///
+    /// Called by a combinator that is discarding a value it drew from this
+    /// generator and still owns, such as [`filter`](Self::filter) with an
+    /// attempt its predicate rejected, so the generator can undo any side
+    /// effect of the draw: [`Pool::values_consumed`](crate::stateful::Pool::values_consumed)
+    /// puts the value back in its pool. The default does nothing but drop
+    /// the value.
+    fn reject(&self, _tc: &TestCase, _value: T) {}
+
     /// Transform generated values using a function.
     ///
     /// # Example
@@ -111,7 +122,9 @@ pub trait Generator<T> {
 
     /// Only keep generated values that satisfy the predicate.
     ///
-    /// Retries up to 3 times, then calls `assume(false)` to reject the test case.
+    /// Retries up to 3 times, then calls `assume(false)` to reject the test
+    /// case. Each rejected value is handed back to this generator through
+    /// [`reject`](Self::reject).
     ///
     /// # Example
     ///
@@ -575,14 +588,18 @@ where
     /// whatever the injected `draw` printed — only the accepted value's
     /// representation survives — and inside a span of its own, closed as
     /// discarded when the attempt is rejected so the shrinker can remove
-    /// it. The silent path passes the no-op printer and a print-free
-    /// `draw`.
+    /// it. A rejected value goes back to the source through
+    /// [`Generator::reject`] before its span closes. The silent path passes
+    /// the no-op printer and a print-free `draw`.
     fn draw_filtered(
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
         draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
-    ) -> T {
+    ) -> T
+    where
+        G: Generator<T>,
+    {
         for _ in 0..3 {
             tc.start_span(FILTER_ATTEMPT_LABEL);
             let mut speculation = printer.speculate();
@@ -592,6 +609,7 @@ where
                 tc.stop_span(false);
                 return value;
             }
+            self.source.reject(tc, value);
             speculation.abort();
             tc.stop_span(true);
         }
@@ -613,6 +631,10 @@ where
         self.draw_filtered(tc, &mut PrettyPrinter::noop(), |source, tc, _| {
             tc.draw_silent(source)
         })
+    }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        self.source.reject(tc, value)
     }
 }
 

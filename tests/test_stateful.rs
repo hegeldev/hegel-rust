@@ -1,8 +1,8 @@
 mod common;
 
-use hegel::TestCase;
 use hegel::generators as gs;
 use hegel::stateful::{Pool, pool};
+use hegel::{Generator, TestCase};
 
 struct Linear {
     state: i32,
@@ -76,6 +76,101 @@ fn test_consume(tc: TestCase) {
         consumed,
     };
     hegel::stateful::machine(m).run(tc);
+}
+
+fn remaining(numbers: &mut Pool<i32>, tc: &TestCase) -> Vec<i32> {
+    let mut rest = Vec::new();
+    while !numbers.is_empty() {
+        rest.push(tc.draw(numbers.values_consumed()));
+    }
+    rest.sort_unstable();
+    rest
+}
+
+#[hegel::test]
+fn test_filter_puts_back_the_consumed_values_it_rejects(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..10 {
+        numbers.add(i);
+    }
+    let even = tc.draw(numbers.values_consumed().filter(|x| x % 2 == 0));
+    assert_eq!(even % 2, 0);
+    assert_eq!(numbers.len(), 9);
+    let expected: Vec<i32> = (0..10).filter(|x| *x != even).collect();
+    assert_eq!(remaining(&mut numbers, &tc), expected);
+}
+
+#[hegel::test]
+fn test_nested_filters_put_back_the_consumed_values_they_reject(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..10 {
+        numbers.add(i);
+    }
+    let large_even = tc.draw(
+        numbers
+            .values_consumed()
+            .filter(|x| x % 2 == 0)
+            .filter(|x| *x >= 4),
+    );
+    assert!(large_even % 2 == 0 && large_even >= 4);
+    let expected: Vec<i32> = (0..10).filter(|x| *x != large_even).collect();
+    assert_eq!(remaining(&mut numbers, &tc), expected);
+}
+
+#[hegel::test]
+fn test_values_consumed_through_a_map_stay_consumed_when_filtered(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..10 {
+        numbers.add(i);
+    }
+    let doubled = tc.draw(
+        numbers
+            .values_consumed()
+            .map(|x| x * 2)
+            .filter(|x| x % 4 == 0),
+    );
+    assert_eq!(doubled % 4, 0);
+    let rest = remaining(&mut numbers, &tc);
+    assert!(!rest.contains(&(doubled / 2)));
+    assert!(rest.len() <= 9);
+}
+
+#[hegel::test]
+#[should_panic(expected = "pool_restore called with no consumed variable to put back")]
+fn test_rejecting_a_value_that_was_not_drawn_is_an_error(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    numbers.add(1);
+    numbers.values_consumed().reject(&tc, 1);
+}
+
+struct RejectingConsumer {
+    numbers: Pool<i32>,
+    taken: usize,
+}
+
+#[hegel::state_machine]
+impl RejectingConsumer {
+    #[rule]
+    fn take_zero(&mut self, tc: TestCase) {
+        let x = tc.draw(self.numbers.values_consumed());
+        self.taken += 1;
+        tc.assume(x == 0);
+    }
+
+    #[invariant]
+    fn rejected_rules_keep_what_they_consumed(&mut self, _tc: TestCase) {
+        assert_eq!(self.numbers.len(), 3 - self.taken);
+    }
+}
+
+#[hegel::test]
+fn test_a_rule_that_fails_an_assume_keeps_the_value_it_consumed(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..3 {
+        numbers.add(i);
+    }
+    let m = RejectingConsumer { numbers, taken: 0 };
+    hegel::stateful::machine(m).steps(5).run(tc);
 }
 
 struct TestLifetimeMachine<'a> {

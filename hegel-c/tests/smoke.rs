@@ -126,6 +126,7 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, *mut u8, CStatus, *const c_c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, bool, *mut i64) -> c_int;
+type FnPoolRestore = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut i64) -> c_int;
 type FnPoolFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnNewStateMachine = unsafe extern "C" fn(
     *mut u8,
@@ -208,6 +209,7 @@ struct Api<'a> {
     new_pool: Symbol<'a, FnNewPool>,
     pool_add: Symbol<'a, FnPoolAdd>,
     pool_generate: Symbol<'a, FnPoolGenerate>,
+    pool_restore: Symbol<'a, FnPoolRestore>,
     pool_free: Symbol<'a, FnPoolFree>,
     new_state_machine: Symbol<'a, FnNewStateMachine>,
     state_machine_next_group: Symbol<'a, FnStateMachineNextGroup>,
@@ -255,6 +257,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             new_pool: lib.get(b"hegel_new_pool\0").unwrap(),
             pool_add: lib.get(b"hegel_pool_add\0").unwrap(),
             pool_generate: lib.get(b"hegel_pool_generate\0").unwrap(),
+            pool_restore: lib.get(b"hegel_pool_restore\0").unwrap(),
             pool_free: lib.get(b"hegel_pool_free\0").unwrap(),
             new_state_machine: lib.get(b"hegel_new_state_machine\0").unwrap(),
             state_machine_next_group: lib.get(b"hegel_state_machine_next_group\0").unwrap(),
@@ -967,7 +970,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
             assert!(added.contains(&drawn), "drew unknown variable {}", drawn);
             saw_pool_draw = true;
 
-            let mut consumed = 0;
+            let mut consumed = Vec::new();
             for _ in 0..3 {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(ctx, tc, pool, true, &mut v);
@@ -976,9 +979,9 @@ fn libhegel_pool_primitives_draw_added_variables() {
                 }
                 assert_eq!(rc, HEGEL_OK, "consuming pool_generate failed: rc={}", rc);
                 assert!(added.contains(&v), "consumed unknown variable {}", v);
-                consumed += 1;
+                consumed.push(v);
             }
-            if consumed == 3 {
+            if consumed.len() == 3 {
                 let mut v: i64 = -1;
                 let rc = (a.pool_generate)(ctx, tc, pool, true, &mut v);
                 assert_eq!(
@@ -986,6 +989,17 @@ fn libhegel_pool_primitives_draw_added_variables() {
                     "expected HEGEL_E_ASSUME on empty pool, got rc={}",
                     rc
                 );
+                let mut restored: i64 = -1;
+                let rc = (a.pool_restore)(ctx, tc, pool, &mut restored);
+                assert_eq!(rc, HEGEL_OK, "pool_restore failed: rc={}", rc);
+                assert_eq!(Some(restored), consumed.pop());
+                let rc = (a.pool_generate)(ctx, tc, pool, true, &mut v);
+                assert_eq!(
+                    rc, HEGEL_OK,
+                    "redrawing a restored variable failed: rc={}",
+                    rc
+                );
+                assert_eq!(v, restored, "the restored variable is the only one left");
                 saw_empty_reject = true;
             }
 

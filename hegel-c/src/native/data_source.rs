@@ -449,7 +449,23 @@ impl DataSource for NativeDataSource {
             let variable_id = draws::choose_from(ntc, &active)?;
             if consume {
                 pool.consume(variable_id);
+                ntc.record_pool_consume(pool.id(), variable_id);
             }
+            Ok(variable_id)
+        })
+    }
+
+    fn pool_restore(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError> {
+        self.with_ntc(|ntc| {
+            let Some(variable_id) = ntc.take_pool_consume(pool.id()) else {
+                return Err(EngineError::InvalidArgument(
+                    "pool_restore called with no consumed variable to put back: \
+                     this stream has not consumed from the pool, or has already \
+                     put back everything it consumed"
+                        .to_string(),
+                ));
+            };
+            pool.restore(variable_id);
             Ok(variable_id)
         })
     }

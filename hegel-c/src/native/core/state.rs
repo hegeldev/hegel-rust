@@ -6,7 +6,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use once_cell::race::OnceBox;
 
@@ -1576,16 +1576,29 @@ impl FreshIds {
 
 /// A pool of variable IDs for stateful testing.
 pub struct NativeVariables {
+    /// Identity of this pool in the consume logs of the streams that drew
+    /// from it (see [`NativeTestCase::record_pool_consume`]).
+    id: u64,
     variables: Vec<i64>,
     removed: crate::native::HashSet<i64>,
 }
 
+/// Source of [`NativeVariables::id`]: process-wide, so no two pools alive at
+/// once share an id.
+static NEXT_POOL_ID: AtomicU64 = AtomicU64::new(0);
+
 impl NativeVariables {
     pub fn new() -> Self {
         NativeVariables {
+            id: NEXT_POOL_ID.fetch_add(1, Ordering::Relaxed),
             variables: Vec::new(),
             removed: crate::native::HashSet::default(),
         }
+    }
+
+    /// The pool's identity, unique among the pools of the process.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Add a variable ID (from [`NativeTestCase::draw_fresh_id`]) to the pool.
@@ -1602,17 +1615,14 @@ impl NativeVariables {
             .collect()
     }
 
-    /// Mark a variable as consumed and trim trailing consumed variables.
+    /// Mark a variable as consumed.
     pub fn consume(&mut self, variable_id: i64) {
         self.removed.insert(variable_id);
-        while let Some(&last) = self.variables.last() {
-            if self.removed.contains(&last) {
-                self.variables.pop();
-                self.removed.remove(&last);
-            } else {
-                break;
-            }
-        }
+    }
+
+    /// Make a consumed variable drawable again.
+    pub fn restore(&mut self, variable_id: i64) {
+        self.removed.remove(&variable_id);
     }
 }
 
@@ -1961,6 +1971,10 @@ pub struct NativeTestCase {
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
     pub has_discards: bool,
+    /// Every consuming pool draw this stream has made and not since put
+    /// back, as `(pool id, variable id)` in draw order. Only this stream's
+    /// own consumes can be put back through it.
+    pool_consumes: Vec<(u64, i64)>,
     /// Optional observer notified after each draw and on conclusion.
     /// Set by [`Self::for_choices`] and called by each draw method and
     /// by [`Self::freeze`].
@@ -2162,6 +2176,7 @@ impl NativeTestCase {
             child_nodes: Vec::with_capacity(bookkept),
             top_child_nodes: 0,
             has_discards: false,
+            pool_consumes: Vec::new(),
             observer,
             trailing_template,
             narrow_ranges: NarrowRanges::default(),
@@ -2484,6 +2499,25 @@ impl NativeTestCase {
         if discard {
             self.has_discards = true;
         }
+    }
+
+    /// Record that a draw on this stream consumed `variable_id` from the
+    /// pool with identity `pool_id`, so [`Self::take_pool_consume`] can put
+    /// it back.
+    pub fn record_pool_consume(&mut self, pool_id: u64, variable_id: i64) {
+        self.pool_consumes.push((pool_id, variable_id));
+    }
+
+    /// Remove and return this stream's most recent consume from the pool
+    /// with identity `pool_id` that has not been put back, or `None` when
+    /// it has none outstanding. The caller makes the variable drawable
+    /// again.
+    pub fn take_pool_consume(&mut self, pool_id: u64) -> Option<i64> {
+        let index = self
+            .pool_consumes
+            .iter()
+            .rposition(|(pool, _)| *pool == pool_id)?;
+        Some(self.pool_consumes.remove(index).1)
     }
 
     /// Set the span's end and credit its draws to its parent's closed

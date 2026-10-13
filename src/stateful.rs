@@ -233,6 +233,10 @@ impl<M> Invariant<M> {
 /// - [`values_consumed`](Pool::values_consumed) returns a generator over `T` —
 ///   drawing from it removes a value from the pool and yields it by value.
 ///
+/// A consuming draw that [`filter`](Generator::filter) rejects is put back in
+/// the pool, since no test code saw it; see
+/// [`values_consumed`](Pool::values_consumed) for what stays consumed.
+///
 /// Both generators are used through [`tc.draw`](TestCase::draw), so the chosen
 /// value is recorded in the failing-test replay and the choice shrinks like any
 /// other draw.
@@ -245,6 +249,15 @@ pub struct Pool<T> {
 /// Ask the engine for a variable id from `pool`, consuming it if `consume`.
 fn pool_generate(tc: &TestCase, pool: &crate::ffi::PoolHandle, consume: bool) -> i64 {
     match tc.with_ctc(|ctc| ctc.pool_generate(pool, consume)) {
+        Ok(id) => id,
+        Err(rc) => raise_for_rc(rc),
+    }
+}
+
+/// Ask the engine to put back the variable `tc` most recently consumed from
+/// `pool`, returning its id.
+fn pool_restore(tc: &TestCase, pool: &crate::ffi::PoolHandle) -> i64 {
+    match tc.with_ctc(|ctc| ctc.pool_restore(pool)) {
         Ok(id) => id,
         Err(rc) => raise_for_rc(rc),
     }
@@ -290,6 +303,16 @@ impl<T> Pool<T> {
     /// Drawing from it removes a value from the pool and yields it by value.
     /// Once consumed, that value is never drawn again. Drawing rejects the
     /// current test case (as if by `assume(false)`) when the pool is empty.
+    ///
+    /// The one exception is a value that [`filter`](Generator::filter)
+    /// rejects: the filter hands it back through
+    /// [`Generator::reject`], which puts it in the pool again, so filtering
+    /// a consuming draw consumes only the value the test receives. Nothing
+    /// else restores a value. One that reaches a rule which then fails an
+    /// [`assume`](TestCase::assume) stays consumed, and so does one drawn
+    /// through any other combinator — a [`map`](Generator::map), a
+    /// [`vecs`](crate::generators::vecs), a tuple — even if a filter around
+    /// that combinator rejects the result.
     pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
         ValuesConsumed {
             pool: &self.pool,
@@ -350,6 +373,12 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool, true);
         self.values.borrow_mut().remove(&variable_id).unwrap()
+    }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        let variable_id = pool_restore(tc, self.pool);
+        let previous = self.values.borrow_mut().insert(variable_id, value);
+        hegel_internal_assert!(previous.is_none(), "restored variable id is still in map");
     }
 }
 
@@ -457,6 +486,11 @@ impl<T> ConcurrentPool<T> {
     /// value; the engine consumes the id atomically, so exactly one worker
     /// receives each value. Drawing rejects the current test case (as if by
     /// `assume(false)`) when the pool is empty.
+    ///
+    /// A value that [`filter`](Generator::filter) rejects is put back, by
+    /// the worker that drew it, so filtering a consuming draw consumes only
+    /// the value the rule receives; anything else that consumed a value
+    /// keeps it consumed, exactly as for [`Pool::values_consumed`].
     pub fn values_consumed(&self) -> ConcurrentValuesConsumed<'_, T> {
         ConcurrentValuesConsumed { pool: self }
     }
@@ -500,6 +534,23 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
         let mut values = self.pool.lock();
         match tc.with_ctc(|ctc| ctc.pool_generate(&self.pool.handle, true)) {
             Ok(variable_id) => values.remove(&variable_id).unwrap(),
+            Err(rc) => {
+                drop(values);
+                raise_for_rc(rc)
+            }
+        }
+    }
+
+    /// Holds the pool's lock across the engine call for the same reason
+    /// [`ConcurrentPool::add`] does: the id is drawable again the moment
+    /// the engine puts it back, so its value must already be in the map.
+    fn reject(&self, tc: &TestCase, value: T) {
+        let mut values = self.pool.lock();
+        match tc.with_ctc(|ctc| ctc.pool_restore(&self.pool.handle)) {
+            Ok(variable_id) => {
+                let previous = values.insert(variable_id, value);
+                hegel_internal_assert!(previous.is_none(), "restored variable id is still in map");
+            }
             Err(rc) => {
                 drop(values);
                 raise_for_rc(rc)
