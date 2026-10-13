@@ -1,6 +1,7 @@
 use super::float_sample::*;
 use super::*;
 use crate::native::HashSet;
+use crate::native::bignum::{BigUint, ToPrimitive};
 use crate::native::core::BUFFER_SIZE;
 use crate::native::core::GenerationParameters;
 use crate::native::core::choices::{BooleanChoice, ChoiceKind};
@@ -1325,6 +1326,79 @@ fn integer_sample_from_distribution_uniform_fallback_for_indistinguishable_bound
     assert!(
         !all_endpoints,
         "uniform fallback should produce values across the range"
+    );
+}
+
+/// Beyond `i128` the middle spreads over the range's orders of magnitude
+/// like the narrow-range distribution does: over `[0, 10^100]` most values
+/// are small while every order stays reachable, so values above `10^25`
+/// are a minority rather than the two thirds a uniform draw gives.
+#[test]
+fn biased_integer_sample_beyond_i128_favours_small_magnitudes() {
+    let kind = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(BigUint::from(10u32).pow(100)),
+        shrink_towards: BigInt::from(0),
+    };
+    let huge = BigInt::from(BigUint::from(10u32).pow(25));
+    let mut rng = EngineRng::seeded(24);
+    let mut above_huge = 0;
+    let mut below_u64 = 0;
+    let mut widths = alloc::collections::BTreeSet::new();
+    for _ in 0..1000 {
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
+        let v = biased_integer_sample(&kind, &mut rng, params).unwrap();
+        assert!(kind.validate(&v), "out of range: {v:?}");
+        if v > huge {
+            above_huge += 1;
+        }
+        if v.to_u64().is_some() {
+            below_u64 += 1;
+        }
+        widths.insert(v.bits() / 32);
+    }
+    assert!(
+        (10..=150).contains(&above_huge),
+        "{above_huge} of 1000 above 10^25"
+    );
+    assert!(below_u64 > 500, "{below_u64} of 1000 fit a u64");
+    assert!(
+        widths.len() >= 6 && widths.iter().max() >= Some(&8),
+        "widths seen (in 32-bit steps): {widths:?}"
+    );
+}
+
+/// The shaped middle stays in range for a narrow span far beyond `i128`,
+/// where most widths exceed the span and are redrawn, reaching every value
+/// of the span; and for a span of thousands of bits, past what an `f64`
+/// magnitude can express.
+#[test]
+fn biased_integer_sample_beyond_i128_narrow_and_huge_spans_stay_in_range() {
+    let base = BigInt::from(BigUint::from(2u32).pow(200));
+    let narrow = IntegerChoice {
+        min_value: base.clone(),
+        max_value: &base + BigInt::from(10),
+        shrink_towards: BigInt::from(0),
+    };
+    let huge = IntegerChoice {
+        min_value: BigInt::from(0),
+        max_value: BigInt::from(BigUint::from(2u32).pow(2000)),
+        shrink_towards: BigInt::from(0),
+    };
+    let mut rng = EngineRng::seeded(25);
+    let mut narrow_seen = HashSet::default();
+    for _ in 0..500 {
+        let params = GenerationParameters::draw(&mut rng).unwrap().integer;
+        let v = biased_integer_sample(&narrow, &mut rng, params).unwrap();
+        assert!(narrow.validate(&v), "out of range: {v:?}");
+        narrow_seen.insert(v - &base);
+        let v = biased_integer_sample(&huge, &mut rng, params).unwrap();
+        assert!(huge.validate(&v), "out of range: {v:?}");
+    }
+    assert_eq!(
+        narrow_seen.len(),
+        11,
+        "narrow span values seen: {narrow_seen:?}"
     );
 }
 

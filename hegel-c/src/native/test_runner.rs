@@ -3367,6 +3367,15 @@ impl GraphProbe for EngineGraphProbe<'_, '_> {
 /// (Hypothesis's behavior), every probe allows random draws past the end of
 /// the spliced choices, so a diverged attempt becomes a complete test case
 /// seeded with the mutation instead of an overrun.
+///
+/// A shared label is taken to mean a shared shape, but frontends label
+/// their generators without regard to parameters (every integer range
+/// under one label, say), and the engine's own primitive spans do the same.
+/// Two attempts are therefore skipped without executing: a pair of spans
+/// whose first draws are of different kinds, where the copied values could
+/// only misfit and collapse to the simplest value, and a proposal whose
+/// values were already executed to a conclusion, which would spend a case
+/// of the budget learning nothing. Both cost an attempt, not a case.
 impl<'a> Engine<'a> {
     async fn try_span_mutation(
         &mut self,
@@ -3414,6 +3423,12 @@ impl<'a> Engine<'a> {
                 core::mem::swap(&mut start_a, &mut start_b);
                 core::mem::swap(&mut end_a, &mut end_b);
             }
+            if start_a == end_a
+                || start_b == end_b
+                || nodes[start_a].kind() != nodes[start_b].kind()
+            {
+                continue;
+            }
 
             let attempt: Vec<ChoiceValue> = if start_a <= start_b && end_b <= end_a {
                 let mut out = Vec::with_capacity(values.len() + (start_b - start_a));
@@ -3440,6 +3455,16 @@ impl<'a> Engine<'a> {
                 out.extend_from_slice(&values[end_b..]);
                 out
             };
+
+            if !self.nd_active {
+                let key = crate::control::hegel_internal_unwrap!(
+                    serialize_choices(&attempt),
+                    "a span-mutation proposal's clone values nest deeper than MAX_CLONE_DEPTH"
+                );
+                if self.exec_cache.seen(&key) {
+                    continue;
+                }
+            }
 
             let extend = self
                 .choice_bound()
