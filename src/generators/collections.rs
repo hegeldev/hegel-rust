@@ -13,6 +13,105 @@ const BTREE_SET_LABEL: u64 = label_from_name("hegel.btree_set");
 const BTREE_MAP_LABEL: u64 = label_from_name("hegel.btree_map");
 const ARRAY_LABEL: u64 = label_from_name("hegel.array");
 
+/// Where a collection draws its distinct elements from: the element
+/// generator, or, when that generator picks from a fixed list, what remains
+/// of the list, taken without replacement so no duplicate is ever redrawn
+/// and a collection holding every value is reachable.
+struct ElementSource<'a, G, T> {
+    generator: &'a G,
+    draw: fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+    remaining: Option<(Vec<T>, SamplePrinter<T>)>,
+}
+
+type SamplePrinter<T> = fn(&T, &mut PrettyPrinter);
+
+fn print_nothing<T>(_: &T, _: &mut PrettyPrinter) {}
+
+impl<'a, G, T> ElementSource<'a, G, T> {
+    /// Draw silently through the generator, or from its sample space.
+    fn silent(generator: &'a G) -> Self
+    where
+        G: Generator<T>,
+    {
+        let print: SamplePrinter<T> = print_nothing;
+        ElementSource {
+            generator,
+            draw: |elements, tc, _| tc.draw_silent(elements),
+            remaining: generator.sample_space().map(|values| (values, print)),
+        }
+    }
+
+    /// Draw and print through the generator, or from its sample space when
+    /// the generator says how to print one of its values.
+    fn printing(generator: &'a G) -> Self
+    where
+        G: PrintableGenerator<T>,
+    {
+        ElementSource {
+            generator,
+            draw: |elements, tc, printer| tc.draw_and_print(elements, printer),
+            remaining: generator.sample_space().zip(generator.sample_printer()),
+        }
+    }
+
+    /// Draw through the generator whatever its sample space, for a
+    /// collection that allows duplicates.
+    fn with_replacement(mut self) -> Self {
+        self.remaining = None;
+        self
+    }
+
+    /// The maximum size the collection draws under: a fixed list caps it at
+    /// the list's length, and cannot satisfy a minimum above that.
+    fn max_size(&self, min_size: usize, max_size: Option<usize>) -> Option<usize> {
+        if let Some(max) = max_size {
+            if min_size > max {
+                invalid_argument!("Cannot have max_size < min_size");
+            }
+        }
+        let Some((values, _)) = &self.remaining else {
+            return max_size;
+        };
+        if min_size > values.len() {
+            invalid_argument!(
+                "Cannot generate {min_size} unique elements from a list of length {}",
+                values.len()
+            );
+        }
+        Some(max_size.map_or(values.len(), |max| max.min(values.len())))
+    }
+
+    fn exhausted(&self) -> bool {
+        self.remaining
+            .as_ref()
+            .is_some_and(|(values, _)| values.is_empty())
+    }
+
+    fn draw(&mut self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
+        match &mut self.remaining {
+            Some((values, print)) => {
+                let index = tc.generate_integer_i64(0, values.len() as i64 - 1) as usize;
+                let value = values.remove(index);
+                print(&value, printer);
+                value
+            }
+            None => (self.draw)(self.generator, tc, printer),
+        }
+    }
+
+    /// Check the collection reached its minimum size. A fixed list exhausted
+    /// short of it held fewer distinct values than its length.
+    fn finish(&self, len: usize, min_size: usize) {
+        if len < min_size && self.exhausted() {
+            invalid_argument!(
+                "Cannot generate {min_size} unique elements from a list with fewer than \
+                 {min_size} distinct values"
+            );
+        }
+        hegel_internal_assert!(len >= min_size);
+    }
+}
+
 /// Generator for `Vec<T>`. Created by [`vecs()`].
 pub struct VecGenerator<G, T> {
     pub(crate) elements: G,
@@ -58,23 +157,22 @@ impl<G, T> VecGenerator<G, T> {
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
-        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+        mut elements: ElementSource<G, T>,
     ) -> Vec<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
+        if self.unique_by.is_none() {
+            elements = elements.with_replacement();
         }
+        let max_size = elements.max_size(self.min_size, self.max_size);
         printer.begin_group(1, "[");
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut collection = Collection::new(tc, self.min_size, max_size);
         let mut result = Vec::new();
-        while collection.more() {
+        while !elements.exhausted() && collection.more() {
             let mut speculation = printer.speculate();
             if !result.is_empty() {
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = draw(&self.elements, tc, speculation.printer());
+            let element = elements.draw(tc, speculation.printer());
             if let Some(eq_fn) = &self.unique_by {
                 if result.iter().any(|existing| eq_fn(existing, &element)) {
                     speculation.abort();
@@ -85,6 +183,7 @@ impl<G, T> VecGenerator<G, T> {
             speculation.commit();
             result.push(element);
         }
+        elements.finish(result.len(), self.min_size);
         printer.end_group("]");
         result
     }
@@ -99,9 +198,11 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> Vec<T> {
-        self.draw_vec(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            tc.draw_silent(elements)
-        })
+        self.draw_vec(
+            tc,
+            &mut PrettyPrinter::noop(),
+            ElementSource::silent(&self.elements),
+        )
     }
 }
 
@@ -110,9 +211,7 @@ where
     G: PrintableGenerator<T>,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> Vec<T> {
-        self.draw_vec(tc, printer, |elements, tc, printer| {
-            tc.draw_and_print(elements, printer)
-        })
+        self.draw_vec(tc, printer, ElementSource::printing(&self.elements))
     }
 }
 
@@ -179,23 +278,19 @@ where
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
-        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+        mut elements: ElementSource<G, T>,
     ) -> HashSet<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
+        let max_size = elements.max_size(self.min_size, self.max_size);
         printer.begin_group(1, "{");
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut collection = Collection::new(tc, self.min_size, max_size);
         let mut set = HashSet::new();
-        while collection.more() {
+        while !elements.exhausted() && collection.more() {
             let mut speculation = printer.speculate();
             if !set.is_empty() {
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = draw(&self.elements, tc, speculation.printer());
+            let element = elements.draw(tc, speculation.printer());
             if set.contains(&element) {
                 speculation.abort();
                 collection.reject(Some("duplicate element"));
@@ -204,7 +299,7 @@ where
                 set.insert(element);
             }
         }
-        hegel_internal_assert!(set.len() >= self.min_size);
+        elements.finish(set.len(), self.min_size);
         printer.end_group("}");
         set
     }
@@ -220,9 +315,11 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> HashSet<T> {
-        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            tc.draw_silent(elements)
-        })
+        self.draw_set(
+            tc,
+            &mut PrettyPrinter::noop(),
+            ElementSource::silent(&self.elements),
+        )
     }
 }
 
@@ -232,9 +329,7 @@ where
     T: Eq + Hash,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> HashSet<T> {
-        self.draw_set(tc, printer, |elements, tc, printer| {
-            tc.draw_and_print(elements, printer)
-        })
+        self.draw_set(tc, printer, ElementSource::printing(&self.elements))
     }
 }
 
@@ -289,7 +384,7 @@ where
         self.draw_map(
             tc,
             &mut PrettyPrinter::noop(),
-            |keys, tc, _| tc.draw_silent(keys),
+            ElementSource::silent(&self.keys),
             |values, tc, _| tc.draw_silent(values),
         )
     }
@@ -308,24 +403,20 @@ where
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
-        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        mut keys: ElementSource<K, KT>,
         draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
     ) -> HashMap<KT, VT> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
+        let max_size = keys.max_size(self.min_size, self.max_size);
         printer.begin_group(1, "{");
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut collection = Collection::new(tc, self.min_size, max_size);
         let mut map = HashMap::new();
-        while collection.more() {
+        while !keys.exhausted() && collection.more() {
             let mut speculation = printer.speculate();
             if !map.is_empty() {
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let key = draw_key(&self.keys, tc, speculation.printer());
+            let key = keys.draw(tc, speculation.printer());
             match map.entry(key) {
                 std::collections::hash_map::Entry::Occupied(_) => {
                     speculation.abort();
@@ -339,7 +430,7 @@ where
                 }
             }
         }
-        hegel_internal_assert!(map.len() >= self.min_size);
+        keys.finish(map.len(), self.min_size);
         printer.end_group("}");
         map
     }
@@ -355,7 +446,7 @@ where
         self.draw_map(
             tc,
             printer,
-            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            ElementSource::printing(&self.keys),
             |values, tc, printer| tc.draw_and_print(values, printer),
         )
     }
@@ -421,23 +512,19 @@ where
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
-        draw: impl Fn(&G, &TestCase, &mut PrettyPrinter) -> T,
+        mut elements: ElementSource<G, T>,
     ) -> BTreeSet<T> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
+        let max_size = elements.max_size(self.min_size, self.max_size);
         printer.begin_group(1, "{");
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut collection = Collection::new(tc, self.min_size, max_size);
         let mut set = BTreeSet::new();
-        while collection.more() {
+        while !elements.exhausted() && collection.more() {
             let mut speculation = printer.speculate();
             if !set.is_empty() {
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let element = draw(&self.elements, tc, speculation.printer());
+            let element = elements.draw(tc, speculation.printer());
             if set.contains(&element) {
                 speculation.abort();
                 collection.reject(Some("duplicate element"));
@@ -446,7 +533,7 @@ where
                 set.insert(element);
             }
         }
-        hegel_internal_assert!(set.len() >= self.min_size);
+        elements.finish(set.len(), self.min_size);
         printer.end_group("}");
         set
     }
@@ -462,9 +549,11 @@ where
     }
 
     fn do_draw(&self, tc: &TestCase) -> BTreeSet<T> {
-        self.draw_set(tc, &mut PrettyPrinter::noop(), |elements, tc, _| {
-            tc.draw_silent(elements)
-        })
+        self.draw_set(
+            tc,
+            &mut PrettyPrinter::noop(),
+            ElementSource::silent(&self.elements),
+        )
     }
 }
 
@@ -474,9 +563,7 @@ where
     T: Ord,
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> BTreeSet<T> {
-        self.draw_set(tc, printer, |elements, tc, printer| {
-            tc.draw_and_print(elements, printer)
-        })
+        self.draw_set(tc, printer, ElementSource::printing(&self.elements))
     }
 }
 
@@ -544,7 +631,7 @@ where
         self.draw_map(
             tc,
             &mut PrettyPrinter::noop(),
-            |keys, tc, _| tc.draw_silent(keys),
+            ElementSource::silent(&self.keys),
             |values, tc, _| tc.draw_silent(values),
         )
     }
@@ -558,24 +645,20 @@ where
         &self,
         tc: &TestCase,
         printer: &mut PrettyPrinter,
-        draw_key: impl Fn(&K, &TestCase, &mut PrettyPrinter) -> KT,
+        mut keys: ElementSource<K, KT>,
         draw_value: impl Fn(&V, &TestCase, &mut PrettyPrinter) -> VT,
     ) -> BTreeMap<KT, VT> {
-        if let Some(max) = self.max_size {
-            if self.min_size > max {
-                invalid_argument!("Cannot have max_size < min_size");
-            }
-        }
+        let max_size = keys.max_size(self.min_size, self.max_size);
         printer.begin_group(1, "{");
-        let mut collection = Collection::new(tc, self.min_size, self.max_size);
+        let mut collection = Collection::new(tc, self.min_size, max_size);
         let mut map = BTreeMap::new();
-        while collection.more() {
+        while !keys.exhausted() && collection.more() {
             let mut speculation = printer.speculate();
             if !map.is_empty() {
                 speculation.printer().text(",");
                 speculation.printer().breakable(" ");
             }
-            let key = draw_key(&self.keys, tc, speculation.printer());
+            let key = keys.draw(tc, speculation.printer());
             match map.entry(key) {
                 std::collections::btree_map::Entry::Occupied(_) => {
                     speculation.abort();
@@ -589,7 +672,7 @@ where
                 }
             }
         }
-        hegel_internal_assert!(map.len() >= self.min_size);
+        keys.finish(map.len(), self.min_size);
         printer.end_group("}");
         map
     }
@@ -605,7 +688,7 @@ where
         self.draw_map(
             tc,
             printer,
-            |keys, tc, printer| tc.draw_and_print(keys, printer),
+            ElementSource::printing(&self.keys),
             |values, tc, printer| tc.draw_and_print(values, printer),
         )
     }

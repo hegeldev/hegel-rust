@@ -57,6 +57,18 @@ pub trait Generator<T> {
         label_from_name(std::any::type_name::<Self>())
     }
 
+    /// The fixed list of values this generator picks from, for one that
+    /// has such a list ([`sampled_from`](super::sampled_from)); `None`, the
+    /// default, for any other generator.
+    ///
+    /// A collection of distinct elements draws from the list without
+    /// replacement, so it never has to redraw a duplicate and a collection
+    /// holding every value is reachable.
+    #[doc(hidden)]
+    fn sample_space(&self) -> Option<Vec<T>> {
+        None
+    }
+
     /// Transform generated values using a function.
     ///
     /// # Example
@@ -290,6 +302,14 @@ pub trait PrintableGenerator<T>: Generator<T> {
     /// forwarding layer doesn't register as a second region or span.
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T;
 
+    /// How to print a value of [`sample_space`](Generator::sample_space) the
+    /// way [`do_draw_and_print`](Self::do_draw_and_print) prints a drawn one,
+    /// for a generator with a sample space; `None`, the default, otherwise.
+    #[doc(hidden)]
+    fn sample_printer(&self) -> Option<fn(&T, &mut PrettyPrinter)> {
+        None
+    }
+
     /// Convert this generator into a type-erased boxed printable generator,
     /// as accepted by [`one_of!`](crate::one_of).
     fn boxed_printable<'a>(self) -> BoxedPrintableGenerator<'a, T>
@@ -313,6 +333,13 @@ pub(crate) fn draw_and_print_value<T: Debug>(
     let value = generator.do_draw(tc);
     printer.debug(&value);
     value
+}
+
+/// Print a value's `Debug` representation: the
+/// [`sample_printer`](PrintableGenerator::sample_printer) of every generator
+/// that prints by value.
+pub(crate) fn print_debug<T: Debug>(value: &T, printer: &mut PrettyPrinter) {
+    printer.debug(value);
 }
 
 /// Result of [`Generator::print_with`].
@@ -384,11 +411,19 @@ impl<T, G: Generator<T>> Generator<T> for &G {
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
     }
+
+    fn sample_space(&self) -> Option<Vec<T>> {
+        (*self).sample_space()
+    }
 }
 
 impl<T, G: PrintableGenerator<T>> PrintableGenerator<T> for &G {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         (*self).do_draw_and_print(tc, printer)
+    }
+
+    fn sample_printer(&self) -> Option<fn(&T, &mut PrettyPrinter)> {
+        (*self).sample_printer()
     }
 }
 
@@ -650,6 +685,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
         self.inner.do_draw(tc)
     }
 
+    fn sample_space(&self) -> Option<Vec<T>> {
+        self.inner.sample_space()
+    }
+
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>
     where
         Self: Sized + Send + Sync + 'b,
@@ -665,6 +704,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
 impl<T: Debug> PrintableGenerator<T> for BoxedGenerator<'_, T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
+    }
+
+    fn sample_printer(&self) -> Option<fn(&T, &mut PrettyPrinter)> {
+        Some(print_debug)
     }
 }
 
@@ -691,11 +734,19 @@ impl<T> Generator<T> for BoxedPrintableGenerator<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
     }
+
+    fn sample_space(&self) -> Option<Vec<T>> {
+        self.inner.sample_space()
+    }
 }
 
 impl<T> PrintableGenerator<T> for BoxedPrintableGenerator<'_, T> {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         self.inner.do_draw_and_print(tc, printer)
+    }
+
+    fn sample_printer(&self) -> Option<fn(&T, &mut PrettyPrinter)> {
+        self.inner.sample_printer()
     }
 
     fn boxed_printable<'b>(self) -> BoxedPrintableGenerator<'b, T>

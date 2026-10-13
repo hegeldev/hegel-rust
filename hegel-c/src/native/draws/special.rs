@@ -257,14 +257,8 @@ pub fn generate_uuid(
         }
     }
     spanned(ntc, LABEL_UUID, |ntc| {
-        let hi = ntc
-            .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
-            .to_u64()
-            .unwrap();
-        let lo = ntc
-            .draw_integer(BigInt::from(0u64), BigInt::from(u64::MAX))?
-            .to_u64()
-            .unwrap();
+        let hi = ntc.draw_integer_uniform(0, u64::MAX)?;
+        let lo = ntc.draw_integer_uniform(0, u64::MAX)?;
         let mut n: u128 = (u128::from(hi) << 64) | u128::from(lo);
 
         if let Some(v) = version {

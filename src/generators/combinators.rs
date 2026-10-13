@@ -1,4 +1,4 @@
-use super::generators::draw_and_print_value;
+use super::generators::{draw_and_print_value, print_debug};
 use super::{
     BoxedPrintableGenerator, Generator, PrintableGenerator, TestCase, combine_labels, integers,
     label_from_name,
@@ -30,6 +30,10 @@ impl<'a, T: Clone + Send + Sync + 'a> Generator<T> for SampledFromGenerator<'a, 
         let index = indices.do_draw(tc);
         self.elements[index].clone()
     }
+
+    fn sample_space(&self) -> Option<Vec<T>> {
+        Some(self.elements.to_vec())
+    }
 }
 
 impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<T>
@@ -37,6 +41,10 @@ impl<'a, T: Clone + Send + Sync + Debug + 'a> PrintableGenerator<T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut PrettyPrinter) -> T {
         draw_and_print_value(self, tc, printer)
+    }
+
+    fn sample_printer(&self) -> Option<fn(&T, &mut PrettyPrinter)> {
+        Some(print_debug)
     }
 }
 

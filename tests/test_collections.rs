@@ -613,22 +613,138 @@ mod sampled_from {
     //!   vs values error message.
     //! - `TestErrorNoteBehavior3819` — Python `__notes__` (PEP 678) and dynamic typing
     //!   (strategies passed as `sampled_from` elements).
-    //! - `test_easy_filtered_sampling`, `test_filtered_sampling_finds_rare_value`,
-    //!   `test_efficient_sets_of_samples` (and the dict/chained variants) — rely
-    //!   on Hypothesis's `do_filtered_draw`/`UniqueSampledListStrategy`
-    //!   enumeration optimizations, which hegel-rust deliberately does not
-    //!   implement (the engine's rejection machinery handles filtering and
-    //!   uniqueness instead).
+    //! - `test_easy_filtered_sampling`, `test_filtered_sampling_finds_rare_value`
+    //!   and the chained-transformation variants — rely on Hypothesis's
+    //!   `do_filtered_draw` enumeration of a filtered sample, which hegel-rust
+    //!   deliberately does not implement (the engine's rejection machinery
+    //!   handles filtering instead).
     //!
     //! Hegel-rust uses generic post-draw filtering: 3 retries, then the test
-    //! case is rejected like a failed assumption. Filters and unique
-    //! collections that reject almost everything therefore surface as
-    //! engine-level unsatisfiability rather than as an eager frontend error.
+    //! case is rejected like a failed assumption. Filters that reject almost
+    //! everything therefore surface as engine-level unsatisfiability rather
+    //! than as an eager frontend error. Collections of distinct elements of a
+    //! `sampled_from` do draw without replacement, as Hypothesis's
+    //! `UniqueSampledListStrategy` does.
 
-    use super::common::utils::{assert_all_examples, check_can_generate_examples, expect_panic};
-    use hegel::generators::{self as gs, Generator};
+    use super::common::utils::{
+        assert_all_examples, check_can_generate_examples, expect_panic, minimal,
+    };
+    use hegel::generators::{self as gs, Generator, PrintableGenerator};
     use hegel::{Hegel, Settings};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+    fn range(n: i64) -> Vec<i64> {
+        (0..n).collect()
+    }
+
+    fn all_of(n: i64) -> HashSet<i64> {
+        (0..n).collect()
+    }
+
+    #[test]
+    fn test_efficient_sets_of_samples() {
+        assert_all_examples(
+            gs::hashsets(gs::sampled_from(range(50))).min_size(50),
+            |x: &HashSet<i64>| *x == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_btree_sets_of_samples() {
+        assert_all_examples(
+            gs::btree_sets(gs::sampled_from(range(50))).min_size(50),
+            |x: &BTreeSet<i64>| x.iter().copied().collect::<HashSet<i64>>() == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_dicts_with_sampled_keys() {
+        assert_all_examples(
+            gs::hashmaps(gs::sampled_from(range(50)), gs::just(())).min_size(50),
+            |x: &HashMap<i64, ()>| x.keys().copied().collect::<HashSet<i64>>() == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_btree_maps_with_sampled_keys() {
+        assert_all_examples(
+            gs::btree_maps(gs::sampled_from(range(50)), gs::just(())).min_size(50),
+            |x: &BTreeMap<i64, ()>| x.keys().copied().collect::<HashSet<i64>>() == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_unique_lists_of_samples() {
+        assert_all_examples(
+            gs::vecs(gs::sampled_from(range(33)))
+                .min_size(33)
+                .unique(true),
+            |x: &Vec<i64>| x.iter().copied().collect::<HashSet<i64>>() == all_of(33),
+        );
+    }
+
+    #[test]
+    fn test_efficient_sets_of_samples_drawn_silently() {
+        assert_all_examples(
+            gs::hashsets(gs::sampled_from(range(50)))
+                .min_size(50)
+                .map(|x: HashSet<i64>| x),
+            |x: &HashSet<i64>| *x == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_sets_of_boxed_samples() {
+        assert_all_examples(
+            gs::hashsets(gs::sampled_from(range(50)).boxed()).min_size(50),
+            |x: &HashSet<i64>| *x == all_of(50),
+        );
+        assert_all_examples(
+            gs::hashsets(gs::sampled_from(range(50)).boxed_printable()).min_size(50),
+            |x: &HashSet<i64>| *x == all_of(50),
+        );
+    }
+
+    #[test]
+    fn test_efficient_sets_of_samples_through_wrappers() {
+        let sampled = gs::sampled_from(range(50));
+        Hegel::new(move |tc| {
+            let by_ref: HashSet<i64> = tc.draw(gs::hashsets(&sampled).min_size(50));
+            let boxed: HashSet<i64> =
+                tc.draw(gs::hashsets(gs::sampled_from(range(50)).boxed()).min_size(50));
+            let boxed_printable: HashSet<i64> =
+                tc.draw(gs::hashsets(gs::sampled_from(range(50)).boxed_printable()).min_size(50));
+            assert_eq!(by_ref, all_of(50));
+            assert_eq!(boxed, all_of(50));
+            assert_eq!(boxed_printable, all_of(50));
+        })
+        .settings(Settings::new().database(None))
+        .run();
+    }
+
+    #[test]
+    fn test_sets_of_samples_shrink_to_the_first_values() {
+        let x = minimal(
+            gs::hashsets(gs::sampled_from(range(50))).min_size(3),
+            |_| true,
+        );
+        assert_eq!(x, all_of(3));
+    }
+
+    #[test]
+    fn test_sets_of_samples_are_not_always_full() {
+        let sizes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = sizes.clone();
+        Hegel::new(move |tc| {
+            let x: HashSet<i64> = tc.draw(gs::hashsets(gs::sampled_from(range(4))));
+            seen.lock().unwrap().push(x.len());
+        })
+        .settings(Settings::new().database(None).test_cases(200))
+        .run();
+        let sizes = sizes.lock().unwrap();
+        assert!(sizes.iter().any(|n| *n < 4), "{sizes:?}");
+        assert!(sizes.contains(&4), "{sizes:?}");
+    }
 
     #[test]
     fn test_can_sample_sequence_without_warning() {
@@ -671,7 +787,7 @@ mod sampled_from {
     }
 
     #[test]
-    fn test_set_min_size_above_distinct_values_is_unsatisfiable() {
+    fn test_set_min_size_above_distinct_values_is_an_invalid_argument() {
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -681,12 +797,12 @@ mod sampled_from {
                 .settings(Settings::new().database(None))
                 .run();
             },
-            "(?i)(health.check|FailedHealthCheck|unsatisfiable|reject|invalid)",
+            "Cannot generate 5 unique elements from a list of length 3",
         );
     }
 
     #[test]
-    fn test_map_min_size_above_distinct_keys_is_unsatisfiable() {
+    fn test_map_min_size_above_distinct_keys_is_an_invalid_argument() {
         expect_panic(
             || {
                 Hegel::new(|tc| {
@@ -698,7 +814,7 @@ mod sampled_from {
                 .settings(Settings::new().database(None))
                 .run();
             },
-            "(?i)(health.check|FailedHealthCheck|unsatisfiable|reject|invalid)",
+            "Cannot generate 5 unique elements from a list of length 3",
         );
     }
 
