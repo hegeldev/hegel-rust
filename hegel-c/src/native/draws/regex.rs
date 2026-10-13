@@ -74,7 +74,9 @@ pub(crate) struct CompiledRegex {
 
 impl CompiledRegex {
     /// Parse `pattern`, reporting an invalid-argument diagnostic so a bad
-    /// pattern surfaces at construction time rather than mid-draw.
+    /// pattern, one that can never match, or one the alphabet cannot supply
+    /// surfaces at construction time rather than as every draw being
+    /// rejected.
     pub(crate) fn compile(
         pattern: &str,
         alphabet: Option<IntervalSet>,
@@ -82,10 +84,25 @@ impl CompiledRegex {
         let parsed = parse_pattern(pattern, 0).map_err(|e| {
             EngineError::InvalidArgument(format!("invalid regex pattern {pattern:?}: {e}"))
         })?;
+        if let Some(reason) = impossible_reason(&parsed.pattern, parsed.flags, 0, 0) {
+            return Err(EngineError::InvalidArgument(format!(
+                "regex pattern {pattern:?} can never match: {reason}"
+            )));
+        }
+        let caches = Caches::default();
+        if !producible_sub(&parsed.pattern, parsed.flags, &alphabet, &caches)? {
+            return Err(EngineError::InvalidArgument(match &alphabet {
+                None => format!("regex pattern {pattern:?} can never match"),
+                Some(alphabet) => format!(
+                    "regex pattern {pattern:?} matches no string in the specified alphabet {}",
+                    describe_alphabet(alphabet)
+                ),
+            }));
+        }
         Ok(CompiledRegex {
             parsed,
             alphabet,
-            caches: Caches::default(),
+            caches,
         })
     }
 }
@@ -562,6 +579,205 @@ fn generate_op(
     Ok(())
 }
 
+/// `alphabet` as a readable list of its codepoint ranges, for diagnostics.
+fn describe_alphabet(alphabet: &IntervalSet) -> String {
+    const SHOWN: usize = 8;
+    let mut ranges: Vec<String> = alphabet
+        .intervals
+        .iter()
+        .take(SHOWN)
+        .map(|&(lo, hi)| match (char::from_u32(lo), char::from_u32(hi)) {
+            (Some(lo), Some(hi)) if lo == hi => format!("{lo:?}"),
+            (Some(lo), Some(hi)) => format!("{lo:?}-{hi:?}"),
+            _ => format!("U+{lo:04X}-U+{hi:04X}"),
+        })
+        .collect();
+    if alphabet.intervals.len() > SHOWN {
+        ranges.push("...".to_string());
+    }
+    format!("of {} characters [{}]", alphabet.len(), ranges.join(", "))
+}
+
+/// Whether `op` consumes exactly one character.
+fn is_char_op(op: &OpCode) -> bool {
+    matches!(
+        op,
+        OpCode::Literal(_) | OpCode::NotLiteral(_) | OpCode::Any | OpCode::In(_)
+    )
+}
+
+/// Whether the single-character op `x` matches `c` under `flags`.
+fn char_op_matches(x: &OpCode, c: char, flags: u32) -> bool {
+    match_seq(
+        core::slice::from_ref(x),
+        0,
+        &[c],
+        flags,
+        &HashMap::default(),
+    )
+    .is_some()
+}
+
+/// Whether every character the single-character op `r` matches, `x` also
+/// matches: `r` and `x` are the same op, or `r` is a literal `x` matches.
+fn char_op_subset(r: &OpCode, x: &OpCode, flags: u32) -> bool {
+    match r {
+        _ if r == x => true,
+        OpCode::Literal(cp) => char::from_u32(*cp).is_some_and(|c| char_op_matches(x, c, flags)),
+        _ => false,
+    }
+}
+
+/// The fewest characters a match of `sp` consumes.
+fn min_width_sub(sp: &SubPattern, flags: u32) -> usize {
+    sp.data
+        .iter()
+        .fold(0usize, |n, op| n.saturating_add(min_width_op(op, flags)))
+}
+
+fn min_width_op(op: &OpCode, flags: u32) -> usize {
+    match op {
+        OpCode::Literal(_) | OpCode::NotLiteral(_) | OpCode::Any | OpCode::In(_) => 1,
+        OpCode::At(_)
+        | OpCode::GroupRef(_)
+        | OpCode::Assert { .. }
+        | OpCode::AssertNot { .. }
+        | OpCode::Failure => 0,
+        OpCode::Branch(items) => items
+            .iter()
+            .map(|item| min_width_sub(item, flags))
+            .min()
+            .unwrap_or(0),
+        OpCode::Subpattern {
+            add_flags,
+            del_flags,
+            p,
+            ..
+        } => min_width_sub(p, (flags | *add_flags) & !*del_flags),
+        OpCode::AtomicGroup(p) => min_width_sub(p, flags),
+        OpCode::GroupRefExists { yes, no, .. } => no.as_ref().map_or(0, |no| {
+            min_width_sub(yes, flags).min(min_width_sub(no, flags))
+        }),
+        OpCode::MaxRepeat { min, item, .. }
+        | OpCode::MinRepeat { min, item, .. }
+        | OpCode::PossessiveRepeat { min, item, .. } => {
+            (*min as usize).saturating_mul(min_width_sub(item, flags))
+        }
+    }
+}
+
+/// Why no string can match `sp` when its structure shows it, or `None` when
+/// it may match. `before` and `after` are the fewest characters a match
+/// must consume around `sp`. Detected: a start anchor that text must
+/// precede (`a^b`, `a\Ab`), an end anchor that text must follow (`a\Zb`,
+/// `a$bc`), and a negative lookaround whose body is spelled out by the
+/// characters that necessarily follow or precede it (`(?!foo)foo`,
+/// `abc(?<!abc)`). Alternations, conditionals and optional repeats are
+/// impossible only when every alternative is.
+fn impossible_reason(sp: &SubPattern, flags: u32, before: usize, after: usize) -> Option<String> {
+    let ops = &sp.data;
+    let widths: Vec<usize> = ops.iter().map(|op| min_width_op(op, flags)).collect();
+    let multiline = flags & SRE_FLAG_MULTILINE != 0;
+    let mut pre = before;
+    let mut post = after.saturating_add(min_width_sub(sp, flags));
+    for (i, op) in ops.iter().enumerate() {
+        post = post.saturating_sub(widths[i]);
+        let reason = match op {
+            OpCode::At(AtCode::BeginningString) if pre > 0 => {
+                Some("text must precede the start-of-string anchor".to_string())
+            }
+            OpCode::At(AtCode::Beginning) if pre > 0 && !multiline => {
+                Some("text must precede the `^` anchor".to_string())
+            }
+            OpCode::At(AtCode::EndString) if post > 0 => {
+                Some("text must follow the end-of-string anchor".to_string())
+            }
+            OpCode::At(AtCode::End)
+                if !multiline
+                    && (post > 1
+                        || ops.get(i + 1).is_some_and(|next| {
+                            is_char_op(next) && !char_op_matches(next, '\n', flags)
+                        })) =>
+            {
+                Some("text other than a final newline must follow the `$` anchor".to_string())
+            }
+            OpCode::AssertNot { direction, p } => {
+                lookaround_contradiction(ops, i, *direction, p, flags)
+            }
+            OpCode::Subpattern {
+                add_flags,
+                del_flags,
+                p,
+                ..
+            } => impossible_reason(p, (flags | *add_flags) & !*del_flags, pre, post),
+            OpCode::AtomicGroup(p) => impossible_reason(p, flags, pre, post),
+            OpCode::Branch(items) => items
+                .iter()
+                .map(|item| impossible_reason(item, flags, pre, post))
+                .collect::<Option<Vec<String>>>()
+                .map(|reasons| reasons.join("; ")),
+            OpCode::GroupRefExists {
+                yes, no: Some(no), ..
+            } => impossible_reason(yes, flags, pre, post)
+                .and_then(|r| impossible_reason(no, flags, pre, post).map(|_| r)),
+            OpCode::MaxRepeat { min, item, .. }
+            | OpCode::MinRepeat { min, item, .. }
+            | OpCode::PossessiveRepeat { min, item, .. }
+                if *min > 0 =>
+            {
+                impossible_reason(item, flags, pre, post)
+            }
+            _ => None,
+        };
+        if reason.is_some() {
+            return reason;
+        }
+        pre = pre.saturating_add(widths[i]);
+    }
+    None
+}
+
+/// Why the negative lookaround `p` at `ops[i]` can never hold: its body is a
+/// run of single-character ops that the single-character ops after it (for
+/// a lookahead) or before it (for a lookbehind) are each bound to match.
+fn lookaround_contradiction(
+    ops: &[OpCode],
+    i: usize,
+    direction: i32,
+    p: &SubPattern,
+    flags: u32,
+) -> Option<String> {
+    if p.data.is_empty() || !p.data.iter().all(is_char_op) {
+        return None;
+    }
+    let (body, context, reason): (Vec<&OpCode>, Vec<&OpCode>, &str) = if direction >= 0 {
+        (
+            p.data.iter().collect(),
+            ops[i + 1..]
+                .iter()
+                .take_while(|op| is_char_op(op))
+                .collect(),
+            "a negative lookahead rejects the text that must follow it",
+        )
+    } else {
+        (
+            p.data.iter().rev().collect(),
+            ops[..i]
+                .iter()
+                .rev()
+                .take_while(|op| is_char_op(op))
+                .collect(),
+            "a negative lookbehind rejects the text that must precede it",
+        )
+    };
+    let contradicted = body.len() <= context.len()
+        && body
+            .iter()
+            .zip(&context)
+            .all(|(x, r)| char_op_subset(r, x, flags));
+    contradicted.then(|| reason.to_string())
+}
+
 /// Whether the alphabet can supply every character `sp` needs, under
 /// `flags`: false when some literal, class or wildcard in it has no
 /// candidates, when every branch of an alternation is unproducible, or when
@@ -693,7 +909,17 @@ fn not_literal_chars(
         return cached_default_not_literal(c, flags);
     }
     cached_chars(&caches.char_cache, (c as u32, flags & CASE_FLAGS), || {
-        gather_chars(alphabet, |x| !casefold::literal_matches(c, x, flags))
+        not_literal_set(c, flags, alphabet)
+    })
+}
+
+/// Every alphabet character a `(NOT_LITERAL, c)` node may emit under
+/// `flags`: those not matching `c`, less the components of `c`'s
+/// multi-character case fold (see [`casefold::multichar_fold_components`]).
+fn not_literal_set(c: char, flags: u32, alphabet: &Option<IntervalSet>) -> Vec<char> {
+    let fold = casefold::multichar_fold_components(flags, |m| m == c);
+    gather_chars(alphabet, |x| {
+        !casefold::literal_matches(c, x, flags) && !fold.contains(&x)
     })
 }
 
@@ -780,8 +1006,7 @@ fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
             return Arc::clone(cached);
         }
     }
-    let computed: Arc<[char]> =
-        gather_chars(&None, |x| !casefold::literal_matches(c, x, flags)).into();
+    let computed: Arc<[char]> = not_literal_set(c, flags, &None).into();
     CACHE.lock().insert(cache_key, Arc::clone(&computed));
     computed
 }
@@ -789,12 +1014,14 @@ fn cached_default_not_literal(c: char, flags: u32) -> Arc<[char]> {
 /// Build the set of characters that a `(IN, items)` node can emit under
 /// `flags`, intersected with the user-supplied alphabet.
 ///
-/// A negated class is the alphabet filtered through [`char_matches_set`].
-/// A positive class lists its literals and ranges in pattern order (each
-/// followed by its case-equivalents under IGNORECASE) and then the
-/// characters of its categories; the ASCII flag narrows only the
-/// categories and the case folding, never the explicit characters — `(?a)Ā`
-/// still matches `Ā` in Python.
+/// A negated class is the alphabet filtered through [`char_matches_set`],
+/// less the components of its literal and range members' multi-character
+/// case folds (see [`casefold::multichar_fold_components`]). A positive
+/// class is its literals and ranges (with their case-equivalents under
+/// IGNORECASE) and the characters of its categories; the ASCII flag narrows
+/// only the categories and the case folding, never the explicit characters
+/// — `(?a)Ā` still matches `Ā` in Python. Either is in shrink order (see
+/// [`sort_for_shrinking`]).
 fn build_in_set(
     items: &[SetItem],
     flags: u32,
@@ -817,8 +1044,15 @@ fn build_in_set(
     for item in items {
         match item {
             SetItem::Negate => {
+                let fold = casefold::multichar_fold_components(flags, |m| {
+                    items.iter().any(|item| match item {
+                        SetItem::Literal(cp) => *cp == m as u32,
+                        SetItem::Range(lo, hi) => (*lo..=*hi).contains(&(m as u32)),
+                        SetItem::Negate | SetItem::Category(_) => false,
+                    })
+                });
                 return Ok(gather_chars(alphabet, |c| {
-                    char_matches_set(items, c, flags)
+                    char_matches_set(items, c, flags) && !fold.contains(&c)
                 }));
             }
             SetItem::Literal(cp) => add_equivalents(codepoint_to_char(*cp)?),
@@ -843,7 +1077,19 @@ fn build_in_set(
             }
         }
     }
+    sort_for_shrinking(&mut out);
     Ok(out)
+}
+
+/// Order `chars` as [`IntervalSet::char_in_shrink_order`] does — `'0'` up
+/// through `'Z'`, then downwards from `'0'`, then upwards from `'Z'` — so a
+/// class or wildcard shrinks to the same character `text()` does.
+fn sort_for_shrinking(chars: &mut [char]) {
+    chars.sort_by_key(|&c| match c as u32 {
+        cp @ 0x30..=0x5A => (0u8, cp),
+        cp @ 0..0x30 => (1, 0x30 - cp),
+        cp => (2, cp),
+    });
 }
 
 /// Return whether `c` is in the given CPython character category, with the
@@ -888,9 +1134,9 @@ fn is_word(c: char, ascii: bool) -> bool {
 }
 
 /// Gather all characters in `alphabet` (or BMP-minus-surrogates when no
-/// alphabet is given) that satisfy `predicate`. The default scan is bounded
-/// to the BMP to keep `.`, `\w`, `[^a]`, etc. tractable on the unconstrained
-/// path.
+/// alphabet is given) that satisfy `predicate`, in shrink order. The
+/// default scan is bounded to the BMP to keep `.`, `\w`, `[^a]`, etc.
+/// tractable on the unconstrained path.
 fn gather_chars<F: Fn(char) -> bool>(alphabet: &Option<IntervalSet>, predicate: F) -> Vec<char> {
     let mut out = Vec::new();
     match alphabet {
@@ -918,6 +1164,7 @@ fn gather_chars<F: Fn(char) -> bool>(alphabet: &Option<IntervalSet>, predicate: 
             }
         }
     }
+    sort_for_shrinking(&mut out);
     out
 }
 
@@ -954,14 +1201,7 @@ fn draw_any_char(
                 .draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
                 .to_i128()
                 .unwrap();
-            let cp = hegel_internal_unwrap!(
-                intervals.get(idx as isize),
-                "draw_any_char: alphabet index {idx} out of bounds"
-            );
-            Ok(hegel_internal_unwrap!(
-                char::from_u32(cp),
-                "draw_any_char: alphabet codepoint {cp} is not a char"
-            ))
+            Ok(intervals.char_in_shrink_order(idx as usize))
         }
     }
 }
@@ -975,16 +1215,12 @@ fn emit_from_chars(
         return Err(mark_invalid(ntc));
     }
     let n = chars.len();
-    let idx = if n > 256 && ntc.weighted(0.8, None)? {
-        ntc.draw_integer(BigInt::from(0), BigInt::from(255))?
-            .to_i128()
-            .unwrap() as usize
-    } else if n > 256 {
+    let idx = if n > 256 && ntc.weighted(0.2, None)? {
         ntc.draw_integer(BigInt::from(256), BigInt::from(n as i64 - 1))?
             .to_i128()
             .unwrap() as usize
     } else {
-        ntc.draw_integer(BigInt::from(0), BigInt::from(n as i64 - 1))?
+        ntc.draw_integer(BigInt::from(0), BigInt::from(n.min(256) as i64 - 1))?
             .to_i128()
             .unwrap() as usize
     };

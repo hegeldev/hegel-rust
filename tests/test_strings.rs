@@ -756,11 +756,26 @@ mod nocover_emails {
 
 mod regex_tests {
     use crate::common::utils::{
-        FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples, find_any,
+        FindAny, assert_all_examples, assert_no_examples, check_can_generate_examples,
+        expect_panic, find_any,
     };
     use hegel::generators::{self as gs};
     use hegel::{HealthCheck, Hegel, Settings};
+
     use regex::Regex;
+
+    fn expect_invalid_argument<G: hegel::Generator<String> + 'static>(generator: G, pattern: &str) {
+        expect_panic(
+            std::panic::AssertUnwindSafe(|| {
+                Hegel::new(move |tc| {
+                    let _: String = tc.draw_silent(&generator);
+                })
+                .settings(Settings::new().test_cases(1).database(None))
+                .run();
+            }),
+            pattern,
+        );
+    }
 
     #[test]
     fn test_can_generate_patterns_no_alphabet() {
@@ -860,8 +875,60 @@ mod regex_tests {
     }
 
     #[test]
-    fn test_caret_in_the_middle_does_not_generate_anything() {
-        assert_no_examples(gs::from_regex("a^b"), |_: &String| true);
+    fn test_caret_in_the_middle_is_rejected_at_construction() {
+        expect_invalid_argument(
+            gs::from_regex("a^b"),
+            "\"a\\^b\" can never match: text must precede the `\\^` anchor",
+        );
+    }
+
+    #[test]
+    fn test_alphabet_that_cannot_match_the_pattern_is_rejected_at_construction() {
+        for (pattern, alphabet) in [
+            ("abc", gs::characters().min_codepoint(128)),
+            (
+                "abc",
+                gs::characters().include_characters("def").max_codepoint(0),
+            ),
+            (
+                "aa|bb",
+                gs::characters().include_characters("c").max_codepoint(0),
+            ),
+            (
+                "[abc]",
+                gs::characters().include_characters("def").max_codepoint(0),
+            ),
+            (
+                "[ab]x[de]",
+                gs::characters()
+                    .min_codepoint('a' as u32)
+                    .max_codepoint('f' as u32),
+            ),
+            ("[a-z]", gs::characters().codec("ascii").categories(&["Nd"])),
+            (
+                r"\d",
+                gs::characters().include_characters("abc").max_codepoint(0),
+            ),
+            (
+                "[^a]",
+                gs::characters()
+                    .min_codepoint('a' as u32)
+                    .max_codepoint('a' as u32),
+            ),
+        ] {
+            expect_invalid_argument(
+                gs::from_regex(pattern).alphabet(alphabet),
+                "matches no string in the specified alphabet",
+            );
+        }
+        assert_all_examples(
+            gs::from_regex("[^a]|a").alphabet(
+                gs::characters()
+                    .min_codepoint('a' as u32)
+                    .max_codepoint('a' as u32),
+            ),
+            |s: &String| s == "a",
+        );
     }
 
     #[test]
@@ -937,15 +1004,31 @@ mod regex_tests {
     }
 
     #[test]
-    fn test_impossible_negative_lookahead() {
-        assert_no_examples(gs::from_regex("(?!foo)foo"), |_: &String| true);
+    fn test_impossible_negative_lookahead_is_rejected_at_construction() {
+        expect_invalid_argument(
+            gs::from_regex("(?!foo)foo"),
+            "can never match: a negative lookahead rejects the text that must follow it",
+        );
     }
 
     #[test]
-    fn test_impossible_negative_lookbehind() {
-        assert_no_examples(
+    fn test_impossible_negative_lookbehind_is_rejected_at_construction() {
+        expect_invalid_argument(
             gs::from_regex("abc(?<!abc)").fullmatch(true),
-            |_: &String| true,
+            "can never match: a negative lookbehind rejects the text that must precede it",
+        );
+    }
+
+    #[test]
+    fn test_ignorecase_negated_class_never_assembles_the_fold_of_its_member() {
+        assert_all_examples(
+            gs::from_regex("(?i)[^\u{130}]+").alphabet(
+                gs::characters()
+                    .min_codepoint(0x307)
+                    .max_codepoint(0x307)
+                    .include_characters("xiI\u{130}\u{131}"),
+            ),
+            |s: &String| s.chars().all(|c| c == 'x'),
         );
     }
 
@@ -1363,7 +1446,8 @@ mod regex_tests {
 
     #[test]
     fn lookahead_with_dotall_dot() {
-        assert_no_examples(gs::from_regex(r"(?s)x(?!.)y"), |_: &String| true);
+        expect_invalid_argument(gs::from_regex(r"(?s)x(?!.)y"), "can never match");
+        check_can_generate_examples(gs::from_regex(r"x(?!.)\n"));
     }
 
     #[test]
