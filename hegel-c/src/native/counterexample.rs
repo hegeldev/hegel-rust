@@ -215,6 +215,14 @@ pub(crate) struct Counterexample {
     /// first-interesting check's replays so the discovery
     /// bar begins partially filled. Taken once.
     seed: Option<Evidence>,
+    /// Whether this origin's own failure was ever seen not to reproduce
+    /// this run — a replay miss in any evidence, a verdict change on its
+    /// values, a dry shrink verify or final replay — or it was reproduced
+    /// from stored nondeterministic state. The run's flip is run-wide, but
+    /// the caveat is per origin: a confirmed origin that reproduced at
+    /// every replay reports as a plain failure even when another origin
+    /// flipped the run.
+    missed: bool,
     history: History,
     /// Whether the first-interesting determinism check has run for this
     /// origin (either verdict — a miss flips the run, which handles
@@ -363,6 +371,7 @@ impl Counterexample {
                 self.report_replays = 0;
             }
         }
+        self.missed = true;
         if let Some((graph, longest)) = stored {
             self.graph = Some(graph);
             self.longest = longest;
@@ -375,9 +384,23 @@ impl Counterexample {
     /// reported and persisted. No-op in any other standing.
     pub(crate) fn record_trusted_batch(&mut self, evidence: (u64, u64)) {
         if matches!(self.standing, Standing::Trusted) {
-            self.fails += evidence.0;
-            self.replays += evidence.1;
+            self.fold(evidence);
         }
+    }
+
+    /// Fold a batch's physical (fails, replays) into the standing's
+    /// evidence; a batch with a miss marks the origin nondeterministic.
+    fn fold(&mut self, evidence: (u64, u64)) {
+        self.fails += evidence.0;
+        self.replays += evidence.1;
+        self.missed |= evidence.0 < evidence.1;
+    }
+
+    /// This origin's example was seen not to reproduce outside an
+    /// evidence batch: a verdict change on its values, or a dry
+    /// deterministic shrink verify or final replay.
+    pub(crate) fn record_miss(&mut self) {
+        self.missed = true;
     }
 
     /// The discovery bar accepted this origin, or a failing evidence batch
@@ -407,8 +430,7 @@ impl Counterexample {
         };
         self.graph = Some(Arc::new(graph));
         self.longest = longest;
-        self.fails += evidence.0;
-        self.replays += evidence.1;
+        self.fold(evidence);
         self.history = History::default();
         Ok(())
     }
@@ -460,6 +482,7 @@ impl Counterexample {
         if !self.needs_confirmation() {
             self.report_fails += evidence.0;
             self.report_replays += evidence.1;
+            self.missed |= evidence.0 < evidence.1;
         }
     }
 
@@ -473,6 +496,7 @@ impl Counterexample {
         }
         self.fails += evidence.0;
         self.replays += evidence.1;
+        self.missed = true;
         self.evict()
     }
 
@@ -550,8 +574,11 @@ impl Counterexample {
     /// handling: its standing with the in-run replay
     /// evidence, worded per the standing. Quotes only in-run measurements,
     /// and weights the environment-modification hypothesis only when
-    /// non-reproduction is surprising given the evidence.
-    pub(crate) fn caveat(&self) -> String {
+    /// non-reproduction is surprising given the evidence. `None` for a
+    /// confirmed origin that reproduced at every replay: the run may have
+    /// flipped on another origin, but this failure is deterministic as far
+    /// as anything measured.
+    pub(crate) fn caveat(&self) -> Option<String> {
         let Counterexample {
             fails,
             replays,
@@ -559,8 +586,11 @@ impl Counterexample {
             report_replays,
             ..
         } = self;
-        match self.standing {
+        let caveat = match self.standing {
             Standing::Confirmed { .. } => {
+                if !self.missed {
+                    return None;
+                }
                 if *report_replays > 0 && *report_fails == 0 {
                     format!(
                         "nondeterministic failure, confirmed earlier this run \
@@ -622,7 +652,8 @@ impl Counterexample {
                     )
                 }
             }
-        }
+        };
+        Some(caveat)
     }
 }
 
@@ -695,8 +726,9 @@ impl Counterexamples {
     }
 
     /// Origins observed but never confirmed — bar rejects and never-barred
-    /// sightings alike — in origin order: the caveated-failure report, used
-    /// only when nothing confirmed.
+    /// sightings alike — in origin order: the caveated-failure report,
+    /// alongside the confirmed failures when the run reports multiple
+    /// failures, otherwise only when nothing confirmed.
     pub(crate) fn unconfirmed(&self) -> impl Iterator<Item = &str> {
         self.origins
             .iter()
@@ -704,9 +736,9 @@ impl Counterexamples {
     }
 
     /// The caveat for `origin`'s report, or `None` for an origin the run
-    /// never recorded.
+    /// never recorded or one that reproduced at every replay.
     pub(crate) fn caveat(&self, origin: &str) -> Option<String> {
-        self.origins.get(origin).map(Counterexample::caveat)
+        self.origins.get(origin).and_then(Counterexample::caveat)
     }
 }
 

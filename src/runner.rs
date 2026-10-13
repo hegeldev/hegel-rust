@@ -114,9 +114,10 @@ pub enum Verbosity {
 #[non_exhaustive]
 pub enum NondeterminismStrictness {
     /// Switch to nondeterministic handling silently: failures are confirmed
-    /// by repeated replay before they are shrunk or persisted, and every
-    /// report carries a caveat quoting the run's replay evidence. An
-    /// unconfirmed failure still fails the run. The default.
+    /// by repeated replay before they are shrunk or persisted, and a
+    /// failure seen not to reproduce reports with a caveat quoting the
+    /// run's replay evidence. An unconfirmed failure still fails the run.
+    /// The default.
     Quiet,
     /// Switch as under quiet, printing a one-line notice once per run.
     Warn,

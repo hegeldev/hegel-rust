@@ -144,3 +144,148 @@ fn a_flaky_failure_over_a_collection_is_confirmed_and_shrunk() {
         "the collection must shrink to the two elements the failure needs:\n{text}"
     );
 }
+
+static ONE_OFF_FIRED: AtomicUsize = AtomicUsize::new(0);
+
+/// Two bugs: one deterministic, one that fails exactly once in the run.
+fn one_deterministic_and_one_one_off_bug(tc: TestCase) {
+    let x: u8 = tc.draw(gs::integers());
+    if x > 200 {
+        panic!("deterministic: x = {x}");
+    }
+    if x > 0 && ONE_OFF_FIRED.fetch_add(1, Ordering::SeqCst) == 0 {
+        panic!("one-off: x = {x}");
+    }
+}
+
+#[test]
+fn a_one_off_failure_is_reported_alongside_a_deterministic_one() {
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(one_deterministic_and_one_one_off_bug)
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .seed(Some(3))
+                    .report_multiple_failures(true),
+            )
+            .run();
+    });
+    let panic = result.expect_err("both failures are reported");
+    let msg = panic_message(&*panic);
+    assert!(
+        msg.contains("Property-based test failed with 2 distinct failures."),
+        "got: {msg:?}"
+    );
+    let text = lines.join("\n");
+    assert!(text.contains("deterministic: x = "), "{text}");
+    assert!(
+        text.contains("Panic at tests/test_flaky_replay.rs:"),
+        "the one-off failure's block names its origin:\n{text}"
+    );
+    assert!(text.contains("one-off: x = "), "{text}");
+    assert!(
+        !text.contains("note: nondeterministic failure"),
+        "the deterministic failure reproduced at every replay and gets no caveat:\n{text}"
+    );
+    assert!(
+        text.contains("note: unconfirmed failure: failed 0 of "),
+        "the one-off failure is reported with the unconfirmed caveat:\n{text}"
+    );
+}
+
+static ONE_OFF_FIRED_STRICT: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn error_strictness_aborts_on_the_one_off_failure_as_flaky() {
+    let body = |tc: TestCase| {
+        let x: u8 = tc.draw(gs::integers());
+        if x > 200 {
+            panic!("deterministic: x = {x}");
+        }
+        if x > 0 && ONE_OFF_FIRED_STRICT.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("one-off: x = {x}");
+        }
+    };
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(body)
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .seed(Some(3))
+                    .report_multiple_failures(true)
+                    .nondeterminism_strictness(NondeterminismStrictness::Error),
+            )
+            .run();
+    });
+    let panic = result.expect_err("error strictness aborts the run");
+    let msg = panic_message(&*panic);
+    let text = lines.join("\n");
+    assert!(msg.contains("Flaky test detected"), "got: {msg:?}\n{text}");
+    assert!(
+        msg.contains("The failure that did not reproduce was: Panic at "),
+        "the diagnostic names the one-off failure, got: {msg:?}"
+    );
+    assert!(
+        !text.contains("deterministic: x = "),
+        "the abort reports no failure of its own:\n{text}"
+    );
+}
+
+static ONE_OFF_FIRED_SINGLE: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn a_single_failure_report_prefers_the_confirmed_failure_to_the_one_off() {
+    let body = |tc: TestCase| {
+        let x: u8 = tc.draw(gs::integers());
+        if x > 200 {
+            panic!("deterministic: x = {x}");
+        }
+        if x > 0 && ONE_OFF_FIRED_SINGLE.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("one-off: x = {x}");
+        }
+    };
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(body)
+            .settings(Settings::new().database(None).seed(Some(3)))
+            .run();
+    });
+    let panic = result.expect_err("the deterministic failure is reported");
+    let msg = panic_message(&*panic);
+    assert!(msg.contains("deterministic: x = "), "got: {msg:?}");
+    let text = lines.join("\n");
+    assert!(!text.contains("one-off: x = "), "{text}");
+    assert!(
+        !text.contains("note: nondeterministic") && !text.contains("note: unconfirmed"),
+        "no caveat on a deterministic failure:\n{text}"
+    );
+}
+
+static PASSED_ONCE: AtomicUsize = AtomicUsize::new(0);
+
+/// `true` passes the first time it is drawn and fails every time after:
+/// the failure then reproduces at every replay, but the engine saw the
+/// same input pass, so the report keeps its caveat.
+#[test]
+fn an_input_that_passed_before_it_failed_keeps_the_caveat() {
+    let body = |tc: TestCase| {
+        if tc.draw(gs::booleans()) && PASSED_ONCE.fetch_add(1, Ordering::SeqCst) > 0 {
+            panic!("fails from the second time on");
+        }
+    };
+    let (lines, result) = capture_hegel_output(|| {
+        Hegel::new(body)
+            .settings(Settings::new().database(None))
+            .run();
+    });
+    let panic = result.expect_err("the failure is reported");
+    let msg = panic_message(&*panic);
+    assert!(
+        msg.contains("fails from the second time on"),
+        "got: {msg:?}"
+    );
+    let text = lines.join("\n");
+    assert!(
+        text.contains("note: nondeterministic failure, confirmed: failed 20 of 20 replays"),
+        "{text}"
+    );
+}

@@ -3204,6 +3204,7 @@ fn the_final_replay_review_confirms_through_the_bar() {
             )
             .unwrap();
             assert!(ctx.origins.needs_confirmation(origin));
+            ctx.origins.entry(origin).record_miss();
             let output = ctx.settings.output.clone();
             ctx.final_replay(Verbosity::Quiet, &output, None, false)
                 .await

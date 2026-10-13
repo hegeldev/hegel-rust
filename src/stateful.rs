@@ -790,9 +790,9 @@ impl<M: ConcurrentStateMachine + Sync> Machine<M> {
     /// flips, replay misses) exactly as for any other test. Once a divergence
     /// is observed, the run switches into nondeterministic handling: failures
     /// are confirmed by repeated replay before they are shrunk or persisted;
-    /// each report carries a caveat quoting that replay evidence, plus a
-    /// reproduce blob when confirmed. An unconfirmed failure still fails the
-    /// run, caveated.
+    /// a failure seen not to reproduce reports with a caveat quoting that
+    /// replay evidence, plus a reproduce blob when confirmed. An unconfirmed
+    /// failure still fails the run, caveated.
     ///
     /// # Abandoned rules and lock poisoning
     ///
