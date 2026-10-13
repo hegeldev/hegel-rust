@@ -129,3 +129,27 @@ fn test_shrink_ligature_to_base_character() {
     assert_eq!(s.chars().count(), 1);
     assert!(matches!(s.as_str(), "F" | "f"), "got {s:?}");
 }
+
+#[test]
+fn test_minimize_regex_wildcard_to_zero() {
+    assert_eq!(minimal(gs::from_regex("."), |_: &String| true), "0");
+    assert_eq!(minimal(gs::from_regex(".."), |_: &String| true), "00");
+    assert_eq!(minimal(gs::from_regex("[^a]"), |_: &String| true), "0");
+    assert_eq!(minimal(gs::from_regex(r"\w+"), |_: &String| true), "0");
+}
+
+#[test]
+fn test_minimize_regex_class_to_its_simplest_member() {
+    assert_eq!(minimal(gs::from_regex("[a-z]"), |_: &String| true), "a");
+    assert_eq!(
+        minimal(
+            gs::from_regex(".").alphabet(gs::characters().min_codepoint('a' as u32)),
+            |_: &String| true
+        ),
+        "a"
+    );
+    assert_eq!(
+        minimal(gs::from_regex("[a-z]").fullmatch(false), |_: &String| true),
+        "a"
+    );
+}

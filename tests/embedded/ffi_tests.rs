@@ -187,7 +187,7 @@ fn ffi_string_generator_constructors_cover_every_kind() {
         None,
         None,
     )
-    .and_then(|nd| StringGenerator::regex("x", false, Some(&nd)).map(|_| ()))
+    .and_then(|nd| StringGenerator::regex(r"\d", false, Some(&nd)).map(|_| ()))
     .map(|_| String::new());
     assert!(err.is_ok(), "a text alphabet is accepted for regex");
 }

@@ -154,3 +154,33 @@ fn push_equivalents_lists_the_literal_first() {
     push_equivalents(&mut out, 'ſ', IC);
     assert_eq!(out, vec!['ſ', 'ſ', 's', 'S']);
 }
+
+#[test]
+fn multichar_fold_components_are_the_chars_of_a_multichar_swapcase_python_still_matches() {
+    assert_eq!(
+        multichar_fold_components(IC, |c| c == '\u{130}'),
+        vec!['i', '\u{307}']
+    );
+    assert_eq!(
+        multichar_fold_components(IC, |c| c == 'ß'),
+        Vec::<char>::new()
+    );
+    assert_eq!(
+        multichar_fold_components(IC, |c| c == 'a'),
+        Vec::<char>::new()
+    );
+    assert_eq!(
+        multichar_fold_components(AIC, |c| c == '\u{130}'),
+        Vec::<char>::new()
+    );
+    assert_eq!(
+        multichar_fold_components(0, |c| c == '\u{130}'),
+        Vec::<char>::new()
+    );
+    assert_eq!(swapcase('a'), vec!['A']);
+    assert_eq!(swapcase('A'), vec!['a']);
+    assert_eq!(swapcase('1'), vec!['1']);
+    assert_eq!(swapcase('ß'), vec!['S', 'S']);
+    assert!(multichar_swapcases().iter().any(|(c, _)| *c == 'ß'));
+    assert!(multichar_swapcases().iter().all(|(_, s)| s.len() > 1));
+}

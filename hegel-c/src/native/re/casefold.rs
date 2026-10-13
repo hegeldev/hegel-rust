@@ -182,6 +182,51 @@ pub fn groupref_eq(a: char, b: char, flags: u32) -> bool {
     a == b || (ignorecase(flags) && lower(a, flags) == lower(b, flags))
 }
 
+/// Python's `str.swapcase` of `c`: the full lowercase mapping of an
+/// uppercase character, the full uppercase mapping of a lowercase one, and
+/// `c` itself otherwise.
+fn swapcase(c: char) -> Vec<char> {
+    if c.is_uppercase() {
+        c.to_lowercase().collect()
+    } else if c.is_lowercase() {
+        c.to_uppercase().collect()
+    } else {
+        alloc::vec![c]
+    }
+}
+
+/// Every character whose [`swapcase`] is more than one character, with that
+/// swapcase: `İ` (U+0130) and `i` U+0307, `ß` and `SS`, ...
+fn multichar_swapcases() -> &'static [(char, Vec<char>)] {
+    static TABLE: Lazy<Vec<(char, Vec<char>)>> = Lazy::new(|| {
+        (0..=0x10FFFF)
+            .filter_map(char::from_u32)
+            .map(|c| (c, swapcase(c)))
+            .filter(|(_, swapped)| swapped.len() > 1)
+            .collect()
+    });
+    Lazy::force(&TABLE)
+}
+
+/// The characters making up the multi-character case folds that Python's
+/// `re.IGNORECASE` matches against a character `selects` accepts: `i` and
+/// U+0307 for `İ`, nothing for `ß` (whose `SS` does not match it) or
+/// without `re.IGNORECASE`. A negated class that excludes `İ` must not emit
+/// these, or `[^İ]+` could assemble the fold `i\u{307}` of the character it
+/// excludes.
+pub fn multichar_fold_components(flags: u32, selects: impl Fn(char) -> bool) -> Vec<char> {
+    let mut out = Vec::new();
+    if !ignorecase(flags) {
+        return out;
+    }
+    for (c, swapped) in multichar_swapcases() {
+        if selects(*c) && literal_matches(*c, swapped[0], flags) {
+            out.extend_from_slice(swapped);
+        }
+    }
+    out
+}
+
 /// Append to `out` every character the literal `c` matches under `flags`,
 /// `c` first and possibly with repeats: `c` alone without `re.IGNORECASE`
 /// or when `c` is uncased, otherwise every character whose lowercase form is
