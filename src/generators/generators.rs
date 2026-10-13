@@ -346,6 +346,10 @@ where
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        self.source.reject(tc, value)
+    }
 }
 
 impl<T, G, F> PrintableGenerator<T> for PrintedWith<G, F>
@@ -377,6 +381,10 @@ where
     fn do_draw(&self, tc: &TestCase) -> T {
         self.source.do_draw(tc)
     }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        self.source.reject(tc, value)
+    }
 }
 
 impl<T, G> PrintableGenerator<T> for PrintedAsDebug<G>
@@ -396,6 +404,10 @@ impl<T, G: Generator<T>> Generator<T> for &G {
 
     fn do_draw(&self, tc: &TestCase) -> T {
         (*self).do_draw(tc)
+    }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        (*self).reject(tc, value)
     }
 }
 
@@ -672,6 +684,10 @@ impl<T> Generator<T> for BoxedGenerator<'_, T> {
         self.inner.do_draw(tc)
     }
 
+    fn reject(&self, tc: &TestCase, value: T) {
+        self.inner.reject(tc, value)
+    }
+
     fn boxed<'b>(self) -> BoxedGenerator<'b, T>
     where
         Self: Sized + Send + Sync + 'b,
@@ -712,6 +728,10 @@ impl<T> Generator<T> for BoxedPrintableGenerator<'_, T> {
 
     fn do_draw(&self, tc: &TestCase) -> T {
         self.inner.do_draw(tc)
+    }
+
+    fn reject(&self, tc: &TestCase, value: T) {
+        self.inner.reject(tc, value)
     }
 }
 

@@ -1,8 +1,8 @@
 mod common;
 
 use hegel::generators as gs;
-use hegel::stateful::{Pool, pool};
-use hegel::{Generator, TestCase};
+use hegel::stateful::{ConcurrentPool, Pool, concurrent_pool, pool};
+use hegel::{Generator, PrintableGenerator, TestCase};
 
 struct Linear {
     state: i32,
@@ -98,6 +98,46 @@ fn test_filter_puts_back_the_consumed_values_it_rejects(tc: TestCase) {
     assert_eq!(numbers.len(), 9);
     let expected: Vec<i32> = (0..10).filter(|x| *x != even).collect();
     assert_eq!(remaining(&mut numbers, &tc), expected);
+}
+
+#[hegel::test]
+fn test_wrappers_pass_a_rejected_value_back_to_the_pool(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..10 {
+        numbers.add(i);
+    }
+    {
+        let by_ref = numbers.values_consumed();
+        let through_a_reference = (&by_ref).filter(|_| true);
+        let value = tc.draw(&through_a_reference);
+        through_a_reference.reject(&tc, value);
+    }
+    {
+        let printed = numbers
+            .values_consumed()
+            .print_with(|value, printer| printer.text(&value.to_string()));
+        let value = tc.draw(&printed);
+        printed.reject(&tc, value);
+    }
+    {
+        let printed = numbers.values_consumed().print_as_debug();
+        let value = tc.draw(&printed);
+        printed.reject(&tc, value);
+    }
+    assert_eq!(numbers.len(), 10);
+    assert_eq!(remaining(&mut numbers, &tc), (0..10).collect::<Vec<i32>>());
+
+    let shared: ConcurrentPool<i32> = concurrent_pool(&tc);
+    for i in 0..10 {
+        shared.add(&tc, i);
+    }
+    let boxed = shared.values_consumed().boxed();
+    let value = tc.draw(&boxed);
+    boxed.reject(&tc, value);
+    let boxed = shared.values_consumed().boxed_printable();
+    let value = tc.draw(&boxed);
+    boxed.reject(&tc, value);
+    assert_eq!(shared.len(), 10);
 }
 
 #[hegel::test]
