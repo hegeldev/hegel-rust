@@ -262,13 +262,15 @@ fn a_single_failure_report_prefers_the_confirmed_failure_to_the_one_off() {
 
 static PASSED_ONCE: AtomicUsize = AtomicUsize::new(0);
 
-/// `true` passes the first time it is drawn and fails every time after:
-/// the failure then reproduces at every replay, but the engine saw the
-/// same input pass, so the report keeps its caveat.
+/// The test's only input (a float draw, so the space is not tracked as
+/// exhausted after it) passes the first time it is drawn and fails every
+/// time after: the failure then reproduces at every replay, but the engine
+/// saw the same input pass, so the report keeps its caveat.
 #[test]
 fn an_input_that_passed_before_it_failed_keeps_the_caveat() {
     let body = |tc: TestCase| {
-        if tc.draw(gs::booleans()) && PASSED_ONCE.fetch_add(1, Ordering::SeqCst) > 0 {
+        let x: f64 = tc.draw(gs::floats::<f64>().min_value(10.0).max_value(10.0));
+        if x == 10.0 && PASSED_ONCE.fetch_add(1, Ordering::SeqCst) > 0 {
             panic!("fails from the second time on");
         }
     };
