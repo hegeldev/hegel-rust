@@ -534,10 +534,13 @@ pub use hegel_macros::explicit_test_case;
 ///
 /// Paste that attribute **below** `#[hegel::test]` and the next run will
 /// replay the blob instead of generating fresh test cases. A deterministic
-/// blob decodes to one choice sequence, replayed up to four times — each
-/// attempt may draw fresh values past the recorded choices — stopping at
-/// the first failure. A nondeterministic blob decodes to its stored failing
-/// timelines, replayed until one fails, under a replay budget.
+/// blob decodes to one choice sequence, replayed up to four times, stopping
+/// at the first failure. A nondeterministic blob decodes to its stored
+/// failing timelines, replayed until one fails, under a replay budget.
+/// Every replay is exact: if the test no longer draws as it did when the
+/// blob was recorded — a different generator, or an extra draw — the replay
+/// stops there and the blob is reported as not reproducing, even if the
+/// test would go on to fail.
 ///
 /// ```no_run
 /// #[hegel::test]

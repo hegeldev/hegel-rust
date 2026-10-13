@@ -1800,6 +1800,42 @@ impl NativeTestCase {
         .with_random(rng)
     }
 
+    /// Replay `choices` exactly, with no rescue: a draw no stored choice
+    /// serves ends the run as a divergence ([`Rescue::Stop`]). The blob
+    /// replay of a choice sequence.
+    pub(crate) fn for_exact(choices: &[ChoiceValue]) -> Self {
+        Self::new_stream(
+            Replay::counterexample(alloc::vec![choices.to_vec()]).stopping(),
+            None,
+            None,
+            usize::MAX,
+            None,
+            false,
+            Arc::new(FamilyCore::new(usize::MAX)),
+            Vec::new(),
+        )
+    }
+
+    /// Walk a counterexample stored as a graph exactly, with no rescue: a
+    /// draw the graph does not serve ends the run as a divergence
+    /// ([`Rescue::Stop`]), up to `max_size` choices in total. The blob
+    /// replay of a graph.
+    pub(crate) fn for_exact_graph(
+        graph: Arc<crate::native::graph::Graph>,
+        max_size: usize,
+    ) -> Self {
+        Self::new_stream(
+            Replay::graph(graph).stopping(),
+            None,
+            None,
+            max_size,
+            None,
+            false,
+            Arc::new(FamilyCore::new(max_size)),
+            Vec::new(),
+        )
+    }
+
     /// Walk a counterexample stored as a graph: every draw
     /// served by the graph where its state and address have an edge, at
     /// random where they do not, up to `max_size` choices in total. See
@@ -1988,11 +2024,12 @@ impl NativeTestCase {
             kind: t.kind,
             count: None,
         });
-        let child_max_size = if child_rng.is_some() || child_template.is_some() {
-            usize::MAX
-        } else {
-            child_replay.longest()
-        };
+        let child_max_size =
+            if child_rng.is_some() || child_template.is_some() || self.replay.stops() {
+                usize::MAX
+            } else {
+                child_replay.longest()
+            };
         let mut child_id = self.clone_id.clone();
         child_id.push(self.clone_counter);
         self.clone_counter += 1;
@@ -2651,7 +2688,8 @@ impl NativeTestCase {
     /// hands back a value proven to fit the draw. Under [`Rescue::Pun`] a
     /// stored value that doesn't fit puns exactly as before: to the draw's
     /// `simplest()` when the stale value was its original kind's simplest,
-    /// and to `unit()` otherwise.
+    /// and to `unit()` otherwise. Under [`Rescue::Stop`] a divergence
+    /// concludes the family as [`Status::EarlyStop`] instead of drawing on.
     fn resolve_choice<V>(
         &mut self,
         simplest: impl FnOnce() -> Result<V, InternalError>,
@@ -2667,7 +2705,10 @@ impl NativeTestCase {
             .replay
             .resolve(&self.clone_id, idx, || self.draw_address(), from_prefix)
         {
-            Resolved::Served(v) => return Ok((v, false)),
+            Resolved::Served(v) if !(self.replay.stops() && self.replay.divergence().is_some()) => {
+                return Ok((v, false));
+            }
+            Resolved::Served(_) => {}
             Resolved::Misfit(stored, timeline) => {
                 let is_simplest = match self.replay.proposal_node(timeline, idx) {
                     Some(pn) => *stored == pn.data.simplest_value()?,
@@ -2676,6 +2717,11 @@ impl NativeTestCase {
                 return Ok((if is_simplest { simplest()? } else { unit()? }, false));
             }
             Resolved::Exhausted => {}
+        }
+
+        if self.replay.stops() {
+            self.conclude(Status::EarlyStop, None);
+            return Err(EngineError::Overrun);
         }
 
         if let Some(template) = self.trailing_template.as_mut() {

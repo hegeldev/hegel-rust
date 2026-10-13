@@ -978,10 +978,39 @@ fn reproduce_blob_reports_a_stale_deterministic_blob_as_passed() {
     assert!(result.failures.is_empty());
 }
 
+/// Settings that collect the engine's output lines.
+fn collecting_settings() -> (Settings, Arc<crate::sys::sync::Mutex<Vec<String>>>) {
+    let lines = Arc::new(crate::sys::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let settings = Settings::new()
+        .database(None)
+        .output(Output::callback(move |line| {
+            sink.lock().push(line.to_string())
+        }));
+    (settings, lines)
+}
+
+/// The blob replay's did-not-reproduce line, naming the divergence.
+fn divergence_line(
+    lines: &crate::sys::sync::Mutex<Vec<String>>,
+    position: usize,
+    stream: &str,
+) -> bool {
+    let expected = format!(
+        "the failure blob did not reproduce: the test's draws left the recorded choices at \
+         position {position}{stream}, so the test no longer draws as it did when the blob \
+         was recorded"
+    );
+    lines.lock().contains(&expected)
+}
+
 #[test]
-fn a_v1_blob_replays_with_the_continuation_budget() {
+fn a_v1_blob_draw_past_the_recorded_choices_does_not_reproduce() {
     let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
-    let result = reproduce_blob_sync(&quiet_settings(), &blob, |ds| {
+    let (settings, lines) = collecting_settings();
+    let mut calls = 0u32;
+    let result = reproduce_blob_sync(&settings, &blob, |ds| {
+        calls += 1;
         let first = match rbool(ds) {
             Ok(b) => b,
             Err(()) => return TestCaseResult::Overrun,
@@ -996,8 +1025,106 @@ fn a_v1_blob_replays_with_the_continuation_budget() {
         }
     })
     .unwrap();
-    assert_eq!(result.failures.len(), 1);
-    assert_eq!(result.failures[0].origin, "Panic: continuation reached");
+    assert!(
+        result.failures.is_empty(),
+        "a replay that draws past the blob must not be continued into a failure"
+    );
+    assert_eq!(calls, 1, "a divergence ends the blob replay");
+    assert!(divergence_line(&lines, 1, ""), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn a_v1_blob_draw_of_another_kind_does_not_reproduce() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &blob, |ds| match rint(ds, 0, 100) {
+        Ok(_) => boom("changed shape"),
+        Err(()) => TestCaseResult::Overrun,
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(divergence_line(&lines, 0, ""), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn a_v1_blob_divergence_is_silent_when_quiet() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(
+        &settings.verbosity(Verbosity::Quiet),
+        &blob,
+        |ds| match rint(ds, 0, 100) {
+            Ok(_) => boom("changed shape"),
+            Err(()) => TestCaseResult::Overrun,
+        },
+    )
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(lines.lock().is_empty(), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn a_v1_blob_divergence_in_a_cloned_stream_does_not_reproduce() {
+    let record = crate::native::core::CloneRecord::from_values(vec![ChoiceValue::Boolean(true)]);
+    let blob =
+        crate::native::blob::encode_failure(&[ChoiceValue::Clone(Arc::new(record))]).unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &blob, |ds| {
+        let Ok(child) = ds.clone_stream() else {
+            return TestCaseResult::Overrun;
+        };
+        if rbool(&*child).is_err() || rbool(&*child).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("changed shape")
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(
+        divergence_line(&lines, 1, " of stream [0]"),
+        "got {:?}",
+        *lines.lock()
+    );
+}
+
+#[test]
+fn a_v1_blob_serves_nothing_after_a_divergence() {
+    let blob = crate::native::blob::encode_failure(&[
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Boolean(false),
+    ])
+    .unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &blob, |ds| {
+        if ds.clone_stream().is_err() {
+            return TestCaseResult::Overrun;
+        }
+        match rbool(ds) {
+            Ok(_) => boom("served positionally past the divergence"),
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(divergence_line(&lines, 0, ""), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn a_v1_blob_whose_clone_is_not_recorded_does_not_reproduce() {
+    let blob = crate::native::blob::encode_failure(&[ChoiceValue::Boolean(true)]).unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &blob, |ds| {
+        let Ok(child) = ds.clone_stream() else {
+            return TestCaseResult::Overrun;
+        };
+        match rbool(&*child) {
+            Ok(_) => boom("changed shape"),
+            Err(()) => TestCaseResult::Overrun,
+        }
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(divergence_line(&lines, 0, ""), "got {:?}", *lines.lock());
 }
 
 #[test]
@@ -1174,6 +1301,55 @@ fn reproduce_blob_reports_an_exhausted_nd_blob_as_passed() {
     .unwrap();
     assert!(result.failures.is_empty());
     assert!(calls > 1, "a stale ND blob is retried before giving up");
+}
+
+#[test]
+fn an_nd_blob_draw_past_the_recorded_choices_does_not_reproduce() {
+    let (settings, lines) = collecting_settings();
+    let mut calls = 0u32;
+    let result = reproduce_blob_sync(&settings, &nd_blob(), |ds| {
+        calls += 1;
+        if rbool(ds).is_err() || rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("continuation reached")
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert_eq!(calls, 1, "a divergence ends the blob replay");
+    assert!(divergence_line(&lines, 1, ""), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn an_nd_blob_draw_of_another_kind_does_not_reproduce() {
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &nd_blob(), |ds| match rint(ds, 0, 100) {
+        Ok(_) => boom("changed shape"),
+        Err(()) => TestCaseResult::Overrun,
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(divergence_line(&lines, 0, ""), "got {:?}", *lines.lock());
+}
+
+#[test]
+fn an_nd_blob_rescued_by_identity_after_a_divergence_does_not_reproduce() {
+    let state = nd_state_of(&[vec![
+        ChoiceValue::Boolean(true),
+        ChoiceValue::Integer(BigInt::from(0)),
+        ChoiceValue::Boolean(false),
+    ]]);
+    let blob = crate::native::blob::encode_nd_failure(&state).unwrap();
+    let (settings, lines) = collecting_settings();
+    let result = reproduce_blob_sync(&settings, &blob, |ds| {
+        if rbool(ds).is_err() || rbool(ds).is_err() {
+            return TestCaseResult::Overrun;
+        }
+        boom("served from the graph past the divergence")
+    })
+    .unwrap();
+    assert!(result.failures.is_empty());
+    assert!(divergence_line(&lines, 1, ""), "got {:?}", *lines.lock());
 }
 
 #[test]

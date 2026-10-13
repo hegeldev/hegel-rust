@@ -41,6 +41,9 @@ pub enum Rescue {
     /// first, continue positionally where their values fit, and where none
     /// fits the run draws randomly under its continuation budget.
     Continue,
+    /// The blob replay mode: no rescue. A divergence ends the run, so a
+    /// stored counterexample reproduces only by replaying exactly.
+    Stop,
 }
 
 /// Where a replay left its counterexample: the stream (its clone id; empty
@@ -318,22 +321,40 @@ impl Replay {
     }
 
     /// A [`Rescue::Continue`] replay of a pool of timelines, in its order.
-    #[cfg(any(test, feature = "__bench"))]
     pub(crate) fn counterexample(timelines: Vec<Vec<ChoiceValue>>) -> Self {
         let count = timelines.len();
-        Self::live_set(timelines, Arc::new(Mutex::new(LiveSet::new(count))))
+        Self::live_set(
+            timelines,
+            Arc::new(Mutex::new(LiveSet::new(count))),
+            Rescue::Continue,
+        )
     }
 
-    fn live_set(timelines: Vec<Vec<ChoiceValue>>, shared: Arc<Mutex<LiveSet>>) -> Self {
+    fn live_set(
+        timelines: Vec<Vec<ChoiceValue>>,
+        shared: Arc<Mutex<LiveSet>>,
+        rescue: Rescue,
+    ) -> Self {
         let count = timelines.len();
         Replay {
             timelines: timelines.into_iter().map(Some).collect(),
             nodes: (0..count).map(|_| None).collect(),
-            rescue: Rescue::Continue,
+            rescue,
             shared,
             external: None,
             graph: None,
         }
+    }
+
+    /// This replay under [`Rescue::Stop`].
+    pub(crate) fn stopping(mut self) -> Self {
+        self.rescue = Rescue::Stop;
+        self
+    }
+
+    /// Whether a divergence ends the run: [`Rescue::Stop`].
+    pub(crate) fn stops(&self) -> bool {
+        self.rescue == Rescue::Stop
     }
 
     /// The walk of a counterexample stored as a graph: see
@@ -400,7 +421,7 @@ impl Replay {
                 },
                 None => Resolved::Exhausted,
             },
-            Rescue::Continue => self.resolve_live(stream, position, fits),
+            Rescue::Continue | Rescue::Stop => self.resolve_live(stream, position, fits),
         }
     }
 
@@ -494,7 +515,13 @@ impl Replay {
         frames: impl FnOnce() -> Vec<Frame>,
     ) -> Self {
         if let Some(walk) = &self.graph {
-            return Self::clone_from_graph(&mut walk.lock(), stream, position, frames());
+            return Self::clone_from_graph(
+                &mut walk.lock(),
+                stream,
+                position,
+                frames(),
+                self.rescue,
+            );
         }
         if let Some(external) = &self.external {
             return Self::external_view(Arc::clone(external), Arc::clone(&self.shared));
@@ -528,7 +555,7 @@ impl Replay {
                     timelines[0] = Some(Vec::new());
                 }
             }
-            Rescue::Continue => {
+            Rescue::Continue | Rescue::Stop => {
                 set.prune(batch);
                 if !set.any_live() {
                     set.diverge(stream, position);
@@ -553,6 +580,7 @@ impl Replay {
         stream: &[usize],
         position: usize,
         addr: Vec<Frame>,
+        rescue: Rescue,
     ) -> Self {
         let ident = walk.ident_at(addr.clone());
         let graph = Arc::clone(&walk.graph);
@@ -585,7 +613,7 @@ impl Replay {
                 Pending::Nodes(Vec::new())
             }
         };
-        Self::live_set(records, shared)
+        Self::live_set(records, shared, rescue)
     }
 
     /// The family's first divergence, if any.
