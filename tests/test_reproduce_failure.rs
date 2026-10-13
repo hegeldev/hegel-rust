@@ -67,6 +67,18 @@ fn repro_replay_stacked_fixture(tc: TestCase) {
     assert!(x < 5, "x was {x}");
 }
 
+/// Stage 2 fixture with a changed draw shape: a boolean drawn before the
+/// recorded integer, then an unconditional failure that a replay continued
+/// with fresh draws would report as the blob's.
+#[hegel::test]
+#[hegel::reproduce_failure(std::env::var("HEGEL_TEST_REPRO_BLOB").unwrap())]
+#[ignore = "fixture: run via exec::self_test"]
+fn repro_replay_changed_shape_fixture(tc: TestCase) {
+    let _: bool = tc.draw(gs::booleans());
+    let x: i32 = tc.draw(gs::integers());
+    panic!("changed shape reached with x = {x}");
+}
+
 static ND_FIXTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Stage 1 nondeterministic fixture: every execution draws the same single
@@ -149,4 +161,18 @@ fn test_reproduce_failure_replays_real_counterexample() {
         .env("HEGEL_TEST_REPRO_BLOB", &blob)
         .expect_failure("x was")
         .run();
+
+    let out = self_test("repro_replay_changed_shape_fixture")
+        .env("HEGEL_TEST_REPRO_BLOB", &blob)
+        .expect_failure("did not reproduce")
+        .run();
+    let combined = format!("{}\n{}", out.stdout, out.stderr);
+    assert!(
+        !combined.contains("changed shape reached"),
+        "a replay that left the blob must not be continued into a failure:\n{combined}"
+    );
+    assert!(
+        combined.contains("left the recorded choices at position 0"),
+        "expected the engine to name the divergence:\n{combined}"
+    );
 }

@@ -418,11 +418,10 @@ pub(crate) fn reuse_replay_budget() -> u64 {
 /// Chosen, not derived: a small tail behind the budgeted replays.
 pub(crate) const FINAL_REPLAY_FRESH: u64 = 4;
 
-/// Replay attempts for a v1 exact-choice blob, each with the standard
-/// continuation budget (the reuse path's semantics). One exact
-/// no-continuation replay reproduced never-flipped runs' blobs at 13%
-/// against v2's 100% at p = 0.9; four continuation attempts bound
-/// the worst-case joint escape-then-miss at 1.2e-3.
+/// Replay attempts for a v1 exact-choice blob, each an exact replay: a
+/// blob reproduces only a failure reached without leaving its recorded
+/// choices, so the attempts cover a nondeterministic verdict on the
+/// recorded choices, not a changed draw shape.
 pub(crate) const V1_BLOB_REPLAYS: u64 = 4;
 
 #[cfg(test)]

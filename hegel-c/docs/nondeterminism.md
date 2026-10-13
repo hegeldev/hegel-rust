@@ -281,13 +281,20 @@ strikes across two runs (primary miss demotes to the secondary corpus,
 secondary miss deletes), with the secondary corpus capped at 50 per key.
 
 Replaying stored state (`nd_reproduce`) is one primitive for database
-reuse, blob replay, and the final replay: the graph up to
-`reuse_replay_budget()` (29) times, stopping at the first failure, then
-where the caller allows it a few fresh generations. A version-1
-(deterministic) blob replays with the continuation budget and
-`V1_BLOB_REPLAYS` (4) attempts, so a blob recorded before a test went
-nondeterministic still reproduces. `hegel_run_start_blob` runs a blob as
-a run; `hegel_test_case_from_blob` remains a documented single attempt.
+reuse and the final replay: the graph up to `reuse_replay_budget()` (29)
+times, stopping at the first failure, then where the caller allows it a
+few fresh generations. A blob replay (`hegel_run_start_blob`,
+`reproduce_blob`) is exact: every replay runs under `Rescue::Stop`
+(`core/replay.rs`), where a divergence — a draw the stored counterexample
+does not serve, or one served after a divergence elsewhere in the family
+— concludes the run as `EarlyStop` instead of drawing on, and ends the
+blob run as not reproduced with one output line naming the divergence.
+A graph blob gets the reuse budget of exact walks and a version-1
+(deterministic) blob `V1_BLOB_REPLAYS` (4) exact replays, both stopping
+at the first failure, so the attempts cover a nondeterministic verdict
+on the recorded choices, never a changed draw shape: a failure reached
+by continuing past the recording would not be the blob's.
+`hegel_test_case_from_blob` remains a documented single attempt.
 
 ## Reporting
 

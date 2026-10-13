@@ -2204,15 +2204,17 @@ pub unsafe extern "C" fn hegel_run_start(
 }
 
 /// Like `hegel_run_start`, but the run replays a reproduce blob instead of
-/// exploring. Both blob kinds replay until a replay fails, under a bounded
-/// budget: a deterministic blob replays its choices up to 4 times, each
-/// attempt allowed a bounded number of fresh draws past a divergence; a
-/// nondeterministic blob replays its stored timelines with the same
-/// replay-until-failure sequence database reuse uses. The caller
-/// drives the run exactly like `hegel_run_start`: a reproducing replay is
-/// the run's failure (with its caveat for a nondeterministic blob, and no
-/// reproduce blob — the caller already holds it), and a run with no
-/// failures means the blob is stale.
+/// exploring. Both blob kinds replay exactly until a replay fails, under a
+/// bounded budget: a deterministic blob replays its choices up to 4 times,
+/// a nondeterministic blob replays its stored timelines up to the budget
+/// database reuse uses. A replay that leaves the recorded choices — a draw
+/// whose kind or bounds do not fit the recorded choice, or a draw past the
+/// end of the recording — ends the run as not reproduced, with an output
+/// line naming the divergence, rather than continuing with fresh draws.
+/// The caller drives the run exactly like `hegel_run_start`: a reproducing
+/// replay is the run's failure (with its caveat for a nondeterministic
+/// blob, and no reproduce blob — the caller already holds it), and a run
+/// with no failures means the blob did not reproduce.
 ///
 /// Parameters: as `hegel_run_start`, plus
 /// `blob`: A base64 blob from `hegel_failure_reproduction_blob`.

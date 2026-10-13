@@ -703,14 +703,16 @@ fn describe_targets(target_scores: &[(String, f64)]) -> Vec<String> {
 /// bypassing generation and shrinking.
 ///
 /// The engine owns the replay: a deterministic blob replays its choices up
-/// to four times — each attempt may draw fresh values past the recorded
-/// choices — stopping at the first failure; a nondeterministic blob replays
-/// its stored timelines until one fails, like database reuse. Decoding
-/// failures (corrupt or incompatible blobs) panic with the engine's
-/// diagnostic. A blob that decodes but does not reproduce panics naming
-/// both hypotheses: the failure is fixed, or a nondeterministic one did not
-/// recur within the replay budget. A reproduced failure re-raises the
-/// test's own panic; a replayed example has no fresh blob to print.
+/// to four times, stopping at the first failure; a nondeterministic blob
+/// replays its stored timelines until one fails, under the database reuse
+/// budget. Every replay is exact: a replay that leaves the recorded choices
+/// ends there, as not reproduced, with the engine's line naming the
+/// divergence. Decoding failures (corrupt or incompatible blobs) panic with
+/// the engine's diagnostic. A blob that decodes but does not reproduce
+/// panics naming both hypotheses: the failure is fixed, or a
+/// nondeterministic one did not recur within the replay budget. A
+/// reproduced failure re-raises the test's own panic; a replayed example
+/// has no fresh blob to print.
 pub(crate) fn drive_blob_replay<F>(
     test_fn: F,
     settings: &Settings,

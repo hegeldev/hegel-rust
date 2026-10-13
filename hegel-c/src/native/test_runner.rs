@@ -224,15 +224,18 @@ pub(crate) async fn explore(
 /// Replay a reproduce blob (used by `hegel_run_start_blob`) and return the
 /// reproducing failure, if any.
 ///
-/// A deterministic blob replays its choices up to [`nd::V1_BLOB_REPLAYS`]
-/// times, each attempt with the standard continuation budget, stopping at
-/// the first failure. A nondeterministic blob walks its stored graph
-/// through the same replay-until-failure sequence as database reuse, with
-/// no fresh-generation tier: a fresh case could fail for a reason unrelated
-/// to the blob. Every replay is stamped so the client captures the
-/// reproducing execution's output and diagnostic.
+/// Every replay is exact: a draw the stored counterexample does not serve
+/// — one whose kind or bounds do not fit the recorded choice, or one past
+/// the recorded choices — is a divergence that ends the replay as not
+/// reproduced, reported once, rather than a run continued with fresh draws
+/// whose failure would not be the blob's. A deterministic blob replays its
+/// choices up to [`nd::V1_BLOB_REPLAYS`] times and a nondeterministic blob
+/// walks its stored graph up to the reuse budget, stopping at the first
+/// failure, with no fresh-generation tier: a fresh case could fail for a
+/// reason unrelated to the blob. Every replay is stamped so the client
+/// captures the reproducing execution's output and diagnostic.
 ///
-/// A run with no failures means the blob is stale.
+/// A run with no failures means the blob did not reproduce.
 pub(crate) async fn reproduce_blob(
     settings: &Settings,
     blob: crate::native::blob::DecodedBlob,
@@ -240,18 +243,19 @@ pub(crate) async fn reproduce_blob(
 ) -> Result<TestRunResult, RunError> {
     match blob {
         crate::native::blob::DecodedBlob::Choices(choices) => {
-            let mut rng = create_rng(settings, None);
-            let budget =
-                nd::continuation_budget(crate::native::core::flattened_values_len(&choices));
             let mut failures = Vec::new();
             for _ in 0..nd::V1_BLOB_REPLAYS {
-                let mut ntc = NativeTestCase::for_probe(&choices, rng.spawn(), budget)?;
+                let mut ntc = NativeTestCase::for_exact(&choices);
                 ntc.set_should_capture();
                 let (data_source, handle) = NativeDataSource::new(ntc);
                 exchange.offer(Box::new(data_source)).await;
-                if let TestCaseResult::Interesting(failure) =
-                    NativeDataSource::take_outcome(&handle)?
-                {
+                let divergence = NativeDataSource::take_divergence(&handle);
+                let outcome = NativeDataSource::take_outcome(&handle)?;
+                if let Some(divergence) = divergence {
+                    report_blob_divergence(settings, &divergence);
+                    break;
+                }
+                if let TestCaseResult::Interesting(failure) = outcome {
                     failures.push(failure);
                     break;
                 }
@@ -269,13 +273,24 @@ pub(crate) async fn reproduce_blob(
             engine.capture_replays = true;
             let graph = Arc::new(state.graph);
             let longest = (state.longest as usize).min(engine.choice_bound());
-            let source = ReproSource::Graph {
-                graph: Arc::clone(&graph),
-                longest,
-            };
-            let (run, evidence) = engine
-                .nd_reproduce(None, &source, nd::reuse_replay_budget(), 0)
-                .await?;
+            let mut evidence = nd::Evidence::default();
+            let mut run = None;
+            for _ in 0..nd::reuse_replay_budget() {
+                let ntc = NativeTestCase::for_exact_graph(
+                    Arc::clone(&graph),
+                    nd::continuation_budget(longest),
+                );
+                let replay = engine.nd_measure(ntc, None).await?;
+                if let Some(divergence) = &replay.run.divergence {
+                    report_blob_divergence(settings, divergence);
+                    break;
+                }
+                evidence.record(replay.failed);
+                if replay.failed {
+                    run = Some(replay.run);
+                    break;
+                }
+            }
             let failures = match run.and_then(|run| run.origin) {
                 Some(origin) => {
                     engine
@@ -297,6 +312,25 @@ pub(crate) async fn reproduce_blob(
             })
         }
     }
+}
+
+/// Report a blob replay that left its recorded choices, so the blob did
+/// not reproduce: the test no longer draws as it did when the blob was
+/// recorded.
+fn report_blob_divergence(settings: &Settings, divergence: &Divergence) {
+    if settings.verbosity == Verbosity::Quiet {
+        return;
+    }
+    let stream = if divergence.stream.is_empty() {
+        String::new()
+    } else {
+        format!(" of stream {:?}", divergence.stream)
+    };
+    settings.output.line(&format!(
+        "the failure blob did not reproduce: the test's draws left the recorded choices at \
+         position {}{stream}, so the test no longer draws as it did when the blob was recorded",
+        divergence.position
+    ));
 }
 
 /// The full multi-test-case engine: database replay, generation, and
