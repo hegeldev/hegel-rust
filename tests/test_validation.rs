@@ -191,6 +191,32 @@ fn test_hashsets_min_greater_than_max() {
 }
 
 #[test]
+fn test_hashsets_min_size_above_sample_length() {
+    expect_draw_panic(
+        gs::hashsets(gs::sampled_from(vec![1, 2, 3])).min_size(4),
+        "Cannot generate 4 unique elements from a list of length 3",
+    );
+}
+
+#[test]
+fn test_hashsets_min_size_above_distinct_sample_values() {
+    expect_draw_panic(
+        gs::hashsets(gs::sampled_from(vec![1, 1, 1])).min_size(2),
+        "Cannot generate 2 unique elements from a list with fewer than 2 distinct values",
+    );
+}
+
+#[test]
+fn test_vecs_unique_min_size_above_distinct_sample_values() {
+    expect_draw_panic(
+        gs::vecs(gs::sampled_from(vec![1, 1, 1]))
+            .min_size(2)
+            .unique(true),
+        "Cannot generate 2 unique elements from a list with fewer than 2 distinct values",
+    );
+}
+
+#[test]
 fn test_hashmaps_min_greater_than_max() {
     expect_draw_panic(
         gs::hashmaps(gs::text(), gs::booleans())

@@ -157,6 +157,26 @@ fn generate_uuid_default_can_produce_non_rfc_versions() {
 }
 
 #[test]
+fn generate_uuid_never_repeats() {
+    for version in [None, Some(4)] {
+        let mut uuids = std::collections::HashSet::new();
+        let mut drawn = 0;
+        for seed in 0..50 {
+            let mut ntc = fresh_ntc(seed);
+            for _ in 0..20 {
+                uuids.insert(generate_uuid(&mut ntc, version).unwrap());
+                drawn += 1;
+            }
+        }
+        assert_eq!(
+            uuids.len(),
+            drawn,
+            "duplicate UUIDs drawn with version {version:?}"
+        );
+    }
+}
+
+#[test]
 fn generate_uuid_never_produces_nil() {
     let mut ntc = NativeTestCase::for_simplest(1000).unwrap();
     let bytes = generate_uuid(&mut ntc, None).unwrap();

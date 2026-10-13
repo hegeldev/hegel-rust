@@ -152,6 +152,56 @@ fn structural_combinators_print_compositionally() {
 }
 
 #[test]
+fn distinct_sampled_elements_print_as_drawn() {
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_sets(gs::sampled_from(vec![3, 1, 2])).min_size(3));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {3, 1, 2};"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(
+            gs::vecs(gs::sampled_from(vec!["a", "b"]))
+                .min_size(2)
+                .unique(true),
+        );
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = [\"a\", \"b\"];"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::hashmaps(gs::sampled_from(vec![1, 2]), gs::booleans()).min_size(2));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {1: false, 2: false};"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::btree_maps(gs::sampled_from(vec![1, 2]), gs::booleans()).min_size(2));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {1: false, 2: false};"]);
+
+    let sampled = gs::sampled_from(vec![1, 2]);
+    let lines = failing_lines(move |tc| {
+        let _ = tc.draw(gs::hashsets(&sampled).min_size(2));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {1, 2};"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2]).boxed()).min_size(2));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {1, 2};"]);
+
+    let lines = failing_lines(|tc| {
+        let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2]).boxed_printable()).min_size(2));
+        panic!("boom");
+    });
+    assert_eq!(lines, vec!["let draw_1 = {1, 2};"]);
+}
+
+#[test]
 fn sets_and_maps_print_in_draw_order() {
     let lines = failing_lines(|tc| {
         let _ = tc.draw(gs::hashsets(gs::sampled_from(vec![1, 2, 3])).min_size(1));
