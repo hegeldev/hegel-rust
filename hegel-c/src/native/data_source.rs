@@ -11,7 +11,8 @@ use crate::backend::{DataSource, DataSourceError, Failure, RunError, TestCaseRes
 use crate::native::bignum::BigInt;
 use crate::native::core::{
     ChoiceNode, Divergence, EngineError, InterestingOrigin, ManyState, NativeStateMachine,
-    NativeTestCase, NativeTestCaseHandle, NativeVariables, RecursionState, Span, Status,
+    NativeTestCase, NativeTestCaseHandle, NativeVariables, NativeVariablesHandle, RecursionState,
+    Span, Status,
 };
 use crate::native::draws;
 
@@ -401,7 +402,7 @@ impl DataSource for NativeDataSource {
         machine: &mut NativeStateMachine,
         worker_index: i64,
     ) -> Result<(), DataSourceError> {
-        self.with_ntc(|_ntc| machine.rule_rejected(worker_index))
+        self.with_ntc(|ntc| machine.rule_rejected(ntc, worker_index))
     }
 
     fn state_machine_should_check_invariant(
@@ -416,31 +417,38 @@ impl DataSource for NativeDataSource {
         self.with_ntc(|ntc| draws::generate_boolean(ntc, p, forced))
     }
 
-    fn new_pool(&self) -> Result<NativeVariables, DataSourceError> {
-        self.with_ntc(|_| Ok(NativeVariables::new()))
+    fn new_pool(&self) -> Result<NativeVariablesHandle, DataSourceError> {
+        self.with_ntc(|_| {
+            Ok(Arc::new(crate::sys::sync::Mutex::new(
+                NativeVariables::new(),
+            )))
+        })
     }
 
-    fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError> {
+    fn pool_add(&self, pool: &NativeVariablesHandle) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
             let variable_id = draws::fresh_id(ntc)?;
-            pool.add(variable_id);
+            pool.lock().add(variable_id);
             Ok(variable_id)
         })
     }
 
     fn pool_generate(
         &self,
-        pool: &mut NativeVariables,
+        pool: &NativeVariablesHandle,
         consume: bool,
     ) -> Result<i64, DataSourceError> {
         self.with_ntc(|ntc| {
-            let active = pool.active();
+            let mut variables = pool.lock();
+            let active = variables.active();
             if active.is_empty() {
                 return Err(EngineError::AssumeViolation);
             }
+            let position = ntc.position();
             let variable_id = draws::choose_from(ntc, &active)?;
             if consume {
-                pool.consume(variable_id);
+                variables.consume(variable_id);
+                ntc.record_pool_consume(pool, position, variable_id);
             }
             Ok(variable_id)
         })

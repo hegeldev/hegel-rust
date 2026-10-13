@@ -23,7 +23,7 @@ use hegel_c::{
     hegel_failure_reproduction_blob, hegel_generate_boolean, hegel_generate_integer,
     hegel_label_combine, hegel_label_from_name, hegel_mark_complete, hegel_new_collection,
     hegel_new_pool, hegel_new_recursion, hegel_new_state_machine, hegel_next_test_case,
-    hegel_pool_add, hegel_pool_free, hegel_pool_generate, hegel_recursion_branch,
+    hegel_pool_add, hegel_pool_free, hegel_pool_generate, hegel_pool_len, hegel_recursion_branch,
     hegel_recursion_finish, hegel_recursion_free, hegel_recursion_leaf, hegel_recursion_retry,
     hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
     hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
@@ -1038,6 +1038,12 @@ fn live_test_case_argument_validation() {
             hegel_pool_generate(ctx, tc, ptr::null_mut(), false, &mut var_id),
             HEGEL_E_INVALID_HANDLE
         );
+        let mut len = 0usize;
+        assert_eq!(
+            hegel_pool_len(ctx, ptr::null_mut(), &mut len),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("pool handle is null"));
 
         assert_eq!(
             hegel_new_collection(ctx, tc, 0, 3, &mut collection),
@@ -2996,6 +3002,65 @@ impl<T> Clone for SendPtr<T> {
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
 
+/// A consuming draw only removes its variable from the pool for as long as
+/// the draw is kept: discarding the span it was drawn in puts it back.
+#[test]
+fn discarding_a_span_puts_back_the_variables_it_consumed() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_test_cases(ctx, s, 1));
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 11, true));
+        let run = start(ctx, s);
+        let tc = next_case(ctx, run);
+        assert!(!tc.is_null());
+
+        let mut pool: *mut HegelPool = ptr::null_mut();
+        ok(hegel_new_pool(ctx, tc, &mut pool));
+        let mut len = 0usize;
+        assert_eq!(
+            hegel_pool_len(ctx, pool, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        ok(hegel_pool_len(ctx, pool, &mut len));
+        assert_eq!(len, 0);
+        for _ in 0..3 {
+            let mut var_id = 0i64;
+            ok(hegel_pool_add(ctx, tc, pool, &mut var_id));
+        }
+        ok(hegel_pool_len(ctx, pool, &mut len));
+        assert_eq!(len, 3);
+
+        let mut drawn = 0i64;
+        ok(hegel_start_span(ctx, tc, 1));
+        ok(hegel_pool_generate(ctx, tc, pool, true, &mut drawn));
+        ok(hegel_pool_len(ctx, pool, &mut len));
+        assert_eq!(len, 2);
+        ok(hegel_stop_span(ctx, tc, true));
+        ok(hegel_pool_len(ctx, pool, &mut len));
+        assert_eq!(len, 3, "the discarded draw's variable is back in the pool");
+
+        ok(hegel_start_span(ctx, tc, 1));
+        ok(hegel_pool_generate(ctx, tc, pool, true, &mut drawn));
+        ok(hegel_stop_span(ctx, tc, false));
+        ok(hegel_pool_len(ctx, pool, &mut len));
+        assert_eq!(len, 2, "a kept draw's variable stays consumed");
+
+        ok(hegel_mark_complete(
+            ctx,
+            tc,
+            hegel_status_t::HEGEL_STATUS_VALID as u32,
+            ptr::null(),
+        ));
+        ok(hegel_test_case_free(ctx, tc));
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_pool_free(ctx, pool));
+        ok(hegel_context_free(ctx));
+    }
+}
+
 /// One pool shared between two clone handles driven from parallel threads:
 /// the pool's internal lock serializes concurrent `hegel_pool_add` /
 /// `hegel_pool_generate` calls, every drawn id is one that was added, and
@@ -3055,6 +3120,9 @@ fn pool_is_shared_across_two_clone_threads() {
         assert_eq!(n, 8, "each consuming draw returns one variable");
         assert_eq!(consumed.len(), 8, "no consumed variable is drawn twice");
         assert!(consumed.iter().all(|id| (0..16).contains(id)));
+        let mut len = 0usize;
+        ok(hegel_pool_len(ctx, pool.0, &mut len));
+        assert_eq!(len, 8);
 
         ok(hegel_test_case_free(ctx, clone_a));
         ok(hegel_test_case_free(ctx, clone_b));

@@ -71,14 +71,14 @@ fn collection_more_and_reject_round_trip() {
 #[test]
 fn new_pool_pool_add_and_pool_generate_non_consuming() {
     let (ds, _handle) = random_source();
-    let mut pool = ds.new_pool().unwrap();
-    let v1 = ds.pool_add(&mut pool).unwrap();
-    let v2 = ds.pool_add(&mut pool).unwrap();
+    let pool = ds.new_pool().unwrap();
+    let v1 = ds.pool_add(&pool).unwrap();
+    let v2 = ds.pool_add(&pool).unwrap();
     assert_eq!(v1, 0);
     assert_eq!(v2, 1);
-    let drawn = ds.pool_generate(&mut pool, false).unwrap();
+    let drawn = ds.pool_generate(&pool, false).unwrap();
     assert!(drawn == v1 || drawn == v2);
-    assert_eq!(ds.pool_generate(&mut pool, true).ok().map(|_| ()), Some(()));
+    assert_eq!(ds.pool_generate(&pool, true).ok().map(|_| ()), Some(()));
 }
 
 /// The fresh-id window is anchored on ids ever drawn in the family, not on
@@ -94,18 +94,18 @@ fn pool_add_ids_survive_deletion_before_a_consuming_draw() {
         ChoiceValue::Integer(BigInt::from(2)),
     ];
     let (ds, _handle) = NativeDataSource::new(NativeTestCase::for_choices(&choices, None, None));
-    let mut pool = ds.new_pool().unwrap();
-    assert_eq!(ds.pool_add(&mut pool).unwrap(), 0);
-    assert_eq!(ds.pool_generate(&mut pool, true).unwrap(), 0);
-    assert_eq!(ds.pool_add(&mut pool).unwrap(), 2);
+    let pool = ds.new_pool().unwrap();
+    assert_eq!(ds.pool_add(&pool).unwrap(), 0);
+    assert_eq!(ds.pool_generate(&pool, true).unwrap(), 0);
+    assert_eq!(ds.pool_add(&pool).unwrap(), 2);
 }
 
 #[test]
 fn pool_generate_on_empty_pool_returns_assume() {
     let (ds, _handle) = random_source();
-    let mut pool = ds.new_pool().unwrap();
+    let pool = ds.new_pool().unwrap();
     assert!(matches!(
-        ds.pool_generate(&mut pool, false),
+        ds.pool_generate(&pool, false),
         Err(DataSourceError::Assume)
     ));
 }
@@ -439,9 +439,9 @@ fn generate_stoptest_sets_aborted_and_short_circuits() {
     assert!(ds.collection_reject(&mut state, None).is_err());
     assert!(ds.generate_boolean(0.5, None).is_err());
     assert!(ds.new_pool().is_err());
-    let mut pool = NativeVariables::new();
-    assert!(ds.pool_add(&mut pool).is_err());
-    assert!(ds.pool_generate(&mut pool, false).is_err());
+    let pool = Arc::new(crate::sys::sync::Mutex::new(NativeVariables::new()));
+    assert!(ds.pool_add(&pool).is_err());
+    assert!(ds.pool_generate(&pool, false).is_err());
 }
 
 #[test]
@@ -543,13 +543,13 @@ fn clone_stream_draws_independently_and_reassembles() {
 #[test]
 fn pools_are_shared_across_cloned_streams() {
     let (ds, _handle) = random_source();
-    let mut pool = ds.new_pool().unwrap();
-    let v1 = ds.pool_add(&mut pool).unwrap();
+    let pool = ds.new_pool().unwrap();
+    let v1 = ds.pool_add(&pool).unwrap();
     let child = ds.clone_stream().unwrap();
-    let got = child.pool_generate(&mut pool, true).unwrap();
+    let got = child.pool_generate(&pool, true).unwrap();
     assert_eq!(got, v1);
     assert!(matches!(
-        ds.pool_generate(&mut pool, false),
+        ds.pool_generate(&pool, false),
         Err(DataSourceError::Assume)
     ));
 }

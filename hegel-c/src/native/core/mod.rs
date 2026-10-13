@@ -15,7 +15,7 @@ pub use replay::ExternalReplay;
 pub(crate) use state::float_restrict_and_redraw;
 pub use state::{
     FloatWidth, GenerationParameters, ManyState, NativeTestCase, NativeTestCaseHandle,
-    NativeVariables, RecursionState, Span, Spans,
+    NativeVariables, NativeVariablesHandle, RecursionState, Span, Spans,
 };
 pub use state_machine::NativeStateMachine;
 

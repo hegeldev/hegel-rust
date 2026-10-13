@@ -1781,6 +1781,47 @@ fn native_variables_add_active_and_consume_round_trip() {
     assert_eq!(vars.active(), vec![0]);
     vars.consume(0);
     assert_eq!(vars.active(), Vec::<i64>::new());
+    assert_eq!(vars.len(), 0);
+    vars.restore(1);
+    assert_eq!(vars.active(), vec![1]);
+    assert_eq!(vars.len(), 1);
+}
+
+fn consume_with_a_draw(tc: &mut NativeTestCase, pool: &NativeVariablesHandle, id: i64) {
+    let position = tc.position();
+    tc.weighted(0.5, None).unwrap();
+    pool.lock().consume(id);
+    tc.record_pool_consume(pool, position, id);
+}
+
+#[test]
+fn discarding_a_span_puts_back_what_it_consumed() {
+    let mut tc = NativeTestCase::new_random(EngineRng::seeded(0)).unwrap();
+    let pool = Arc::new(Mutex::new(NativeVariables::new()));
+    for id in 0..4 {
+        pool.lock().add(id);
+    }
+    consume_with_a_draw(&mut tc, &pool, 0);
+    tc.start_span(1);
+    consume_with_a_draw(&mut tc, &pool, 1);
+    tc.start_span(2);
+    consume_with_a_draw(&mut tc, &pool, 2);
+    tc.stop_span(false);
+    consume_with_a_draw(&mut tc, &pool, 3);
+    assert_eq!(pool.lock().active(), Vec::<i64>::new());
+    tc.stop_span(true);
+    assert_eq!(pool.lock().active(), vec![1, 2, 3]);
+
+    tc.start_span(1);
+    consume_with_a_draw(&mut tc, &pool, 1);
+    tc.stop_span(false);
+    assert_eq!(pool.lock().active(), vec![2, 3]);
+
+    tc.start_span(1);
+    tc.stop_span(true);
+    assert_eq!(pool.lock().active(), vec![2, 3]);
+    tc.undo_pool_consumes_from(0);
+    assert_eq!(pool.lock().active(), vec![0, 1, 2, 3]);
 }
 
 #[test]

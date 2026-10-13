@@ -1280,6 +1280,19 @@ pub(crate) struct PoolHandle {
 unsafe impl Send for PoolHandle {}
 unsafe impl Sync for PoolHandle {}
 
+impl PoolHandle {
+    /// The number of variables currently in the pool. `hegel_pool_len` only
+    /// fails on a null handle or out pointer, neither of which the frontend
+    /// passes.
+    pub(crate) fn len(&self) -> usize {
+        let mut len: usize = 0;
+        require_ok(with_context(|ctx| unsafe {
+            hegel_c::hegel_pool_len(ctx, self.raw, &mut len)
+        }));
+        len
+    }
+}
+
 impl Drop for PoolHandle {
     fn drop(&mut self) {
         // SAFETY: `raw` came from a successful hegel_new_pool call and is

@@ -163,6 +163,10 @@ struct WorkerState {
     /// exactly one random stop decision per rule slot. Cleared on the
     /// next hand-out and at every join point.
     retry_pending: bool,
+    /// The worker's stream position when its outstanding rule was handed
+    /// out: pool consumes drawn from there on are undone if the rule is
+    /// rejected.
+    handout_position: usize,
 }
 
 /// Engine-side driver for a single stateful (rule-based) test case,
@@ -281,6 +285,7 @@ impl NativeStateMachine {
                     steps_rejected: 0,
                     rule_outstanding: false,
                     retry_pending: false,
+                    handout_position: 0,
                 })
             })
             .collect::<Result<Vec<WorkerState>, EngineError>>()?;
@@ -416,6 +421,7 @@ impl NativeStateMachine {
         self.workers[worker_idx].steps_drawn += 1;
         self.workers[worker_idx].rule_outstanding = true;
         self.workers[worker_idx].retry_pending = false;
+        self.workers[worker_idx].handout_position = ntc.position();
         Ok(Some(index))
     }
 
@@ -424,12 +430,20 @@ impl NativeStateMachine {
     /// count toward the test case's budget: at concurrency 1 the round does
     /// not count toward the step count, and at concurrency > 1 the
     /// rule does not advance the worker's per-round continue/stop decision.
+    /// Every variable the rule consumed from a pool through `ntc` — the
+    /// worker's own stream, the one its rule was handed out on — is put
+    /// back, so a rule that does not run to completion leaves its pools as
+    /// it found them.
     ///
     /// Errors with `InvalidArgument` when the worker has no outstanding
     /// rule: no rule has been handed to it this round, its current rule was
     /// already rejected, or it has already pulled another rule (implicitly
     /// completing the previous one).
-    pub fn rule_rejected(&mut self, worker_index: i64) -> Result<(), EngineError> {
+    pub fn rule_rejected(
+        &mut self,
+        ntc: &mut NativeTestCase,
+        worker_index: i64,
+    ) -> Result<(), EngineError> {
         let worker_idx = self.checked_worker(worker_index)?;
         let worker = &mut self.workers[worker_idx];
         if !worker.rule_outstanding {
@@ -440,6 +454,7 @@ impl NativeStateMachine {
         worker.rule_outstanding = false;
         worker.steps_rejected += 1;
         worker.retry_pending = true;
+        ntc.undo_pool_consumes_from(worker.handout_position);
         if self.concurrency == 1 {
             self.rounds_rejected += 1;
         }

@@ -3459,7 +3459,7 @@ pub unsafe extern "C" fn hegel_recursion_free(
 /// after the test case or run is freed, in any order relative to other
 /// frees.
 pub struct HegelPool {
-    variables: Mutex<crate::native::core::NativeVariables>,
+    variables: crate::native::core::NativeVariablesHandle,
 }
 
 /// Resolve a pool handle, recording a diagnostic and returning
@@ -3508,9 +3508,7 @@ pub unsafe extern "C" fn hegel_new_pool(
     match tc.stream.new_pool() {
         Ok(variables) => {
             unsafe {
-                *out_pool = into_raw_send_sync(HegelPool {
-                    variables: Mutex::new(variables),
-                });
+                *out_pool = into_raw_send_sync(HegelPool { variables });
             }
             HEGEL_OK
         }
@@ -3547,8 +3545,7 @@ pub unsafe extern "C" fn hegel_pool_add(
         set_last_error(ctx, "hegel_pool_add: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let mut variables = pool.variables.lock();
-    match tc.stream.pool_add(&mut variables) {
+    match tc.stream.pool_add(&pool.variables) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
@@ -3564,8 +3561,14 @@ pub unsafe extern "C" fn hegel_pool_add(
 /// additions never changes which variable a recorded choice refers to.
 ///
 /// Parameters:
-/// `consume`: When `true` the drawn variable is removed from the pool.
-///   When `false` it is not removed.
+/// `consume`: When `true` the drawn variable is removed from the pool for
+///   as long as the draw is kept: closing the span it was drawn in with
+///   `hegel_stop_span(discard=true)` (a filter retry, say), or reporting
+///   the rule step it was drawn in with `hegel_state_machine_rule_rejected`,
+///   puts it back, so a variable only leaves the pool when the draw that
+///   took it is kept. Keep the caller's value for the id until the pool is
+///   freed, since the id may be drawn again after such a rollback. When
+///   `false` the variable is not removed.
 /// `out_variable_id`: Receives the variable id libhegel chose.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` if the pool
@@ -3591,14 +3594,40 @@ pub unsafe extern "C" fn hegel_pool_generate(
         set_last_error(ctx, "hegel_pool_generate: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    let mut variables = pool.variables.lock();
-    match tc.stream.pool_generate(&mut variables, consume) {
+    match tc.stream.pool_generate(&pool.variables, consume) {
         Ok(id) => {
             unsafe { *out_variable_id = id };
             HEGEL_OK
         }
         Err(e) => translate_ds_error(ctx, e),
     }
+}
+
+/// The number of variables currently in the pool: those added by
+/// `hegel_pool_add` and not consumed by a kept `hegel_pool_generate` draw.
+/// Needs no test case, so it may be called at any point in the pool's life.
+///
+/// Parameters:
+/// `out_len`: Receives the count.
+///
+/// Returns `HEGEL_OK`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_pool_len(
+    ctx: *mut HegelContext,
+    pool: *mut HegelPool,
+    out_len: *mut usize,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let pool = match unsafe { pool_ref(ctx, "hegel_pool_len", pool) } {
+        Ok(p) => p,
+        Err(rc) => return rc,
+    };
+    if out_len.is_null() {
+        set_last_error(ctx, "hegel_pool_len: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    unsafe { *out_len = pool.variables.lock().len() };
+    HEGEL_OK
 }
 
 /// Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a

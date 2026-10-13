@@ -1730,8 +1730,14 @@ hegel_result_t hegel_pool_add(hegel_context_t *ctx,
  additions never changes which variable a recorded choice refers to.
 
  Parameters:
- `consume`: When `true` the drawn variable is removed from the pool.
-   When `false` it is not removed.
+ `consume`: When `true` the drawn variable is removed from the pool for
+   as long as the draw is kept: closing the span it was drawn in with
+   `hegel_stop_span(discard=true)` (a filter retry, say), or reporting
+   the rule step it was drawn in with `hegel_state_machine_rule_rejected`,
+   puts it back, so a variable only leaves the pool when the draw that
+   took it is kept. Keep the caller's value for the id until the pool is
+   freed, since the id may be drawn again after such a rollback. When
+   `false` the variable is not removed.
  `out_variable_id`: Receives the variable id libhegel chose.
 
  Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` if the pool
@@ -1742,6 +1748,18 @@ hegel_result_t hegel_pool_generate(hegel_context_t *ctx,
                                    hegel_pool_t *pool,
                                    bool consume,
                                    int64_t *out_variable_id);
+
+/*
+ The number of variables currently in the pool: those added by
+ `hegel_pool_add` and not consumed by a kept `hegel_pool_generate` draw.
+ Needs no test case, so it may be called at any point in the pool's life.
+
+ Parameters:
+ `out_len`: Receives the count.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_pool_len(hegel_context_t *ctx, hegel_pool_t *pool, size_t *out_len);
 
 /*
  Release a pool handle from `hegel_new_pool`. Safe to call with NULL (a
