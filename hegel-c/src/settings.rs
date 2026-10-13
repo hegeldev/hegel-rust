@@ -292,7 +292,9 @@ impl Settings {
         self.suppress_health_check.contains(&check)
     }
 
-    /// Set the number of test cases to run (default: 100).
+    /// Set the number of test cases to run (default: 100). A run stops short
+    /// of this once every possible input of a small finite space has been
+    /// tried.
     pub fn test_cases(mut self, n: u64) -> Self {
         self.test_cases = n;
         self

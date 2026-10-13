@@ -538,9 +538,13 @@ fn the_execution_cache_is_flushed_and_serving_stops_at_the_flip() {
     );
 }
 
-fn tiny_invalid_run(
+/// A `run_main` whose every case makes one draw through `draw` and
+/// concludes with `body_status`, returning the result and the number of
+/// cases executed.
+fn space_run(
     settings: Settings,
     body_status: TestCaseResult,
+    draw: impl Fn(&dyn DataSource) -> Result<(), ()>,
 ) -> (
     Result<crate::backend::TestRunResult, crate::backend::RunError>,
     u64,
@@ -548,8 +552,8 @@ fn tiny_invalid_run(
     let execs = Cell::new(0u64);
     let mut run_case = |ds: Box<dyn DataSource + Send + Sync>| {
         execs.set(execs.get() + 1);
-        let result = match rbool(&*ds) {
-            Ok(_) => body_status.clone(),
+        let result = match draw(&*ds) {
+            Ok(()) => body_status.clone(),
             Err(()) => TestCaseResult::Overrun,
         };
         ds.mark_complete(&result);
@@ -564,17 +568,68 @@ fn tiny_invalid_run(
     (result, execs.get())
 }
 
-/// A two-value space whose every case is filtered trips FilterTooMuch at
-/// the 50-invalid threshold.
+/// [`space_run`] over a two-value space: one boolean draw per case.
+fn tiny_invalid_run(
+    settings: Settings,
+    body_status: TestCaseResult,
+) -> (
+    Result<crate::backend::TestRunResult, crate::backend::RunError>,
+    u64,
+) {
+    space_run(settings, body_status, |ds| rbool(ds).map(|_| ()))
+}
+
+/// [`space_run`] over the full `u64` range: one wide integer draw per case.
+fn wide_invalid_run(
+    settings: Settings,
+    body_status: TestCaseResult,
+) -> (
+    Result<crate::backend::TestRunResult, crate::backend::RunError>,
+    u64,
+) {
+    space_run(settings, body_status, |ds| ru64(ds).map(|_| ()))
+}
+
+/// A two-value space whose every case is filtered is Unsatisfiable as soon
+/// as both values have been rejected, long before FilterTooMuch could fire,
+/// and the message says the whole space was tried.
 #[test]
-fn filter_too_much_fires_on_an_exhausted_space() {
+fn an_exhausted_all_invalid_space_is_unsatisfiable() {
     let (result, execs) = tiny_invalid_run(
+        Settings::new().database(None).test_cases(10_000),
+        TestCaseResult::Invalid,
+    );
+    match result {
+        Err(RunError::Unsatisfiable(msg)) => {
+            assert!(msg.contains("tried every possible input"), "{msg}");
+            assert!(
+                msg.contains(&format!("all {execs} of them were rejected")),
+                "{msg}"
+            );
+        }
+        other => panic!("expected Unsatisfiable, got {other:?}"),
+    }
+    assert!(execs < FILTER_TOO_MUCH_THRESHOLD, "{execs}");
+}
+
+/// A wide space whose every case is filtered trips FilterTooMuch at the
+/// 50-invalid threshold.
+#[test]
+fn filter_too_much_fires_on_an_all_invalid_wide_space() {
+    let (result, execs) = wide_invalid_run(
         Settings::new().database(None).test_cases(10_000),
         TestCaseResult::Invalid,
     );
     match result {
         Err(RunError::HealthCheck(msg)) => {
             assert!(msg.contains("FilterTooMuch"), "{msg}");
+            assert!(
+                msg.contains(
+                    "suppress the FilterTooMuch health check with the suppress_health_check setting"
+                ),
+                "{msg}"
+            );
+            assert!(!msg.contains("HealthCheck::"), "{msg}");
         }
         other => panic!("expected FilterTooMuch, got {other:?}"),
     }
@@ -586,7 +641,7 @@ fn filter_too_much_fires_on_an_exhausted_space() {
 /// generated, so passing would be vacuous.
 #[test]
 fn an_all_invalid_run_under_suppression_is_unsatisfiable() {
-    let (result, execs) = tiny_invalid_run(
+    let (result, execs) = wide_invalid_run(
         Settings::new()
             .database(None)
             .test_cases(10_000)
@@ -595,7 +650,10 @@ fn an_all_invalid_run_under_suppression_is_unsatisfiable() {
     );
     match result {
         Err(RunError::Unsatisfiable(msg)) => {
-            assert!(msg.contains("459 inputs were filtered out"), "{msg}");
+            assert!(
+                msg.contains("459 inputs were rejected by assume() or a filter"),
+                "{msg}"
+            );
         }
         other => panic!("expected Unsatisfiable, got {other:?}"),
     }
@@ -643,9 +701,10 @@ fn an_all_invalid_run_is_unsatisfiable_under_nd_handling() {
 }
 
 /// A test accepting one of seven equally likely values, with FilterTooMuch
-/// suppressed, reaches its test-case budget on every seed: generation keeps
-/// going until the invalid budget runs out, never stopping early on a
-/// streak of already-seen rejections and ending the run as passed.
+/// suppressed, finds that value on every seed: generation keeps going until
+/// the space is exhausted or the invalid budget runs out, never stopping
+/// early on a streak of already-seen rejections and ending the run as
+/// passed without it.
 #[test]
 fn a_rare_valid_value_is_reached_under_suppression() {
     for seed in 0..100u64 {
@@ -679,19 +738,112 @@ fn a_rare_valid_value_is_reached_under_suppression() {
             result.as_ref().is_ok_and(|r| r.failures.is_empty()),
             "seed {seed}: {result:?}"
         );
-        assert_eq!(valid.get(), 5, "seed {seed} after {} cases", execs.get());
+        assert!(
+            (1..=5).contains(&valid.get()),
+            "seed {seed}: {} valid after {} cases",
+            valid.get(),
+            execs.get()
+        );
     }
 }
 
-/// A tiny space whose cases are valid runs to its test-case budget.
+/// A tiny space whose cases are valid stops once both values have been
+/// tried, short of its test-case budget.
 #[test]
-fn a_tiny_passing_space_generates_to_its_test_case_budget() {
+fn a_tiny_passing_space_stops_once_exhausted() {
     let (result, execs) = tiny_invalid_run(
         Settings::new().database(None).test_cases(50),
         TestCaseResult::Valid,
     );
     assert!(result.unwrap().failures.is_empty());
-    assert!(execs >= 50, "a valid space is budget-bounded: {execs}");
+    assert!((2..50).contains(&execs), "{execs}");
+}
+
+/// A wide space whose cases are valid runs to its test-case budget.
+#[test]
+fn a_wide_passing_space_generates_to_its_test_case_budget() {
+    let (result, execs) = wide_invalid_run(
+        Settings::new().database(None).test_cases(50),
+        TestCaseResult::Valid,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    assert!(execs >= 50, "a valid wide space is budget-bounded: {execs}");
+}
+
+/// Verbose output announces every executed test case, the simplest input
+/// that opens generation included, and reports the exhausted space.
+#[test]
+fn verbose_output_announces_every_case_and_the_exhausted_space() {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&lines);
+    let (result, execs) = tiny_invalid_run(
+        Settings::new()
+            .database(None)
+            .test_cases(50)
+            .verbosity(Verbosity::Verbose)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        TestCaseResult::Valid,
+    );
+    assert!(result.unwrap().failures.is_empty());
+    let lines = lines.lock().unwrap();
+    let announced = lines.iter().filter(|l| *l == "Running test case").count() as u64;
+    assert_eq!(announced, execs, "{lines:?}");
+    let generate = lines
+        .iter()
+        .position(|l| l == "Starting phase: Generate")
+        .unwrap();
+    assert_eq!(lines[generate + 1], "Running test case", "{lines:?}");
+    assert!(
+        lines.contains(&format!(
+            "Search space exhausted: every possible input was tried in {execs} test cases"
+        )),
+        "{lines:?}"
+    );
+}
+
+/// Verbose output announces the reuse phase's database replays like any
+/// other executed test case.
+#[test]
+fn verbose_output_announces_reuse_replays() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().to_str().unwrap().to_string();
+    let db = DirectoryTestCaseDatabase::new(&path);
+    db.save(
+        b"k",
+        &serialize_choices(&[ChoiceValue::Boolean(true)]).unwrap(),
+    );
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = std::sync::Arc::clone(&lines);
+    let calls = AtomicU64::new(0);
+    let result = reuse_run(
+        Settings::new()
+            .database(Some(path.clone()))
+            .verbosity(Verbosity::Verbose)
+            .output(Output::callback(move |line| {
+                sink.lock().unwrap().push(line.to_string());
+            })),
+        "k",
+        |ds| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            match rbool(ds) {
+                Ok(true) => boom("stored bug"),
+                Ok(false) => TestCaseResult::Valid,
+                Err(()) => TestCaseResult::Overrun,
+            }
+        },
+    );
+    assert!(!result.unwrap().failures.is_empty());
+    let lines = lines.lock().unwrap();
+    let announced = lines.iter().filter(|l| *l == "Running test case").count() as u64;
+    assert_eq!(announced, calls.load(Ordering::SeqCst), "{lines:?}");
+    let reuse = lines
+        .iter()
+        .position(|l| l == "Starting phase: Reuse")
+        .unwrap();
+    assert_eq!(lines[reuse + 1], "Running test case", "{lines:?}");
 }
 
 #[test]
@@ -7954,7 +8106,10 @@ fn run_main_reports_unsatisfiable_for_trivial_always_invalid_test() {
     match exploration {
         Err(crate::backend::RunError::Unsatisfiable(msg)) => {
             assert!(msg.contains("Unsatisfiable"), "unexpected message: {msg}");
-            assert!(msg.contains("assume()"), "unexpected message: {msg}");
+            assert!(
+                msg.contains("draws no data, and its only possible input was rejected"),
+                "unexpected message: {msg}"
+            );
         }
         other => panic!("expected RunError::Unsatisfiable, got {other:?}"),
     }

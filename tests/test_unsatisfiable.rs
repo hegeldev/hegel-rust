@@ -66,8 +66,9 @@ fn always_rejecting_test_with_draws_is_unsatisfiable() {
 }
 
 /// A test accepting one of seven equally likely values keeps generating
-/// until it has found it: it never ends early as passed, nor as
-/// Unsatisfiable, on a run of rejections.
+/// until it has found it, then stops once the seven values are exhausted:
+/// it never ends early as passed, nor as Unsatisfiable, on a run of
+/// rejections.
 #[test]
 fn rare_valid_input_is_found_under_suppression() {
     for seed in 0..50 {
@@ -85,8 +86,73 @@ fn rare_valid_input_is_found_under_suppression() {
                 .suppress_health_check(HealthCheck::all()),
         )
         .run();
-        assert_eq!(valid.get(), 5, "seed {seed}");
+        assert!(
+            (1..=5).contains(&valid.get()),
+            "seed {seed}: {}",
+            valid.get()
+        );
     }
+}
+
+/// With every health check suppressed and a large budget, a test that draws
+/// an integer and rejects every input ends Unsatisfiable, naming the
+/// rejections neutrally: the engine cannot tell assume() from a filter.
+#[test]
+fn always_rejecting_integer_test_is_unsatisfiable_with_all_checks_suppressed() {
+    expect_panic(
+        || {
+            Hegel::new(|tc: TestCase| {
+                tc.draw(gs::integers::<i64>());
+                tc.reject();
+            })
+            .settings(
+                Settings::new()
+                    .database(None)
+                    .test_cases(1000)
+                    .suppress_health_check(HealthCheck::all()),
+            )
+            .run();
+        },
+        "Unsatisfiable: unable to satisfy the test's assumptions. No valid input was \
+         generated: 459 inputs were rejected by assume\\(\\) or a filter",
+    );
+}
+
+/// Rejecting both values of a boolean exhausts the space: the run is
+/// Unsatisfiable, saying so, rather than a FilterTooMuch health check.
+#[test]
+fn rejecting_every_input_of_a_finite_space_is_unsatisfiable() {
+    let calls = std::sync::atomic::AtomicU64::new(0);
+    expect_panic(
+        || {
+            Hegel::new(|tc: TestCase| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tc.draw(gs::booleans());
+                tc.reject();
+            })
+            .settings(Settings::new().database(None).test_cases(200))
+            .run();
+        },
+        "Unsatisfiable: unable to satisfy the test's assumptions. The test tried \
+         every possible input, and all",
+    );
+    let calls = calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(calls < 50, "{calls}");
+}
+
+/// A test over a finite space stops once every input has been tried,
+/// short of its test-case budget.
+#[test]
+fn a_finite_space_stops_once_exhausted() {
+    let seen = std::cell::RefCell::new(Vec::new());
+    Hegel::new(|tc: TestCase| {
+        seen.borrow_mut().push(tc.draw(gs::booleans()));
+    })
+    .settings(Settings::new().database(None).test_cases(200))
+    .run();
+    let seen = seen.borrow();
+    assert!(seen.len() < 200, "{seen:?}");
+    assert!(seen.contains(&false) && seen.contains(&true), "{seen:?}");
 }
 
 #[test]
