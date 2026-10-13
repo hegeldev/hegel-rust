@@ -652,6 +652,11 @@ fn drive_run<F: FnMut(TestCase)>(
                 }
                 last_payload = Some(report.payload);
             }
+            if !quiet {
+                for line in describe_targets(&result.target_scores()) {
+                    output.line(&line);
+                }
+            }
 
             if multiple {
                 std::panic::resume_unwind(Box::new(format!(
@@ -663,6 +668,26 @@ fn drive_run<F: FnMut(TestCase)>(
                         .unwrap_or_else(|| hegel_internal_error!("a failed run has no failures")),
                 );
             }
+        }
+    }
+}
+
+/// The highest target score per label, printed below a failing run's
+/// report so that the shrunk example cannot hide how far `tc.target()`
+/// drove the score: one line for a single label, a table sorted by score
+/// for several, nothing when the test never targeted a score.
+fn describe_targets(target_scores: &[(String, f64)]) -> Vec<String> {
+    match target_scores {
+        [] => Vec::new(),
+        [(label, score)] => vec![format!("Highest target score: {score}  (label={label:?})")],
+        _ => {
+            let mut sorted = target_scores.to_vec();
+            sorted.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            let mut lines = vec![String::from("Highest target scores:")];
+            for (label, score) in sorted {
+                lines.push(format!("{score:>16}  (label={label:?})"));
+            }
+            lines
         }
     }
 }

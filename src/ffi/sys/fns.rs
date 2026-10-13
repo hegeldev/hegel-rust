@@ -81,6 +81,8 @@ macro_rules! for_each_hegel_fn {
             fn hegel_run_result_failure_count(ctx: *mut HegelContext, r: *const HegelRunResult, out_count: *mut usize) -> hegel_result_t;
             fn hegel_run_result_free(ctx: *mut HegelContext, r: *mut HegelRunResult) -> hegel_result_t;
             fn hegel_run_result_status(ctx: *mut HegelContext, r: *const HegelRunResult, out_status: *mut hegel_run_status_t) -> hegel_result_t;
+            fn hegel_run_result_target_score(ctx: *mut HegelContext, r: *const HegelRunResult, index: usize, out_label: *mut *const c_char, out_score: *mut f64) -> hegel_result_t;
+            fn hegel_run_result_target_score_count(ctx: *mut HegelContext, r: *const HegelRunResult, out_count: *mut usize) -> hegel_result_t;
             fn hegel_run_start(ctx: *mut HegelContext, settings: *const HegelSettings, callback: hegel_output_callback_t, user_data: *mut c_void, out_run: *mut *mut HegelRun) -> hegel_result_t;
             fn hegel_run_start_blob(ctx: *mut HegelContext, settings: *const HegelSettings, blob: *const c_char, callback: hegel_output_callback_t, user_data: *mut c_void, out_run: *mut *mut HegelRun) -> hegel_result_t;
             fn hegel_set_default_profile(ctx: *mut HegelContext, name: *const c_char) -> hegel_result_t;

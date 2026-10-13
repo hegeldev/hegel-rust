@@ -1,7 +1,9 @@
 use crate::backend::RunError;
 use crate::control::hegel_internal_unwrap;
 use crate::native::{HashMap, HashSet};
+use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::native::core::{ChoiceData, ChoiceNode, ChoiceValue, NativeTestCase, Status};
@@ -41,6 +43,10 @@ impl NdTarget {
 pub(crate) struct TargetingState {
     best_targets: HashMap<String, BestTarget>,
     nd_targets: HashMap<String, NdTarget>,
+    /// Bumped every time a label's recorded best changes, so the
+    /// [`TargetingSchedule`] can tell whether generation has found a new
+    /// best since the last optimisation pass.
+    version: u64,
 }
 
 impl TargetingState {
@@ -48,6 +54,7 @@ impl TargetingState {
         Self {
             best_targets: HashMap::default(),
             nd_targets: HashMap::default(),
+            version: 0,
         }
     }
 
@@ -68,12 +75,28 @@ impl TargetingState {
                         choices: choices.to_vec(),
                     },
                 );
+                self.version += 1;
             }
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.best_targets.is_empty()
+    }
+
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The highest score observed for every label, sorted by label.
+    pub fn best_scores(&self) -> Vec<(String, f64)> {
+        let mut scores: Vec<_> = self
+            .best_targets
+            .iter()
+            .map(|(label, best)| (label.clone(), best.score))
+            .collect();
+        scores.sort_by(|a, b| a.0.cmp(&b.0));
+        scores
     }
 
     /// Every label's recorded best, sorted by label — the ND race's seed
@@ -118,41 +141,104 @@ impl TargetingState {
     }
 }
 
-/// Schedule for firing `optimise_targets` during the generation loop.
+/// Schedule for firing the optimiser during the generation loop.
 ///
-/// Mirrors the threshold logic in
-/// `internal/conjecture/engine.py::generate_new_examples`: a first pass
-/// after ~10% of the budget (capped at 50 valid test cases), then another
-/// pass every ~50% of the original budget thereafter. Re-entry lets the
-/// climber explore from fresh starting points if later random draws raise
-/// the best-observed score for some label after the first pass settled
-/// on a different starting sequence.
+/// Mirrors `engine.py`'s `_should_optimise_now` / `_run_optimise_pass`.
+/// A budget below [`INTERLEAVED_TARGETING_MIN_BUDGET`] gets a single pass
+/// halfway through, which experience shows is roughly optimal when there
+/// is little to spend. A larger budget starts optimising after a warm-up
+/// of [`TARGETING_WARM_UP`] valid cases and then alternates passes with
+/// random generation on a fair-share schedule: each pass is capped at a
+/// slice of the remaining targeting budget (half the run's budget in
+/// total), generation then runs for as many valid cases as the pass
+/// spent, and a pass also fires early whenever generation raises a best
+/// score since the previous pass settled. A pass that spent no valid
+/// cases (ND targeting measures instead of generating) re-fires on the
+/// halfway cadence.
 pub(crate) struct TargetingSchedule {
-    step: u64,
-    next_at: u64,
+    max_test_cases: u64,
+    next_at: Option<u64>,
+    spent: u64,
+    version_at_last_pass: Option<u64>,
 }
+
+/// Budgets this large interleave targeting with generation from early in
+/// the run instead of running one pass halfway through.
+pub(crate) const INTERLEAVED_TARGETING_MIN_BUDGET: u64 = 1000;
+
+/// Valid cases of random generation before the first interleaved pass.
+pub(crate) const TARGETING_WARM_UP: u64 = 200;
 
 impl TargetingSchedule {
     pub fn new(max_test_cases: u64) -> Self {
-        let small_example_cap = (max_test_cases / 10).min(50);
-        let step = (max_test_cases / 2)
-            .max(small_example_cap.saturating_add(1))
-            .max(10);
+        let next_at = if max_test_cases < INTERLEAVED_TARGETING_MIN_BUDGET {
+            let small_example_cap = (max_test_cases / 10).min(50);
+            (max_test_cases / 2)
+                .max(small_example_cap.saturating_add(1))
+                .max(10)
+        } else {
+            TARGETING_WARM_UP
+        };
         Self {
-            step,
-            next_at: step,
+            max_test_cases,
+            next_at: Some(next_at),
+            spent: 0,
+            version_at_last_pass: None,
         }
     }
 
-    /// Returns `true` if the caller should fire `optimise_targets` now.
-    /// Advances the next-firing threshold so each call to this method on
-    /// the same valid count returns `true` at most once.
-    pub fn should_fire(&mut self, valid_test_cases: u64) -> bool {
-        if valid_test_cases < self.next_at {
-            return false;
+    fn interleaved(&self) -> bool {
+        self.max_test_cases >= INTERLEAVED_TARGETING_MIN_BUDGET
+    }
+
+    fn remaining(&self) -> u64 {
+        (self.max_test_cases / 2).saturating_sub(self.spent)
+    }
+
+    /// Whether to run a pass now, given the valid count and the
+    /// [`TargetingState::version`]. Every `true` must be followed by
+    /// [`Self::pass_finished`], which schedules the next pass.
+    pub fn should_fire(&self, valid_test_cases: u64, version: u64) -> bool {
+        if self.next_at.is_some_and(|at| valid_test_cases >= at) {
+            return true;
         }
-        self.next_at = valid_test_cases.saturating_add(self.step);
-        true
+        self.interleaved()
+            && self.spent > 0
+            && self.remaining() > 0
+            && self.version_at_last_pass.is_some_and(|v| v != version)
+    }
+
+    /// The valid count at which a pass starting now must stop.
+    pub fn pass_cap(&self, valid_test_cases: u64) -> u64 {
+        if !self.interleaved() {
+            return self.max_test_cases;
+        }
+        let remaining = self.remaining();
+        valid_test_cases
+            .saturating_add((remaining / 4).max(TARGETING_WARM_UP).min(remaining))
+            .min(self.max_test_cases)
+    }
+
+    /// Account for a finished pass that spent `spent` valid cases and
+    /// schedule the next one.
+    pub fn pass_finished(
+        &mut self,
+        valid_test_cases: u64,
+        spent: u64,
+        improved: bool,
+        version: u64,
+    ) {
+        self.spent = self.spent.saturating_add(spent);
+        self.version_at_last_pass = Some(version);
+        self.next_at = if spent == 0 {
+            Some(valid_test_cases.saturating_add(self.max_test_cases / 2))
+        } else if !self.interleaved() {
+            None
+        } else if improved && self.remaining() > 0 {
+            Some(valid_test_cases.saturating_add(spent))
+        } else {
+            None
+        };
     }
 }
 
@@ -197,11 +283,13 @@ impl Optimiser<'_, '_> {
     }
 
     /// Hill-climb every target until no further improvements are found or
-    /// the budget is exhausted. Mirrors `engine.py::optimise_targets`.
-    pub(crate) async fn optimise_targets(&mut self) -> Result<(), RunError> {
+    /// the budget is exhausted, returning whether any score improved.
+    /// Mirrors `engine.py::optimise_targets`.
+    pub(crate) async fn optimise_targets(&mut self) -> Result<bool, RunError> {
         let mut targets: Vec<String> = self.engine.targeting.best_targets.keys().cloned().collect();
         targets.sort();
         let mut max_improvements: usize = 10;
+        let mut improved = false;
         loop {
             let prev_calls = self.engine.calls;
             let mut any_improvements = false;
@@ -209,11 +297,12 @@ impl Optimiser<'_, '_> {
                 let imps = self.hill_climb(target, max_improvements).await?;
                 if imps > 0 {
                     any_improvements = true;
+                    improved = true;
                 }
             }
             max_improvements = max_improvements.saturating_mul(2);
             if !any_improvements || prev_calls == self.engine.calls {
-                return Ok(());
+                return Ok(improved);
             }
         }
     }
@@ -354,6 +443,25 @@ impl Optimiser<'_, '_> {
             *improvements += 1;
         }
         Ok(true)
+    }
+}
+
+/// The end-of-run report of the highest score observed per label, in
+/// Hypothesis's `describe_targets` layout: one line for a single label, a
+/// table sorted by score for several. Empty when nothing was targeted.
+pub(crate) fn describe_targets(best_scores: &[(String, f64)]) -> Vec<String> {
+    match best_scores {
+        [] => Vec::new(),
+        [(label, score)] => vec![format!("Highest target score: {score}  (label={label:?})")],
+        _ => {
+            let mut sorted = best_scores.to_vec();
+            sorted.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            let mut lines = vec![String::from("Highest target scores:")];
+            for (label, score) in sorted {
+                lines.push(format!("{score:>16}  (label={label:?})"));
+            }
+            lines
+        }
     }
 }
 

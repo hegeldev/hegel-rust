@@ -2801,6 +2801,39 @@ hegel_result_t hegel_run_result_failure(hegel_context_t *ctx,
 
 /*
  Parameters:
+ `out_count`: Receives the number of `hegel_target` labels the run
+   observed a score for. Zero when the test never targeted a score, and
+   always zero for a blob replay.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_run_result_target_score_count(hegel_context_t *ctx,
+                                                   const hegel_run_result_t *r,
+                                                   size_t *out_count);
+
+/*
+ The highest score the run observed for one `hegel_target` label. Labels
+ are indexed in sorted order. Hypothesis prints these below a failing
+ test case as `Highest target score: 101  (label='')`, so the shrunk
+ example cannot hide how far the score was driven, and bindings are
+ encouraged to do the same.
+
+ Parameters:
+ `index`: 0-based; must be less than the target score count.
+ `out_label`: Receives the label. Owned by the run result and valid until
+   `hegel_run_result_free`.
+ `out_score`: Receives the highest score observed for the label.
+
+ Returns `HEGEL_OK`.
+ */
+hegel_result_t hegel_run_result_target_score(hegel_context_t *ctx,
+                                             const hegel_run_result_t *r,
+                                             size_t index,
+                                             const char **out_label,
+                                             double *out_score);
+
+/*
+ Parameters:
  `f`: The failure to free and the strings read off it. Safe to call
    with NULL.
 
