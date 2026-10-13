@@ -559,6 +559,42 @@ fn test_concurrent_pool_across_workers(tc: TestCase) {
     machine(m).max_concurrency(3).run_concurrent(tc);
 }
 
+struct RejectingConsumer {
+    pool: ConcurrentPool<i64>,
+    completed: AtomicI64,
+}
+
+#[hegel::concurrent_state_machine]
+impl RejectingConsumer {
+    #[rule]
+    fn take_zero(&self, tc: TestCase) {
+        let value: i64 = tc.draw_silent(self.pool.values_consumed());
+        tc.assume(value == 0);
+        self.completed.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[invariant]
+    fn nothing_lost_to_rejected_rules(&self, _: TestCase) {
+        assert_eq!(
+            self.pool.len() as i64,
+            3 - self.completed.load(Ordering::SeqCst)
+        );
+    }
+}
+
+#[hegel::test]
+fn test_rejected_rule_puts_back_the_value_it_consumed(tc: TestCase) {
+    let pool = concurrent_pool(&tc);
+    for value in 0..3 {
+        pool.add(&tc, value);
+    }
+    let m = RejectingConsumer {
+        pool,
+        completed: AtomicI64::new(0),
+    };
+    machine(m).max_concurrency(3).steps(5).run_concurrent(tc);
+}
+
 struct RacyCounter {
     value: AtomicI64,
     increments: AtomicI64,

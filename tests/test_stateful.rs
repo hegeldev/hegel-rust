@@ -1,8 +1,8 @@
 mod common;
 
-use hegel::TestCase;
 use hegel::generators as gs;
 use hegel::stateful::{Pool, pool};
+use hegel::{Generator, TestCase};
 
 struct Linear {
     state: i32,
@@ -76,6 +76,58 @@ fn test_consume(tc: TestCase) {
         consumed,
     };
     hegel::stateful::machine(m).run(tc);
+}
+
+#[hegel::test]
+fn test_filtered_consuming_draw_consumes_only_the_kept_value(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..10 {
+        numbers.add(i);
+    }
+    let even = tc.draw(numbers.values_consumed().filter(|x| x % 2 == 0));
+    assert_eq!(even % 2, 0);
+    assert_eq!(numbers.len(), 9);
+    let mut rest = Vec::new();
+    while !numbers.is_empty() {
+        rest.push(tc.draw(numbers.values_consumed()));
+    }
+    rest.sort_unstable();
+    let mut expected: Vec<i32> = (0..10).filter(|x| *x != even).collect();
+    expected.sort_unstable();
+    assert_eq!(rest, expected);
+}
+
+struct RejectingConsumer {
+    numbers: Pool<i32>,
+    completed: usize,
+}
+
+#[hegel::state_machine]
+impl RejectingConsumer {
+    #[rule]
+    fn take_zero(&mut self, tc: TestCase) {
+        let x = tc.draw(self.numbers.values_consumed());
+        tc.assume(x == 0);
+        self.completed += 1;
+    }
+
+    #[invariant]
+    fn nothing_lost_to_rejected_rules(&mut self, _tc: TestCase) {
+        assert_eq!(self.numbers.len(), 3 - self.completed);
+    }
+}
+
+#[hegel::test]
+fn test_rejected_rule_puts_back_the_value_it_consumed(tc: TestCase) {
+    let mut numbers: Pool<i32> = pool(&tc);
+    for i in 0..3 {
+        numbers.add(i);
+    }
+    let m = RejectingConsumer {
+        numbers,
+        completed: 0,
+    };
+    hegel::stateful::machine(m).steps(5).run(tc);
 }
 
 struct TestLifetimeMachine<'a> {

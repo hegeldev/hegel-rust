@@ -1,7 +1,11 @@
 use super::*;
 use crate::native::core::choices::ChoiceTemplate;
-use crate::native::core::{ChoiceKind, ChoiceValue, Status};
+use crate::native::core::{
+    ChoiceKind, ChoiceValue, NativeVariables, NativeVariablesHandle, Status,
+};
 use crate::native::rng::EngineRng;
+use crate::sys::sync::Mutex;
+use alloc::sync::Arc;
 use alloc::vec;
 
 fn machine(ntc: &mut NativeTestCase, num_rules: usize) -> NativeStateMachine {
@@ -561,7 +565,7 @@ fn concurrent_rejections_refund_the_worker_round_budget() {
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     for _ in 0..10 {
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-        sm.rule_rejected(0).unwrap();
+        sm.rule_rejected(&mut ntc, 0).unwrap();
     }
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
@@ -574,7 +578,7 @@ fn concurrent_worker_attempts_are_capped_per_round() {
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     for _ in 0..(MAX_ROUND_RULES * ATTEMPT_MULTIPLIER) {
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-        sm.rule_rejected(0).unwrap();
+        sm.rule_rejected(&mut ntc, 0).unwrap();
     }
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
 }
@@ -586,7 +590,7 @@ fn rejected_rounds_do_not_count_toward_the_round_budget() {
     for _ in 0..5 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-        sm.rule_rejected(0).unwrap();
+        sm.rule_rejected(&mut ntc, 0).unwrap();
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), None);
     }
     for _ in 0..3 {
@@ -605,7 +609,7 @@ fn round_attempts_stop_at_ten_times_the_step_count_once_a_round_has_succeeded() 
     for _ in 0..19 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-        sm.rule_rejected(0).unwrap();
+        sm.rule_rejected(&mut ntc, 0).unwrap();
     }
     assert!(sm.next_group(&mut ntc).unwrap().is_none());
 }
@@ -617,7 +621,7 @@ fn a_machine_with_no_successful_rounds_gets_a_thousand_attempts() {
     for _ in 0..1000 {
         assert!(sm.next_group(&mut ntc).unwrap().is_some());
         assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-        sm.rule_rejected(0).unwrap();
+        sm.rule_rejected(&mut ntc, 0).unwrap();
     }
     assert!(sm.next_group(&mut ntc).unwrap().is_none());
 }
@@ -627,19 +631,19 @@ fn rule_rejected_without_an_outstanding_rule_is_an_error() {
     let mut ntc = sequential_rounds(2, 64);
     let mut sm = machine_steps(&mut ntc, 2, 5);
     assert!(matches!(
-        sm.rule_rejected(0),
+        sm.rule_rejected(&mut ntc, 0),
         Err(EngineError::InvalidArgument(_))
     ));
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-    sm.rule_rejected(0).unwrap();
+    sm.rule_rejected(&mut ntc, 0).unwrap();
     assert!(matches!(
-        sm.rule_rejected(0),
+        sm.rule_rejected(&mut ntc, 0),
         Err(EngineError::InvalidArgument(_))
     ));
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
-    sm.rule_rejected(0).unwrap();
+    sm.rule_rejected(&mut ntc, 0).unwrap();
 }
 
 #[test]
@@ -649,11 +653,11 @@ fn rule_rejected_for_an_out_of_range_worker_is_an_error() {
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert!(matches!(
-        sm.rule_rejected(2),
+        sm.rule_rejected(&mut ntc, 2),
         Err(EngineError::InvalidArgument(_))
     ));
     assert!(matches!(
-        sm.rule_rejected(-1),
+        sm.rule_rejected(&mut ntc, -1),
         Err(EngineError::InvalidArgument(_))
     ));
 }
@@ -666,7 +670,7 @@ fn a_rule_outstanding_at_the_join_point_is_not_rejectable_next_round() {
     assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
     assert!(sm.next_group(&mut ntc).unwrap().is_some());
     assert!(matches!(
-        sm.rule_rejected(0),
+        sm.rule_rejected(&mut ntc, 0),
         Err(EngineError::InvalidArgument(_))
     ));
 }
@@ -970,4 +974,51 @@ fn always_check_invariants_are_checked_without_consuming_entropy() {
     assert_eq!(ntc.nodes.len(), nodes_before);
     sm.should_check_invariant(&mut ntc, 1).unwrap();
     assert_eq!(ntc.nodes.len(), nodes_before + 1);
+}
+
+fn filled_pool() -> NativeVariablesHandle {
+    let pool = Arc::new(Mutex::new(NativeVariables::new()));
+    for id in 0..3 {
+        pool.lock().add(id);
+    }
+    pool
+}
+
+fn consume_with_a_draw(ntc: &mut NativeTestCase, pool: &NativeVariablesHandle, id: i64) {
+    let position = ntc.position();
+    ntc.weighted(0.5, None).unwrap();
+    pool.lock().consume(id);
+    ntc.record_pool_consume(pool, position, id);
+}
+
+#[test]
+fn a_rejected_rule_puts_back_what_it_consumed() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut sm = machine(&mut ntc, 1);
+    let pool = filled_pool();
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
+    consume_with_a_draw(&mut ntc, &pool, 1);
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
+    assert_eq!(sm.next_rule(&mut ntc, 0).unwrap(), Some(0));
+    consume_with_a_draw(&mut ntc, &pool, 2);
+    consume_with_a_draw(&mut ntc, &pool, 0);
+    assert_eq!(pool.lock().active(), Vec::<i64>::new());
+    sm.rule_rejected(&mut ntc, 0).unwrap();
+    assert_eq!(pool.lock().active(), vec![0, 2]);
+}
+
+#[test]
+fn rejecting_one_workers_rule_keeps_what_the_others_consumed() {
+    let mut ntc = NativeTestCase::new_random(EngineRng::seeded(3)).unwrap();
+    let mut sm = machine_concurrent(&mut ntc, 1, 2);
+    let pool = filled_pool();
+    assert!(sm.next_group(&mut ntc).unwrap().is_some());
+    for worker in 0..2 {
+        while sm.next_rule(&mut ntc, worker).unwrap().is_none() {}
+        consume_with_a_draw(&mut ntc, &pool, worker);
+    }
+    assert_eq!(pool.lock().active(), vec![2]);
+    sm.rule_rejected(&mut ntc, 1).unwrap();
+    assert_eq!(pool.lock().active(), vec![1, 2]);
 }

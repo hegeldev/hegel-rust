@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::native::bignum::BigInt;
-use crate::native::core::{ManyState, NativeStateMachine, NativeVariables, RecursionState};
+use crate::native::core::{ManyState, NativeStateMachine, NativeVariablesHandle, RecursionState};
 use crate::native::draws::special::{Date, DateTime, Time};
 use crate::native::draws::{FloatSpec, StringSpec};
 use crate::settings::HealthCheck;
@@ -281,22 +281,23 @@ pub trait DataSource: Send + Sync {
     fn generate_boolean(&self, p: f64, forced: Option<bool>) -> Result<bool, DataSourceError>;
 
     /// Create a new variable pool. The caller owns the returned
-    /// [`NativeVariables`] and passes it back to [`Self::pool_add`] /
+    /// [`NativeVariablesHandle`] and passes it back to [`Self::pool_add`] /
     /// [`Self::pool_generate`]; any stream of the same family may drive it.
-    fn new_pool(&self) -> Result<NativeVariables, DataSourceError>;
+    fn new_pool(&self) -> Result<NativeVariablesHandle, DataSourceError>;
 
     /// Register a new variable in the pool. Returns the variable id, drawn
     /// from this stream as a fresh identifier unique within the test-case
     /// family and recorded in the choice sequence by value.
-    fn pool_add(&self, pool: &mut NativeVariables) -> Result<i64, DataSourceError>;
+    fn pool_add(&self, pool: &NativeVariablesHandle) -> Result<i64, DataSourceError>;
 
     /// Draw a variable id from the pool, with the choice drawn from this
     /// stream and recorded as the chosen id itself rather than as an index
     /// into the pool. If `consume` is true, the variable is removed from
-    /// the pool.
+    /// the pool for as long as the draw is kept: discarding the span it was
+    /// drawn in, or rejecting the rule step it was drawn in, puts it back.
     fn pool_generate(
         &self,
-        pool: &mut NativeVariables,
+        pool: &NativeVariablesHandle,
         consume: bool,
     ) -> Result<i64, DataSourceError>;
 

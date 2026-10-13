@@ -1321,6 +1321,20 @@ pub struct NativeVariables {
     removed: crate::native::HashSet<i64>,
 }
 
+/// A pool shared between the handle its owner drives it through and the
+/// streams that recorded consumes from it (see
+/// [`NativeTestCase::record_pool_consume`]).
+pub type NativeVariablesHandle = Arc<Mutex<NativeVariables>>;
+
+/// A consuming pool draw recorded on a stream, undone when the span or
+/// rule step it was drawn in is discarded.
+struct PoolConsume {
+    /// The stream position of the draw that consumed the variable.
+    position: usize,
+    pool: NativeVariablesHandle,
+    variable_id: i64,
+}
+
 impl NativeVariables {
     pub fn new() -> Self {
         NativeVariables {
@@ -1343,17 +1357,22 @@ impl NativeVariables {
             .collect()
     }
 
-    /// Mark a variable as consumed and trim trailing consumed variables.
+    /// Mark a variable as consumed.
     pub fn consume(&mut self, variable_id: i64) {
         self.removed.insert(variable_id);
-        while let Some(&last) = self.variables.last() {
-            if self.removed.contains(&last) {
-                self.variables.pop();
-                self.removed.remove(&last);
-            } else {
-                break;
-            }
-        }
+    }
+
+    /// Put a consumed variable back into the pool.
+    pub fn restore(&mut self, variable_id: i64) {
+        self.removed.remove(&variable_id);
+    }
+
+    /// Number of variables that have not been consumed.
+    pub fn len(&self) -> usize {
+        self.variables
+            .iter()
+            .filter(|id| !self.removed.contains(*id))
+            .count()
     }
 }
 
@@ -1686,6 +1705,8 @@ pub struct NativeTestCase {
     /// case. Filters that retry mark the rejected attempts as discarded, which
     /// the shrinker uses to prioritise removing them.
     pub has_discards: bool,
+    /// Consuming pool draws made on this stream, in draw order.
+    pool_consumes: Vec<PoolConsume>,
     /// Optional observer notified after each draw and on conclusion.
     /// Set by [`Self::for_choices`] and called by each draw method and
     /// by [`Self::freeze`].
@@ -1888,6 +1909,7 @@ impl NativeTestCase {
             child_nodes: Vec::new(),
             top_child_nodes: 0,
             has_discards: false,
+            pool_consumes: Vec::new(),
             observer,
             trailing_template,
         }
@@ -2152,6 +2174,38 @@ impl NativeTestCase {
         }
         if discard {
             self.has_discards = true;
+            self.undo_pool_consumes_from(self.spans[idx].start);
+        }
+    }
+
+    /// The stream position of the next draw: the mark to pass to
+    /// [`Self::undo_pool_consumes_from`] to undo everything drawn from here
+    /// on.
+    pub fn position(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Record that the draw at `position` consumed `variable_id` from
+    /// `pool` (the caller has already consumed it, under the pool's lock),
+    /// so that discarding the span the draw lies in, or rejecting the rule
+    /// step it lies in, puts the variable back.
+    pub fn record_pool_consume(
+        &mut self,
+        pool: &NativeVariablesHandle,
+        position: usize,
+        variable_id: i64,
+    ) {
+        self.pool_consumes.push(PoolConsume {
+            position,
+            pool: Arc::clone(pool),
+            variable_id,
+        });
+    }
+
+    /// Put back every variable consumed by a draw at or after `position`.
+    pub fn undo_pool_consumes_from(&mut self, position: usize) {
+        while let Some(consume) = self.pool_consumes.pop_if(|c| c.position >= position) {
+            consume.pool.lock().restore(consume.variable_id);
         }
     }
 

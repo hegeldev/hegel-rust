@@ -151,7 +151,6 @@ use crate::ffi::{PoolHandle, StateMachineHandle};
 use crate::generators::{Generator, label_from_name};
 use crate::run_lifecycle::{self, PanicInfo};
 use crate::test_case::raise_for_rc;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Mutex, mpsc};
@@ -231,7 +230,12 @@ impl<M> Invariant<M> {
 ///   drawing from it yields a reference to a value in the pool without removing
 ///   it.
 /// - [`values_consumed`](Pool::values_consumed) returns a generator over `T` —
-///   drawing from it removes a value from the pool and yields it by value.
+///   drawing from it removes a value from the pool and yields a clone of it.
+///
+/// A value only leaves the pool when the draw that took it is kept: a
+/// consuming draw rejected by a [`filter`](Generator::filter), or made by a
+/// rule that then fails an [`assume`](TestCase::assume), puts the value
+/// back.
 ///
 /// Both generators are used through [`tc.draw`](TestCase::draw), so the chosen
 /// value is recorded in the failing-test replay and the choice shrinks like any
@@ -253,12 +257,12 @@ fn pool_generate(tc: &TestCase, pool: &crate::ffi::PoolHandle, consume: bool) ->
 impl<T> Pool<T> {
     /// Returns true if no values are in the pool.
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.len() == 0
     }
 
     /// Number of values currently in the pool.
     pub fn len(&self) -> usize {
-        self.values.len()
+        self.pool.len()
     }
 
     /// Add a value to the pool.
@@ -287,13 +291,14 @@ impl<T> Pool<T> {
 
     /// A generator that consumes values from the pool.
     ///
-    /// Drawing from it removes a value from the pool and yields it by value.
-    /// Once consumed, that value is never drawn again. Drawing rejects the
+    /// Drawing from it removes a value from the pool and yields a clone of
+    /// it. Once consumed, that value is never drawn again unless the draw
+    /// that consumed it is discarded (see [`Pool`]). Drawing rejects the
     /// current test case (as if by `assume(false)`) when the pool is empty.
-    pub fn values_consumed(&mut self) -> ValuesConsumed<'_, T> {
+    pub fn values_consumed(&self) -> ValuesConsumed<'_, T> {
         ValuesConsumed {
             pool: &self.pool,
-            values: RefCell::new(&mut self.values),
+            values: &self.values,
         }
     }
 }
@@ -316,7 +321,6 @@ impl<'a, T> Generator<&'a T> for ValuesReusable<'a, T> {
     }
 
     fn do_draw(&self, tc: &TestCase) -> &'a T {
-        tc.assume(!self.values.is_empty());
         let variable_id = pool_generate(tc, self.pool, false);
         self.values.get(&variable_id).unwrap()
     }
@@ -333,27 +337,28 @@ impl<'a, T: std::fmt::Debug> crate::generators::PrintableGenerator<&'a T>
 /// A generator that consumes values from a [`Pool`], removing each value it
 /// yields.
 ///
-/// Returned by [`Pool::values_consumed`]. Borrows the pool mutably; the inner
-/// [`RefCell`] is what lets it remove a value during a draw, which only has
-/// shared access to the generator.
+/// Returned by [`Pool::values_consumed`]. The pool keeps every value it was
+/// given, since a consuming draw that is later discarded puts its value
+/// back; a draw yields a clone.
 pub struct ValuesConsumed<'a, T> {
     pool: &'a crate::ffi::PoolHandle,
-    values: RefCell<&'a mut HashMap<i64, T>>,
+    values: &'a HashMap<i64, T>,
 }
 
-impl<T> Generator<T> for ValuesConsumed<'_, T> {
+impl<T: Clone> Generator<T> for ValuesConsumed<'_, T> {
     fn label(&self) -> u64 {
         VALUES_CONSUMED_LABEL
     }
 
     fn do_draw(&self, tc: &TestCase) -> T {
-        tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool, true);
-        self.values.borrow_mut().remove(&variable_id).unwrap()
+        self.values.get(&variable_id).unwrap().clone()
     }
 }
 
-impl<T: std::fmt::Debug> crate::generators::PrintableGenerator<T> for ValuesConsumed<'_, T> {
+impl<T: Clone + std::fmt::Debug> crate::generators::PrintableGenerator<T>
+    for ValuesConsumed<'_, T>
+{
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
         crate::generators::draw_and_print_value(self, tc, printer)
     }
@@ -412,12 +417,12 @@ impl<T> ConcurrentPool<T> {
 
     /// Returns true if no values are in the pool.
     pub fn is_empty(&self) -> bool {
-        self.lock().is_empty()
+        self.len() == 0
     }
 
     /// Number of values currently in the pool.
     pub fn len(&self) -> usize {
-        self.lock().len()
+        self.handle.len()
     }
 
     /// Add a value to the pool. `tc` is the calling worker's test case.
@@ -453,10 +458,14 @@ impl<T> ConcurrentPool<T> {
 
     /// A generator that consumes values from the pool.
     ///
-    /// Drawing from it removes a value from the pool and yields it by
-    /// value; the engine consumes the id atomically, so exactly one worker
-    /// receives each value. Drawing rejects the current test case (as if by
-    /// `assume(false)`) when the pool is empty.
+    /// Drawing from it removes a value from the pool and yields a clone of
+    /// it; the engine consumes the id atomically, so exactly one worker
+    /// receives each value. A value only leaves the pool when the draw that
+    /// took it is kept: a consuming draw rejected by a
+    /// [`filter`](Generator::filter), or made by a rule that then fails an
+    /// [`assume`](TestCase::assume), puts the value back. Drawing rejects
+    /// the current test case (as if by `assume(false)`) when the pool is
+    /// empty.
     pub fn values_consumed(&self) -> ConcurrentValuesConsumed<'_, T> {
         ConcurrentValuesConsumed { pool: self }
     }
@@ -495,11 +504,11 @@ pub struct ConcurrentValuesConsumed<'a, T> {
     pool: &'a ConcurrentPool<T>,
 }
 
-impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
+impl<T: Clone> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
-        let mut values = self.pool.lock();
+        let values = self.pool.lock();
         match tc.with_ctc(|ctc| ctc.pool_generate(&self.pool.handle, true)) {
-            Ok(variable_id) => values.remove(&variable_id).unwrap(),
+            Ok(variable_id) => values.get(&variable_id).unwrap().clone(),
             Err(rc) => {
                 drop(values);
                 raise_for_rc(rc)
@@ -508,7 +517,7 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     }
 }
 
-impl<T: std::fmt::Debug> crate::generators::PrintableGenerator<T>
+impl<T: Clone + std::fmt::Debug> crate::generators::PrintableGenerator<T>
     for ConcurrentValuesConsumed<'_, T>
 {
     fn do_draw_and_print(&self, tc: &TestCase, printer: &mut crate::PrettyPrinter) -> T {
