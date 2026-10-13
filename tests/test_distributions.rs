@@ -14,6 +14,22 @@ fn sample<T: Send + 'static>(
     seed: u64,
     draw: impl Fn(&TestCase) -> T + Send + Sync + 'static,
 ) -> Vec<T> {
+    let vs = collect(n, seed, draw);
+    assert!(
+        vs.len() as u64 >= n / 2,
+        "only {} samples collected",
+        vs.len()
+    );
+    vs
+}
+
+/// The values drawn by a run of up to `n` cases; a run over a small finite
+/// space ends early once every input has been tried.
+fn collect<T: Send + 'static>(
+    n: u64,
+    seed: u64,
+    draw: impl Fn(&TestCase) -> T + Send + Sync + 'static,
+) -> Vec<T> {
     let out = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&out);
     Hegel::new(move |tc| {
@@ -28,13 +44,7 @@ fn sample<T: Send + 'static>(
             .suppress_health_check(HealthCheck::all()),
     )
     .run();
-    let vs = Arc::try_unwrap(out).ok().unwrap().into_inner().unwrap();
-    assert!(
-        vs.len() as u64 >= n / 2,
-        "only {} samples collected",
-        vs.len()
-    );
-    vs
+    Arc::try_unwrap(out).ok().unwrap().into_inner().unwrap()
 }
 
 /// Draw a pair per test case: the value under test plus a deliberate second
@@ -99,7 +109,7 @@ mod small_spaces {
         expected: &[T],
         draw: impl Fn(&TestCase) -> T + Send + Sync + 'static,
     ) {
-        let seen: BTreeSet<T> = sample(100, seed, draw).into_iter().collect();
+        let seen: BTreeSet<T> = collect(100, seed, draw).into_iter().collect();
         for value in expected {
             assert!(
                 seen.contains(value),
