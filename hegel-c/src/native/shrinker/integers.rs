@@ -18,6 +18,40 @@ fn low_bits(v: &BigInt, keep: usize) -> BigInt {
     v - &BigInt::from((v >> keep).magnitude() << keep)
 }
 
+/// The largest divisor trial division tries when factoring a distance for
+/// `binary_search_node_towards_zero`'s prime-factor moves; whatever is
+/// left undivided past it is offered as one more factor.
+const TRIAL_DIVISION_LIMIT: u32 = 1000;
+
+/// The distinct prime factors of the positive `v` found by trial division
+/// up to [`TRIAL_DIVISION_LIMIT`], followed by the cofactor they leave
+/// when it is greater than one: a prime, or a product of primes past the
+/// limit. Empty for `v <= 1`.
+fn small_prime_factors(v: &BigInt) -> Vec<BigUint> {
+    let one = BigUint::from(1u32);
+    let zero = BigUint::from(0u32);
+    let mut rest = v.magnitude();
+    let mut factors = Vec::new();
+    let mut d = 2u32;
+    while d <= TRIAL_DIVISION_LIMIT {
+        let divisor = BigUint::from(d);
+        if &divisor * &divisor > rest {
+            break;
+        }
+        if &rest % &divisor == zero {
+            factors.push(divisor.clone());
+            while &rest % &divisor == zero {
+                rest = &rest / &divisor;
+            }
+        }
+        d += 1;
+    }
+    if rest > one {
+        factors.push(rest);
+    }
+    factors
+}
+
 /// `radix^k` for the largest `k` such that `radix^k` divides the positive
 /// `v`: the trailing zeros of `v` written in base `radix`, as a number.
 /// `1` when `v` is not a positive multiple of `radix`.
@@ -137,15 +171,19 @@ impl<'a> Shrinker<'a> {
     /// 1, `d - 1` and `d - 2`, plus `mask_high_bits` (drop the top bits of
     /// the distance — predicates like `x & 0xff == 0x77` stall without it),
     /// the squeeze-into-one-byte probes, the shift-right descent, and
-    /// multiple-subtraction, iterated to a fixpoint. Two moves of Hegel's
+    /// multiple-subtraction, iterated to a fixpoint. Three moves of Hegel's
     /// own sit between the descent and the subtractions: dividing the
-    /// distance by 3, 5, 7 and 10, and dropping every digit but the
-    /// trailing zeros, in decimal and in binary. Halving stays inside a
-    /// failing set of multiples of 1000 only until the power of two runs
-    /// out (from 10^9 it stops at 15_625_000); the odd divisors carry it
-    /// the rest of the way to 1000, unless the remaining factor is a prime
-    /// none of them divides (976_000_000 bottoms out at 61_000), which the
-    /// trailing zeros move drops in one step.
+    /// distance by 3, 5, 7 and 10, dividing it by each of its own prime
+    /// factors past those (found by trial division, see
+    /// [`small_prime_factors`]), and dropping every digit but the trailing
+    /// zeros, in decimal and in binary. Halving stays inside a failing set
+    /// of multiples of 1000 only until the power of two runs out (from 10^9
+    /// it stops at 15_625_000); the odd divisors carry it the rest of the
+    /// way to 1000, unless the remaining factor is a prime none of them
+    /// divides (976_000_000 bottoms out at 61_000), which the trailing
+    /// zeros move drops in one step. The prime-factor move is what gets a
+    /// multiple of six from 78 to 6: no other move lands on a multiple of
+    /// six from there, so 78 was a fixpoint for the pass.
     pub(super) async fn binary_search_integer_towards_zero(&mut self) -> ShrinkResult<()> {
         let mut i = 0;
         while i < self.current_nodes.len() {
@@ -208,6 +246,15 @@ impl<'a> Shrinker<'a> {
                 if quotient.sign() == Sign::Plus {
                     self.try_at_distance(i, &ic, &target, &quotient).await?;
                 }
+            }
+            let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
+            for factor in small_prime_factors(&base) {
+                if factor <= BigUint::from(7u32) {
+                    continue;
+                }
+                let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;
+                let quotient = BigInt::from(&base.magnitude() / &factor);
+                self.try_at_distance(i, &ic, &target, &quotient).await?;
             }
             for radix in [10u32, 2] {
                 let base = self.distance_from(i, &target).ok_or(PassExit::NodeGone)?;

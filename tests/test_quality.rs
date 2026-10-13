@@ -806,3 +806,33 @@ mod collective_minimization {
         );
     }
 }
+
+mod integer_fixpoints {
+    //! A bounded integer's minimisation must not stall on a value none of
+    //! its moves can leave. For a positive multiple of six in `0..=100`,
+    //! 78 was such a fixpoint: halving, the small divisors, the subtractions
+    //! and the bit masks all step off the multiples of six, so a run whose
+    //! first failure was 78 reported 78 instead of 6.
+
+    use super::common::utils::try_measure_failing_run;
+    use hegel::generators as gs;
+
+    #[test]
+    fn test_a_bounded_multiple_of_six_shrinks_to_six_across_seeds() {
+        let mut stalled = Vec::new();
+        for seed in 0..200u64 {
+            let stats = try_measure_failing_run(seed, 500, |tc| {
+                let x: i64 = tc.draw(gs::integers::<i64>().min_value(0).max_value(100));
+                (x > 0 && x % 6 == 0).then(|| x.to_string())
+            });
+            let found = stats.map(|s| s.minimal_repr);
+            if found.as_deref() != Some("6") {
+                stalled.push((seed, found));
+            }
+        }
+        assert!(
+            stalled.is_empty(),
+            "seeds that did not reach 6: {stalled:?}"
+        );
+    }
+}

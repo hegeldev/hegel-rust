@@ -243,3 +243,45 @@ fn integer_shrink_drops_to_the_trailing_zeros_of_a_prime_multiple_in_binary() {
     drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
     assert_eq!(int_value(&shrinker.current_nodes[0]), 1024);
 }
+
+fn multiples_of(m: i128, initial: i128, max: i128) -> Shrinker<'static> {
+    Shrinker::with_probe(
+        Box::new(move |run: ShrinkRun<'_>| match run {
+            ShrinkRun::Full(nodes) => {
+                let v = int_value(&nodes[0]);
+                (v > 0 && v % m == 0, nodes.to_vec(), Spans::new())
+            }
+            ShrinkRun::Probe { .. } => (false, Vec::new(), Spans::new()),
+        }),
+        vec![int_node_st(initial, 0, max, 0)],
+        Spans::new(),
+    )
+}
+
+#[test]
+fn integer_shrink_divides_the_distance_by_a_prime_cofactor() {
+    let mut shrinker = multiples_of(6, 78, 100);
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 6);
+}
+
+#[test]
+fn integer_shrink_divides_the_distance_by_a_repeated_prime_factor() {
+    let mut shrinker = multiples_of(6, 6 * 11 * 11, 1000);
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 6);
+}
+
+#[test]
+fn integer_shrink_divides_the_distance_by_each_prime_factor_in_turn() {
+    let mut shrinker = multiples_of(6, 6 * 11 * 13, 1000);
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 6);
+}
+
+#[test]
+fn integer_shrink_divides_the_distance_by_a_cofactor_past_trial_division() {
+    let mut shrinker = multiples_of(6, 6 * 1009 * 1013, 10_000_000);
+    drive_no_yield(shrinker.binary_search_integer_towards_zero()).unwrap();
+    assert_eq!(int_value(&shrinker.current_nodes[0]), 6);
+}
