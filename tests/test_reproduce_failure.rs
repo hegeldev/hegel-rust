@@ -72,15 +72,18 @@ static ND_FIXTURE_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// Stage 1 nondeterministic fixture: every execution draws the same single
 /// choice, so the passing first execution and the failing second are a
 /// verdict flake on one fingerprint, flipping the run nondeterministic.
-/// From then on the failure reproduces from its choices every time.
+/// From then on the failure reproduces from its choices every time. The
+/// choice is a float because the engine does not track a float draw's
+/// space, so the one-value space is not declared exhausted after the first
+/// execution.
 #[hegel::test(print_blob = true)]
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_print_blob_fixture(tc: TestCase) {
-    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
+    let x: f64 = tc.draw(gs::floats::<f64>().min_value(10.0).max_value(10.0));
     if ND_FIXTURE_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
         return;
     }
-    assert!(x < 10, "x was at least ten");
+    assert!(x < 10.0, "x was at least ten");
 }
 
 /// Stage 2 nondeterministic fixture: replays the v2 blob passed via
@@ -90,8 +93,8 @@ fn nd_repro_print_blob_fixture(tc: TestCase) {
 #[hegel::reproduce_failure(std::env::var("HEGEL_TEST_ND_REPRO_BLOB").unwrap())]
 #[ignore = "fixture: run via exec::self_test"]
 fn nd_repro_replay_fixture(tc: TestCase) {
-    let x: i32 = tc.draw(gs::integers::<i32>().min_value(10).max_value(10));
-    assert!(x < 10, "x was at least ten");
+    let x: f64 = tc.draw(gs::floats::<f64>().min_value(10.0).max_value(10.0));
+    assert!(x < 10.0, "x was at least ten");
 }
 
 /// End-to-end for a nondeterministic run: the failure report carries the

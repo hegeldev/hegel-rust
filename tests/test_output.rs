@@ -46,30 +46,6 @@ fn verbose_verbosity_failing_run_exercises_trying_example_eprintln() {
 }
 
 #[test]
-fn duplicate_stopped_filter_too_much_fires_on_tiny_filtered_domain() {
-    use hegel::generators as gs;
-    use hegel::{Hegel, Settings};
-    let result = std::panic::catch_unwind(|| {
-        Hegel::new(|tc| {
-            let _ = tc.draw(gs::booleans());
-            tc.assume(false);
-        })
-        .settings(Settings::new().test_cases(50).database(None))
-        .run();
-    });
-    let msg = result
-        .expect_err("expected FailedHealthCheck panic")
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        msg.contains("FilterTooMuch") || msg.contains("filtered out"),
-        "expected FilterTooMuch panic, got {:?}",
-        msg
-    );
-}
-
-#[test]
 fn db_replay_drops_corrupted_stored_entry() {
     use hegel::generators as gs;
     use hegel::{Hegel, Settings};

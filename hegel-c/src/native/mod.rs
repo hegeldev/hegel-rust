@@ -11,6 +11,7 @@ pub mod database;
 pub mod draws;
 pub(crate) mod events;
 pub(crate) mod exec_cache;
+pub(crate) mod exhaustion;
 pub mod floats;
 pub(crate) mod graph;
 pub(crate) mod graph_shrink;
