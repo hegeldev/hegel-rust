@@ -515,7 +515,10 @@ impl<'a> Engine<'a> {
                 self.choice_bound(),
                 settings.health_check_suppressed(HealthCheck::LargeInitialTestCase),
             ) {
-                return Err(RunError::HealthCheck(msg));
+                return Err(RunError::HealthCheck(
+                    HealthCheck::LargeInitialTestCase,
+                    msg,
+                ));
             }
         }
 
@@ -579,22 +582,25 @@ impl<'a> Engine<'a> {
                         && self.valid_test_cases < HEALTH_CHECK_MAX_VALID
                         && !settings.health_check_suppressed(HealthCheck::FilterTooMuch)
                     {
-                        return Err(RunError::HealthCheck(format!(
-                            "FailedHealthCheck: FilterTooMuch — it looks like this \
+                        return Err(RunError::HealthCheck(
+                            HealthCheck::FilterTooMuch,
+                            format!(
+                                "FailedHealthCheck: FilterTooMuch — it looks like this \
                          test is filtering out too many inputs. \
                          {} inputs were rejected by assume() or a filter \
                          while only {} valid inputs were \
                          generated. If this is expected, suppress the FilterTooMuch \
                          health check with the suppress_health_check setting.",
-                            self.invalid_test_cases, self.valid_test_cases
-                        )));
+                                self.invalid_test_cases, self.valid_test_cases
+                            ),
+                        ));
                     }
                     if let Some(msg) = too_large_check(
                         self.valid_test_cases,
                         self.overrun_test_cases,
                         settings.health_check_suppressed(HealthCheck::TestCasesTooLarge),
                     ) {
-                        return Err(RunError::HealthCheck(msg));
+                        return Err(RunError::HealthCheck(HealthCheck::TestCasesTooLarge, msg));
                     }
 
                     if let Some(msg) = too_slow_check(
@@ -603,7 +609,7 @@ impl<'a> Engine<'a> {
                         too_slow_threshold,
                         settings.health_check_suppressed(HealthCheck::TooSlow),
                     ) {
-                        return Err(RunError::HealthCheck(msg));
+                        return Err(RunError::HealthCheck(HealthCheck::TooSlow, msg));
                     }
                 }
 

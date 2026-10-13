@@ -397,7 +397,8 @@ pub enum hegel_run_status_t {
     /// The run itself failed — a failed health check, a nondeterminism
     /// abort under `error` strictness, a violated engine invariant — and
     /// produced no verdict on the property. There are no failures to
-    /// inspect; read the message with `hegel_run_result_error`.
+    /// inspect; read the kind with `hegel_run_result_error_kind` and the
+    /// message with `hegel_run_result_error`.
     ///
     /// A failing nondeterministic run reports plain
     /// `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
@@ -406,6 +407,37 @@ pub enum hegel_run_status_t {
     /// running the stamped test cases (see
     /// `hegel_test_case_should_capture`).
     HEGEL_RUN_STATUS_ERROR = 2,
+}
+
+/// Why a run ended in `HEGEL_RUN_STATUS_ERROR`, read via
+/// `hegel_run_result_error_kind`. The message from `hegel_run_result_error`
+/// is for people; this is for the binding to pick which error to raise
+/// without parsing it.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(non_camel_case_types)]
+pub enum hegel_run_error_kind_t {
+    /// The run did not error: its status is not `HEGEL_RUN_STATUS_ERROR`.
+    HEGEL_RUN_ERROR_NONE = 0,
+    /// A health check failed; `hegel_run_result_error_kind` also names
+    /// which one as a `hegel_health_check_t` value.
+    HEGEL_RUN_ERROR_HEALTH_CHECK = 1,
+    /// Under `HEGEL_NONDETERMINISM_ERROR`, the test produced different
+    /// outcomes when replayed on identical data.
+    HEGEL_RUN_ERROR_FLAKY = 2,
+    /// Under `HEGEL_NONDETERMINISM_ERROR`, data generation diverged when
+    /// the same choice sequence was replayed.
+    HEGEL_RUN_ERROR_NONDETERMINISTIC = 3,
+    /// The test's assumptions could not be satisfied: no valid test case
+    /// was ever generated.
+    HEGEL_RUN_ERROR_UNSATISFIABLE = 4,
+    /// The caller misused libhegel at run scope — violated the driving
+    /// contract or launched the process with an invalid configuration. The
+    /// message says what to fix.
+    HEGEL_RUN_ERROR_USAGE = 5,
+    /// A violated internal invariant of libhegel: a bug in Hegel, with the
+    /// bug-report framing in the message.
+    HEGEL_RUN_ERROR_INTERNAL = 6,
 }
 
 /// Verbosity of engine-emitted output (logs, per-case traces). Set via
@@ -860,10 +892,42 @@ impl HegelRun {
 pub struct HegelRunResult {
     failures: Vec<HegelFailure>,
     /// `Some` iff the run ended in a run-level error instead of a verdict.
-    error: Option<CString>,
+    error: Option<HegelRunError>,
     /// The highest score observed per `hegel_target` label, sorted by
     /// label; read via `hegel_run_result_target_score`.
     target_scores: Vec<(CString, f64)>,
+}
+
+/// A run-level error as the C ABI reports it: the kind and, for a failed
+/// health check, which one, alongside the message.
+#[derive(Clone)]
+struct HegelRunError {
+    kind: hegel_run_error_kind_t,
+    /// The `hegel_health_check_t` flag of the failed check, or 0 when the
+    /// error is not a health check.
+    health_check: u32,
+    message: CString,
+}
+
+impl From<&RunError> for HegelRunError {
+    fn from(e: &RunError) -> Self {
+        use hegel_run_error_kind_t::*;
+        let (kind, health_check) = match e {
+            RunError::HealthCheck(check, _) => {
+                (HEGEL_RUN_ERROR_HEALTH_CHECK, health_check_bits(&[*check]))
+            }
+            RunError::Flaky(_) => (HEGEL_RUN_ERROR_FLAKY, 0),
+            RunError::NonDeterministic(_) => (HEGEL_RUN_ERROR_NONDETERMINISTIC, 0),
+            RunError::Unsatisfiable(_) => (HEGEL_RUN_ERROR_UNSATISFIABLE, 0),
+            RunError::UsageError(_) => (HEGEL_RUN_ERROR_USAGE, 0),
+            RunError::Internal(_) => (HEGEL_RUN_ERROR_INTERNAL, 0),
+        };
+        HegelRunError {
+            kind,
+            health_check,
+            message: cstring_lossy(&e.to_string()),
+        }
+    }
 }
 
 /// One distinct interesting test case surfaced by the run.
@@ -916,12 +980,13 @@ impl From<TestRunResult> for HegelRunResult {
 }
 
 impl HegelRunResult {
-    /// A run that ended in a run-level error: no failures, with the
-    /// message exposed via `hegel_run_result_error`.
-    fn from_error(message: &str) -> Self {
+    /// A run that ended in a run-level error: no failures, with the kind
+    /// exposed via `hegel_run_result_error_kind` and the message via
+    /// `hegel_run_result_error`.
+    fn from_error(e: &RunError) -> Self {
         HegelRunResult {
             failures: Vec::new(),
-            error: Some(cstring_lossy(message)),
+            error: Some(HegelRunError::from(e)),
             target_scores: Vec::new(),
         }
     }
@@ -2274,14 +2339,14 @@ pub unsafe extern "C" fn hegel_next_test_case(
                 HEGEL_OK
             }
             Err(e) => {
-                run.finish(HegelRunResult::from_error(&e.to_string()));
+                run.finish(HegelRunResult::from_error(&RunError::from(e)));
                 HEGEL_OK
             }
         },
         Poll::Ready(r) => {
             run.finish(match r {
                 Ok(r) => HegelRunResult::from(r),
-                Err(run_error) => HegelRunResult::from_error(&run_error.to_string()),
+                Err(run_error) => HegelRunResult::from_error(&run_error),
             });
             HEGEL_OK
         }
@@ -6406,7 +6471,9 @@ pub unsafe extern "C" fn hegel_run_result_status(
 /// `out_error`: Receives the run-level error message when the run
 ///   errored — a failed health check, a nondeterministic test, a violated
 ///   engine invariant — or NULL when it completed normally. Owned by the
-///   run result and valid until `hegel_run_result_free`.
+///   run result and valid until `hegel_run_result_free`. The message is
+///   for people; classify the error with `hegel_run_result_error_kind`
+///   rather than by its wording, which may change between releases.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
@@ -6424,7 +6491,51 @@ pub unsafe extern "C" fn hegel_run_result_error(
         set_last_error(ctx, "hegel_run_result_error: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_error = r.error.as_ref().map(|e| e.as_ptr()).unwrap_or(ptr::null()) };
+    unsafe {
+        *out_error = r
+            .error
+            .as_ref()
+            .map(|e| e.message.as_ptr())
+            .unwrap_or(ptr::null())
+    };
+    HEGEL_OK
+}
+
+/// Parameters:
+/// `out_kind`: Receives why the run errored, or `HEGEL_RUN_ERROR_NONE`
+///   when its status is not `HEGEL_RUN_STATUS_ERROR`.
+/// `out_health_check`: Receives the `hegel_health_check_t` value of the
+///   check that failed when the kind is `HEGEL_RUN_ERROR_HEALTH_CHECK`, or
+///   0 for every other kind.
+///
+/// Returns `HEGEL_OK`.
+///
+/// Use this to choose which error to raise for an errored run; the message
+/// from `hegel_run_result_error` is the diagnostic to attach to it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_result_error_kind(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+    out_kind: *mut hegel_run_error_kind_t,
+    out_health_check: *mut u32,
+) -> hegel_result_t {
+    clear_last_error(ctx);
+    let r = match unsafe { result_ref(ctx, r, "hegel_run_result_error_kind") } {
+        Ok(r) => r,
+        Err(rc) => return rc,
+    };
+    if out_kind.is_null() || out_health_check.is_null() {
+        set_last_error(ctx, "hegel_run_result_error_kind: out parameter is null");
+        return HEGEL_E_INVALID_ARG;
+    }
+    let (kind, health_check) = match &r.error {
+        Some(e) => (e.kind, e.health_check),
+        None => (hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONE, 0),
+    };
+    unsafe {
+        *out_kind = kind;
+        *out_health_check = health_check;
+    }
     HEGEL_OK
 }
 

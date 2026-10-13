@@ -621,7 +621,8 @@ fn filter_too_much_fires_on_an_all_invalid_wide_space() {
         TestCaseResult::Invalid,
     );
     match result {
-        Err(RunError::HealthCheck(msg)) => {
+        Err(RunError::HealthCheck(check, msg)) => {
+            assert_eq!(check, HealthCheck::FilterTooMuch);
             assert!(msg.contains("FilterTooMuch"), "{msg}");
             assert!(
                 msg.contains(
@@ -1606,7 +1607,8 @@ fn run_main_reports_too_slow_at_call_site() {
     );
     let result = exploration;
     match result {
-        Err(crate::backend::RunError::HealthCheck(msg)) => {
+        Err(crate::backend::RunError::HealthCheck(check, msg)) => {
+            assert_eq!(check, HealthCheck::TooSlow);
             assert!(msg.contains("TooSlow"), "unexpected message: {msg}");
         }
         other => panic!("expected RunError::HealthCheck, got {other:?}"),

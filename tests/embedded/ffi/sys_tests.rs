@@ -165,6 +165,15 @@ mod drift {
             HEGEL_RUN_STATUS_FAILED,
             HEGEL_RUN_STATUS_ERROR,
         }
+        hegel_run_error_kind_t {
+            HEGEL_RUN_ERROR_NONE,
+            HEGEL_RUN_ERROR_HEALTH_CHECK,
+            HEGEL_RUN_ERROR_FLAKY,
+            HEGEL_RUN_ERROR_NONDETERMINISTIC,
+            HEGEL_RUN_ERROR_UNSATISFIABLE,
+            HEGEL_RUN_ERROR_USAGE,
+            HEGEL_RUN_ERROR_INTERNAL,
+        }
         hegel_verbosity_t {
             HEGEL_VERBOSITY_QUIET,
             HEGEL_VERBOSITY_NORMAL,
