@@ -839,6 +839,89 @@ fn span_mutation_handles_same_label_spans_sharing_a_start() {
     );
 }
 
+/// Two same-label spans whose first draws are of different kinds come from
+/// differently parameterised generators (frontends label every integer
+/// range alike): copying one's values onto the other could only misfit, so
+/// no proposal is executed.
+#[test]
+fn span_mutation_skips_spans_whose_first_draws_differ_in_kind() {
+    with_counting_ctx(
+        |ds| match (rint(ds, 0, 1), rint(ds, 0, 3)) {
+            (Ok(_), Ok(_)) => TestCaseResult::Valid,
+            _ => TestCaseResult::Overrun,
+        },
+        async |ctx, count| {
+            let node = |max: i128, value: i128| {
+                ChoiceNode::integer(
+                    crate::native::core::choices::IntegerChoice {
+                        min_value: BigInt::from(0),
+                        max_value: BigInt::from(max),
+                        shrink_towards: BigInt::from(0),
+                    },
+                    BigInt::from(value),
+                    false,
+                )
+            };
+            let nodes = vec![node(1, 1), node(3, 3)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: 1,
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 1), span(1, 2)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+
+            assert_eq!(count.get(), 0);
+            assert_eq!(ctx.calls, 0);
+            assert_eq!(ctx.valid_test_cases, 0);
+        },
+    );
+}
+
+/// A proposal whose values were already executed to a conclusion teaches
+/// nothing, so it is skipped rather than re-run: with both of a pair's
+/// proposals recorded, every attempt is free, and with neither recorded
+/// each distinct proposal runs at most once.
+#[test]
+fn span_mutation_skips_proposals_already_executed() {
+    with_counting_ctx(
+        |ds| match (rbool(ds), rbool(ds)) {
+            (Ok(_), Ok(_)) => TestCaseResult::Valid,
+            _ => TestCaseResult::Overrun,
+        },
+        async |ctx, count| {
+            let nodes = vec![bool_node(false), bool_node(true)];
+            let span = |start, end| Span {
+                start,
+                end,
+                label: 1,
+                depth: 0,
+                parent: None,
+                discarded: false,
+            };
+            let spans = vec![span(0, 1), span(1, 2)];
+
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+            assert!((1..=2).contains(&count.get()), "{} executions", count.get());
+            assert_eq!(ctx.calls as usize, count.get());
+
+            for value in [false, true] {
+                let choices = [ChoiceValue::Boolean(value), ChoiceValue::Boolean(value)];
+                ctx.test_function(NativeTestCase::for_choices(&choices, None, None))
+                    .await
+                    .unwrap();
+            }
+            let before = count.get();
+            ctx.try_span_mutation(&nodes, &spans).await.unwrap();
+            assert_eq!(count.get(), before);
+        },
+    );
+}
+
 #[test]
 fn span_mutation_stops_when_example_budget_is_full() {
     with_counting_ctx(

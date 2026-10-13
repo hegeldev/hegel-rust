@@ -689,7 +689,10 @@ pub(crate) fn biased_integer_sample(
 ) -> Result<BigInt, InternalError> {
     Ok(match (ic.min_value.to_i128(), ic.max_value.to_i128()) {
         (Some(min_i), Some(max_i)) => BigInt::from(biased_i128_sample(min_i, max_i, rng, params)?),
-        _ => biguint_sample_in_range(&ic.min_value, &ic.max_value, rng, params),
+        _ => {
+            let center = ic.clamped_shrink_towards();
+            biguint_sample_in_range(&ic.min_value, &ic.max_value, &center, rng, params)?
+        }
     })
 }
 
@@ -807,16 +810,19 @@ fn biased_i128_sample(
 /// Boundary-biased sample for an integer range too wide for `i128` (a `BigInt`
 /// choice, or a `u128` range past `i128::MAX`). Uses the same four-category
 /// mixture as [`biased_i128_sample`] (endpoints, interesting, diffuse, middle),
-/// weighted by this case's [`IntegerGenerationParameters`]; the middle draws a
-/// roughly-uniform value via rejection sampling over the span's bit length.
+/// weighted by this case's [`IntegerGenerationParameters`]; the middle is an
+/// offset from `center` (the choice's clamped shrink target) whose bit width
+/// follows [`INTEGERS_DISTRIBUTION`], so magnitudes spread over the range's
+/// orders as they do below `i128` rather than piling up at the top.
 fn biguint_sample_in_range(
     min: &BigInt,
     max: &BigInt,
+    center: &BigInt,
     rng: &mut EngineRng,
     params: IntegerGenerationParameters,
-) -> BigInt {
+) -> Result<BigInt, InternalError> {
     if min == max {
-        return min.clone();
+        return Ok(min.clone());
     }
     let span: BigUint = (max - min).magnitude();
     let bits = span.bits();
@@ -857,7 +863,7 @@ fn biguint_sample_in_range(
     let u = rng.random::<f64>();
     let mut acc = params.endpoint_probability;
     if u < acc && !endpoints.is_empty() {
-        return endpoints[rng.random_range(0..endpoints.len())].clone();
+        return Ok(endpoints[rng.random_range(0..endpoints.len())].clone());
     }
     acc += params.interesting_probability;
     if u < acc {
@@ -871,40 +877,63 @@ fn biguint_sample_in_range(
             }
         }
         if !interesting.is_empty() {
-            return interesting[rng.random_range(0..interesting.len())].clone();
+            return Ok(interesting[rng.random_range(0..interesting.len())].clone());
         }
     }
     acc += params.diffuse_probability;
     if u < acc && !diffuse.is_empty() {
-        return diffuse[rng.random_range(0..diffuse.len())].clone();
+        return Ok(diffuse[rng.random_range(0..diffuse.len())].clone());
     }
 
-    min + BigInt::from(sample_biguint_at_most(&span, rng))
+    let below: BigUint = (center - min).magnitude();
+    let above: BigUint = (max - center).magnitude();
+    let magnitude = sample_biguint_shaped(core::cmp::max(&below, &above), rng)?;
+    let fits_below = magnitude <= below;
+    let fits_above = magnitude <= above;
+    let go_below = fits_below && (!fits_above || rng.random::<bool>());
+    Ok(if go_below {
+        center - BigInt::from(magnitude)
+    } else {
+        center + BigInt::from(magnitude)
+    })
 }
 
-/// Uniformly draw a [`BigUint`] in `[0, span]` by rejection sampling masked
-/// `span.bits()`-bit values. The acceptance probability is at least 1/2 per
-/// attempt (the mask bounds candidates to `[0, 2^bits - 1]` and `span >=
-/// 2^(bits-1)`), so this terminates quickly. Callers (only
-/// [`biguint_sample_in_range`], past its `min == max` early return) always pass
-/// a strictly positive span, so `bits >= 1`.
-fn sample_biguint_at_most(span: &BigUint, rng: &mut EngineRng) -> BigUint {
+/// Draw a [`BigUint`] at most `span` whose bit width is shaped like the
+/// narrow-range middle: the width is that of a magnitude from
+/// [`INTEGERS_DISTRIBUTION`] restricted to `[0, 2^bits)` (so small widths
+/// dominate and every order up to the span's stays reachable), and the value
+/// is uniform among those of that width, redrawn while above `span`. Only a
+/// full-width candidate can exceed `span`, and it does so with probability
+/// below 1/2, so this terminates quickly. `span` is strictly positive here.
+fn sample_biguint_shaped(span: &BigUint, rng: &mut EngineRng) -> Result<BigUint, InternalError> {
     let bits = span.bits();
-    if bits == 0 {
-        unreachable!("sample_biguint_at_most requires a positive span");
-    }
-    let n_bytes = bits.div_ceil(8) as usize;
-    let top_bits = (bits % 8) as u32;
+    let dist = INTEGERS_DISTRIBUTION.as_ref().map_err(Clone::clone)?;
+    let top = if bits >= f64::MAX_EXP as u64 {
+        f64::MAX
+    } else {
+        libm::pow(2.0, bits as f64)
+    };
+    let lo = dist.cdf(-0.5)?;
+    let hi = dist.cdf(top)?;
     loop {
-        let mut bytes: Vec<u8> = (0..n_bytes).map(|_| rng.random::<u8>()).collect();
-        if top_bits != 0 {
-            let mask = (1u8 << top_bits) - 1;
-            let last = bytes.len() - 1;
-            bytes[last] &= mask;
+        let p = lo + rng.random::<f64>() * (hi - lo);
+        let magnitude = libm::round(dist.inverse_cdf(p)?);
+        let width = if magnitude < 1.0 {
+            0
+        } else {
+            (libm::floor(libm::log2(magnitude)) as u64 + 1).min(bits)
+        };
+        if width == 0 {
+            return Ok(BigUint::from(0u32));
         }
+        let mut bytes: Vec<u8> = (0..width.div_ceil(8)).map(|_| rng.random::<u8>()).collect();
+        let last = bytes.len() - 1;
+        let top_bit = ((width - 1) % 8) as u8;
+        bytes[last] &= (1u8 << top_bit) | ((1u8 << top_bit) - 1);
+        bytes[last] |= 1u8 << top_bit;
         let candidate = BigUint::from_bytes_le(&bytes);
         if &candidate <= span {
-            return candidate;
+            return Ok(candidate);
         }
     }
 }

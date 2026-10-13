@@ -9,4 +9,5 @@ mod arithmetic;
 mod collections;
 mod floats;
 mod pbtsmith_regressions;
+mod recursive;
 mod types;

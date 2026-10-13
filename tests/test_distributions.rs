@@ -82,6 +82,67 @@ fn assert_rate_between<T>(vs: &[T], pred: impl Fn(&T) -> bool, min: f64, max: f6
     );
 }
 
+/// Every value of a small finite space turns up within a hundred cases, so
+/// span mutation (which copies one draw's value onto another span of the
+/// same label) leaves fresh generation with the bulk of the budget and
+/// never collapses draws to the simplest value.
+mod small_spaces {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    const SEEDS: [u64; 20] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 27,
+    ];
+
+    fn assert_each_seen<T: Clone + Ord + std::fmt::Debug + Send + 'static>(
+        seed: u64,
+        expected: &[T],
+        draw: impl Fn(&TestCase) -> T + Send + Sync + 'static,
+    ) {
+        let seen: BTreeSet<T> = sample(100, seed, draw).into_iter().collect();
+        for value in expected {
+            assert!(
+                seen.contains(value),
+                "seed {seed}: {value:?} missing from {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_of_over_eight_values_reaches_every_value() {
+        for seed in SEEDS {
+            assert_each_seen(seed, &(0..8u8).collect::<Vec<_>>(), |tc| {
+                tc.draw_silent(gs::one_of(vec![
+                    gs::sampled_from(vec![0u8, 1, 2, 3]).boxed(),
+                    gs::sampled_from(vec![4u8, 5, 6, 7]).boxed(),
+                ]))
+            });
+        }
+    }
+
+    #[test]
+    fn one_of_a_sample_and_a_set_sum_reaches_every_sample() {
+        let expected = ["a", "b", "c", "empty"].map(String::from);
+        for seed in SEEDS {
+            assert_each_seen(seed, &expected, |tc| {
+                tc.draw_silent(gs::one_of(vec![
+                    gs::sampled_from(["a", "b", "c", "empty"].map(String::from).to_vec()).boxed(),
+                    gs::integers::<usize>()
+                        .min_value(1)
+                        .max_value(3)
+                        .flat_map(|r| {
+                            gs::btree_sets(gs::sampled_from(vec![1u32, 2, 4]))
+                                .min_size(r)
+                                .max_size(r)
+                        })
+                        .map(|s| s.iter().sum::<u32>().to_string())
+                        .boxed(),
+                ]))
+            });
+        }
+    }
+}
+
 mod integers {
     use super::*;
 

@@ -177,6 +177,12 @@ impl ExecCache {
         recorded
     }
 
+    /// Whether the serialized values `key` have been executed to a
+    /// conclusion before, whatever that conclusion was.
+    pub(crate) fn seen(&self, key: &[u8]) -> bool {
+        self.verdicts.contains_key(&Digest::of(key))
+    }
+
     /// The full entry for `key`, if one survives: an exact repeat of an
     /// executed conclusion, servable without running the body.
     pub(crate) fn serve(&self, key: &[u8]) -> Option<CachedRun> {
