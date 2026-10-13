@@ -120,6 +120,48 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     assert!(result.error().is_none());
 }
 
+/// The run error kind and failed health check of `result`, read through
+/// the frontend's binding of `hegel_run_result_error_kind`.
+fn error_kind(result: &RunResult) -> (hegel_c::hegel_run_error_kind_t, u32) {
+    let mut kind = hegel_c::hegel_run_error_kind_t::HEGEL_RUN_ERROR_INTERNAL;
+    let mut health_check = u32::MAX;
+    require_ok(with_context(|ctx| unsafe {
+        hegel_c::hegel_run_result_error_kind(ctx, result.raw, &mut kind, &mut health_check)
+    }));
+    (kind, health_check)
+}
+
+#[test]
+fn ffi_reads_the_structured_kind_of_a_run_error() {
+    let sh = SettingsHandle::build(&test_settings(3), None, None);
+    let run = RunHandle::start(&sh, None).unwrap();
+    while let Some(tc) = run.next_test_case() {
+        tc.generate_integer(0, 1_000_000).unwrap();
+        tc.mark_complete(hegel_c::hegel_status_t::HEGEL_STATUS_INVALID, None)
+            .unwrap();
+    }
+    let result = run.result();
+    assert!(result.status() == hegel_c::hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+    assert!(result.error().unwrap().contains("FilterTooMuch"));
+    assert_eq!(
+        error_kind(&result),
+        (
+            hegel_c::hegel_run_error_kind_t::HEGEL_RUN_ERROR_HEALTH_CHECK,
+            hegel_c::hegel_health_check_t::HEGEL_HC_FILTER_TOO_MUCH as u32,
+        )
+    );
+
+    let sh = SettingsHandle::build(&test_settings(3), None, None);
+    let run = RunHandle::start(&sh, None).unwrap();
+    drive_run(&run, |_| Ok(()));
+    let result = run.result();
+    assert!(result.error().is_none());
+    assert_eq!(
+        error_kind(&result),
+        (hegel_c::hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONE, 0)
+    );
+}
+
 /// The collection / pool / state-machine constructors surface libhegel's
 /// error code instead of a handle: on a completed test case each returns
 /// `HEGEL_E_ALREADY_COMPLETE`.

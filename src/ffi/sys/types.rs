@@ -84,6 +84,18 @@ pub(crate) enum hegel_run_status_t {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum hegel_run_error_kind_t {
+    HEGEL_RUN_ERROR_NONE = 0,
+    HEGEL_RUN_ERROR_HEALTH_CHECK = 1,
+    HEGEL_RUN_ERROR_FLAKY = 2,
+    HEGEL_RUN_ERROR_NONDETERMINISTIC = 3,
+    HEGEL_RUN_ERROR_UNSATISFIABLE = 4,
+    HEGEL_RUN_ERROR_USAGE = 5,
+    HEGEL_RUN_ERROR_INTERNAL = 6,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub(crate) enum hegel_verbosity_t {
     HEGEL_VERBOSITY_NORMAL = 0,

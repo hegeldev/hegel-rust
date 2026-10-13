@@ -25,11 +25,11 @@ use hegel_c::{
     hegel_new_pool, hegel_new_recursion, hegel_new_state_machine, hegel_next_test_case,
     hegel_pool_add, hegel_pool_free, hegel_pool_generate, hegel_recursion_branch,
     hegel_recursion_finish, hegel_recursion_free, hegel_recursion_leaf, hegel_recursion_retry,
-    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_start_blob, hegel_run_status_t, hegel_settings_free,
-    hegel_settings_new, hegel_settings_set_backend, hegel_settings_set_database,
-    hegel_settings_set_database_key, hegel_settings_set_phases,
+    hegel_run_error_kind_t, hegel_run_free, hegel_run_result, hegel_run_result_error,
+    hegel_run_result_error_kind, hegel_run_result_failure, hegel_run_result_failure_count,
+    hegel_run_result_free, hegel_run_result_status, hegel_run_start, hegel_run_start_blob,
+    hegel_run_status_t, hegel_settings_free, hegel_settings_new, hegel_settings_set_backend,
+    hegel_settings_set_database, hegel_settings_set_database_key, hegel_settings_set_phases,
     hegel_settings_set_report_multiple_failures, hegel_settings_set_suppress_health_check,
     hegel_settings_set_test_location, hegel_start_span, hegel_state_machine_free,
     hegel_state_machine_next_group, hegel_state_machine_next_rule,
@@ -107,6 +107,199 @@ unsafe fn run_error_of(ctx: *mut HegelContext, r: *const HegelRunResult) -> *con
     let mut p: *const c_char = ptr::null();
     assert_eq!(unsafe { hegel_run_result_error(ctx, r, &mut p) }, HEGEL_OK);
     p
+}
+
+/// The kind of a run-level error and the `hegel_health_check_t` bit of the
+/// failed check (0 unless the kind is a health check).
+unsafe fn run_error_kind_of(
+    ctx: *mut HegelContext,
+    r: *const HegelRunResult,
+) -> (hegel_run_error_kind_t, u32) {
+    let mut kind = hegel_run_error_kind_t::HEGEL_RUN_ERROR_INTERNAL;
+    let mut health_check = u32::MAX;
+    assert_eq!(
+        unsafe { hegel_run_result_error_kind(ctx, r, &mut kind, &mut health_check) },
+        HEGEL_OK
+    );
+    (kind, health_check)
+}
+
+/// Drive `run` to completion, concluding each case with `conclude`, and
+/// return the errored result's kind, failed health check, and message.
+unsafe fn drive_to_error(
+    ctx: *mut HegelContext,
+    run: *mut HegelRun,
+    mut conclude: impl FnMut(*mut HegelTestCase) -> (hegel_status_t, *const c_char),
+) -> (hegel_run_error_kind_t, u32, String) {
+    loop {
+        let tc = unsafe { next_case(ctx, run) };
+        if tc.is_null() {
+            break;
+        }
+        let (status, origin) = conclude(tc);
+        unsafe {
+            ok(hegel_mark_complete(ctx, tc, status as u32, origin));
+            ok(hegel_test_case_free(ctx, tc));
+        }
+    }
+    let r = unsafe { result(ctx, run) };
+    assert!(unsafe { status_of(ctx, r) } == hegel_run_status_t::HEGEL_RUN_STATUS_ERROR);
+    assert_eq!(unsafe { failure_count_of(ctx, r) }, 0);
+    let message = unsafe { std::ffi::CStr::from_ptr(run_error_of(ctx, r)) }
+        .to_string_lossy()
+        .into_owned();
+    let (kind, health_check) = unsafe { run_error_kind_of(ctx, r) };
+    unsafe { ok(hegel_run_result_free(ctx, r)) };
+    (kind, health_check, message)
+}
+
+/// Each health check a driven run can fail reports
+/// `HEGEL_RUN_ERROR_HEALTH_CHECK` with its own `hegel_health_check_t` bit,
+/// while the message keeps naming the check. (TooSlow needs thirty seconds
+/// of test time; its mapping is covered with the engine's own test.)
+#[test]
+fn failed_health_checks_report_their_kind_and_check() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        let run = start(ctx, s);
+        let (kind, check, message) = drive_to_error(ctx, run, |tc| {
+            let mut n = 0i64;
+            ok(hegel_generate_integer(ctx, tc, 0, 1_000_000, &mut n));
+            (hegel_status_t::HEGEL_STATUS_INVALID, ptr::null())
+        });
+        assert_eq!(kind, hegel_run_error_kind_t::HEGEL_RUN_ERROR_HEALTH_CHECK);
+        assert_eq!(
+            check,
+            hegel_c::hegel_health_check_t::HEGEL_HC_FILTER_TOO_MUCH as u32
+        );
+        assert!(message.contains("FilterTooMuch"), "{message}");
+        ok(hegel_run_free(ctx, run));
+
+        ok(hegel_settings_set_suppress_health_check(
+            ctx,
+            s,
+            hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32
+                | hegel_c::hegel_health_check_t::HEGEL_HC_TOO_SLOW as u32,
+        ));
+        let run = start(ctx, s);
+        let (kind, check, message) = drive_to_error(ctx, run, |tc| {
+            let mut value = false;
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+            (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+        });
+        assert_eq!(kind, hegel_run_error_kind_t::HEGEL_RUN_ERROR_HEALTH_CHECK);
+        assert_eq!(
+            check,
+            hegel_c::hegel_health_check_t::HEGEL_HC_TEST_CASES_TOO_LARGE as u32
+        );
+        assert!(message.contains("TestCasesTooLarge"), "{message}");
+        ok(hegel_run_free(ctx, run));
+
+        ok(hegel_settings_set_suppress_health_check(ctx, s, 0));
+        let run = start(ctx, s);
+        let (kind, check, message) = drive_to_error(ctx, run, |tc| {
+            let mut value = false;
+            while hegel_generate_boolean(ctx, tc, 0.5, false, false, &mut value) == HEGEL_OK {}
+            (hegel_status_t::HEGEL_STATUS_OVERRUN, ptr::null())
+        });
+        assert_eq!(kind, hegel_run_error_kind_t::HEGEL_RUN_ERROR_HEALTH_CHECK);
+        assert_eq!(
+            check,
+            hegel_c::hegel_health_check_t::HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32
+        );
+        assert!(message.contains("LargeInitialTestCase"), "{message}");
+        ok(hegel_run_free(ctx, run));
+
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// A run that never produces a valid case is `HEGEL_RUN_ERROR_UNSATISFIABLE`,
+/// with no health check named.
+#[test]
+fn an_unsatisfiable_run_reports_its_kind() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        let run = start(ctx, s);
+        let (kind, check, message) = drive_to_error(ctx, run, |_| {
+            (hegel_status_t::HEGEL_STATUS_INVALID, ptr::null())
+        });
+        assert_eq!(kind, hegel_run_error_kind_t::HEGEL_RUN_ERROR_UNSATISFIABLE);
+        assert_eq!(check, 0);
+        assert!(message.contains("Unsatisfiable"), "{message}");
+        ok(hegel_run_free(ctx, run));
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
+}
+
+/// Under `HEGEL_NONDETERMINISM_ERROR`, a failure that does not reproduce on
+/// replay is `HEGEL_RUN_ERROR_FLAKY`, and a replay that draws differently
+/// from the recorded case is `HEGEL_RUN_ERROR_NONDETERMINISTIC`.
+#[test]
+fn strict_nondeterminism_errors_report_their_kind() {
+    let origin = CString::new("the bug").unwrap();
+    let ctx = hegel_context_new();
+    unsafe {
+        let s = make_settings_no_db(ctx);
+        ok(hegel_c::hegel_settings_set_seed(ctx, s, 1, true));
+        ok(hegel_c::hegel_settings_set_nondeterminism_strictness(
+            ctx,
+            s,
+            hegel_c::hegel_nondeterminism_strictness_t::HEGEL_NONDETERMINISM_ERROR as u32,
+        ));
+
+        let run = start(ctx, s);
+        let mut calls = 0;
+        let (kind, check, message) = drive_to_error(ctx, run, |tc| {
+            let mut value = false;
+            ok(hegel_generate_boolean(
+                ctx, tc, 0.5, false, false, &mut value,
+            ));
+            calls += 1;
+            if calls == 1 {
+                (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+            } else {
+                (hegel_status_t::HEGEL_STATUS_VALID, ptr::null())
+            }
+        });
+        assert_eq!(kind, hegel_run_error_kind_t::HEGEL_RUN_ERROR_FLAKY);
+        assert_eq!(check, 0);
+        assert!(message.contains("Flaky test detected"), "{message}");
+        ok(hegel_run_free(ctx, run));
+
+        let run = start(ctx, s);
+        let mut calls = 0;
+        let (kind, check, message) = drive_to_error(ctx, run, |tc| {
+            calls += 1;
+            if calls == 1 {
+                let mut value = false;
+                ok(hegel_generate_boolean(
+                    ctx, tc, 0.5, false, false, &mut value,
+                ));
+            } else {
+                let mut n = 0i64;
+                ok(hegel_generate_integer(ctx, tc, 0, 100, &mut n));
+            }
+            (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
+        });
+        assert_eq!(
+            kind,
+            hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONDETERMINISTIC
+        );
+        assert_eq!(check, 0);
+        assert!(message.contains("non-deterministic"), "{message}");
+        ok(hegel_run_free(ctx, run));
+
+        ok(hegel_settings_free(ctx, s));
+        ok(hegel_context_free(ctx));
+    }
 }
 
 #[test]
@@ -294,6 +487,12 @@ fn null_handles_are_rejected_without_crashing() {
         let mut p: *const c_char = ptr::null();
         assert_eq!(
             hegel_run_result_error(ctx, ptr::null(), &mut p),
+            HEGEL_E_INVALID_HANDLE
+        );
+        let mut kind = hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONE;
+        let mut health_check = 0u32;
+        assert_eq!(
+            hegel_run_result_error_kind(ctx, ptr::null(), &mut kind, &mut health_check),
             HEGEL_E_INVALID_HANDLE
         );
         let mut n = 0usize;
@@ -495,6 +694,17 @@ fn out_parameters_are_rejected_when_null() {
             hegel_run_result_error(ctx, res, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
+        let mut kind = hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONE;
+        let mut health_check = 0u32;
+        assert_eq!(
+            hegel_run_result_error_kind(ctx, res, ptr::null_mut(), &mut health_check),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_run_result_error_kind(ctx, res, &mut kind, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("hegel_run_result_error_kind: out parameter is null"));
         assert_eq!(
             hegel_run_result_failure_count(ctx, res, ptr::null_mut()),
             HEGEL_E_INVALID_ARG

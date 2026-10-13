@@ -94,6 +94,20 @@ enum CRunStatus {
     Error = 2,
 }
 
+/// `hegel_run_error_kind_t` from hegel.h.
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
+enum CRunErrorKind {
+    None = 0,
+    HealthCheck = 1,
+    Flaky = 2,
+    NonDeterministic = 3,
+    Unsatisfiable = 4,
+    Usage = 5,
+    Internal = 6,
+}
+
 /// `hegel_backend_t` from hegel.h.
 #[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -173,6 +187,8 @@ type FnCollectionMore = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut boo
 type FnCollectionFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnRunResultStatus = unsafe extern "C" fn(*mut u8, *const u8, *mut CRunStatus) -> c_int;
 type FnRunResultError = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
+type FnRunResultErrorKind =
+    unsafe extern "C" fn(*mut u8, *const u8, *mut CRunErrorKind, *mut u32) -> c_int;
 type FnRunResultFailureCount = unsafe extern "C" fn(*mut u8, *const u8, *mut usize) -> c_int;
 type FnRunResultFailure = unsafe extern "C" fn(*mut u8, *const u8, usize, *mut *mut u8) -> c_int;
 type FnFailureOrigin = unsafe extern "C" fn(*mut u8, *const u8, *mut *const c_char) -> c_int;
@@ -222,6 +238,7 @@ struct Api<'a> {
     collection_free: Symbol<'a, FnCollectionFree>,
     run_result_status: Symbol<'a, FnRunResultStatus>,
     run_result_error: Symbol<'a, FnRunResultError>,
+    run_result_error_kind: Symbol<'a, FnRunResultErrorKind>,
     run_result_failure_count: Symbol<'a, FnRunResultFailureCount>,
     run_result_failure: Symbol<'a, FnRunResultFailure>,
     run_result_free: Symbol<'a, FnRunResultFree>,
@@ -269,6 +286,7 @@ unsafe fn bind(lib: &Library) -> Api<'_> {
             collection_free: lib.get(b"hegel_collection_free\0").unwrap(),
             run_result_status: lib.get(b"hegel_run_result_status\0").unwrap(),
             run_result_error: lib.get(b"hegel_run_result_error\0").unwrap(),
+            run_result_error_kind: lib.get(b"hegel_run_result_error_kind\0").unwrap(),
             run_result_failure_count: lib.get(b"hegel_run_result_failure_count\0").unwrap(),
             run_result_failure: lib.get(b"hegel_run_result_failure\0").unwrap(),
             run_result_free: lib.get(b"hegel_run_result_free\0").unwrap(),
@@ -395,6 +413,13 @@ impl Api<'_> {
         let rc = unsafe { (self.run_result_error)(ctx, r, &mut p) };
         unsafe { self.expect_ok(ctx, rc, "hegel_run_result_error") };
         p
+    }
+    unsafe fn run_result_error_kind(&self, ctx: *mut u8, r: *const u8) -> (CRunErrorKind, u32) {
+        let mut kind = CRunErrorKind::None;
+        let mut health_check = 0u32;
+        let rc = unsafe { (self.run_result_error_kind)(ctx, r, &mut kind, &mut health_check) };
+        unsafe { self.expect_ok(ctx, rc, "hegel_run_result_error_kind") };
+        (kind, health_check)
     }
     unsafe fn run_result_failure_count(&self, ctx: *mut u8, r: *const u8) -> usize {
         let mut n = 0usize;
@@ -1563,6 +1588,11 @@ fn health_check_surfaces_as_run_error() {
             msg.contains("FilterTooMuch"),
             "expected the run error to reference FilterTooMuch, got: {}",
             msg
+        );
+        assert_eq!(
+            a.run_result_error_kind(ctx, result),
+            (CRunErrorKind::HealthCheck, 1 << 0),
+            "the kind names the failed check as its hegel_health_check_t bit"
         );
         a.run_result_free(ctx, result);
 

@@ -275,7 +275,8 @@ typedef enum {
      The run itself failed — a failed health check, a nondeterminism
      abort under `error` strictness, a violated engine invariant — and
      produced no verdict on the property. There are no failures to
-     inspect; read the message with `hegel_run_result_error`.
+     inspect; read the kind with `hegel_run_result_error_kind` and the
+     message with `hegel_run_result_error`.
 
      A failing nondeterministic run reports plain
      `HEGEL_RUN_STATUS_FAILED`: its failures carry a caveat
@@ -286,6 +287,50 @@ typedef enum {
      */
     HEGEL_RUN_STATUS_ERROR = 2,
 } hegel_run_status_t;
+
+/*
+ Why a run ended in `HEGEL_RUN_STATUS_ERROR`, read via
+ `hegel_run_result_error_kind`. The message from `hegel_run_result_error`
+ is for people; this is for the binding to pick which error to raise
+ without parsing it.
+ */
+typedef enum {
+    /*
+     The run did not error: its status is not `HEGEL_RUN_STATUS_ERROR`.
+     */
+    HEGEL_RUN_ERROR_NONE = 0,
+    /*
+     A health check failed; `hegel_run_result_error_kind` also names
+     which one as a `hegel_health_check_t` value.
+     */
+    HEGEL_RUN_ERROR_HEALTH_CHECK = 1,
+    /*
+     Under `HEGEL_NONDETERMINISM_ERROR`, the test produced different
+     outcomes when replayed on identical data.
+     */
+    HEGEL_RUN_ERROR_FLAKY = 2,
+    /*
+     Under `HEGEL_NONDETERMINISM_ERROR`, data generation diverged when
+     the same choice sequence was replayed.
+     */
+    HEGEL_RUN_ERROR_NONDETERMINISTIC = 3,
+    /*
+     The test's assumptions could not be satisfied: no valid test case
+     was ever generated.
+     */
+    HEGEL_RUN_ERROR_UNSATISFIABLE = 4,
+    /*
+     The caller misused libhegel at run scope — violated the driving
+     contract or launched the process with an invalid configuration. The
+     message says what to fix.
+     */
+    HEGEL_RUN_ERROR_USAGE = 5,
+    /*
+     A violated internal invariant of libhegel: a bug in Hegel, with the
+     bug-report framing in the message.
+     */
+    HEGEL_RUN_ERROR_INTERNAL = 6,
+} hegel_run_error_kind_t;
 
 /*
  A phase of the property-test loop, used as a bit flag.
@@ -2768,13 +2813,33 @@ hegel_result_t hegel_run_result_status(hegel_context_t *ctx,
  `out_error`: Receives the run-level error message when the run
    errored — a failed health check, a nondeterministic test, a violated
    engine invariant — or NULL when it completed normally. Owned by the
-   run result and valid until `hegel_run_result_free`.
+   run result and valid until `hegel_run_result_free`. The message is
+   for people; classify the error with `hegel_run_result_error_kind`
+   rather than by its wording, which may change between releases.
 
  Returns `HEGEL_OK`.
  */
 hegel_result_t hegel_run_result_error(hegel_context_t *ctx,
                                       const hegel_run_result_t *r,
                                       const char **out_error);
+
+/*
+ Parameters:
+ `out_kind`: Receives why the run errored, or `HEGEL_RUN_ERROR_NONE`
+   when its status is not `HEGEL_RUN_STATUS_ERROR`.
+ `out_health_check`: Receives the `hegel_health_check_t` value of the
+   check that failed when the kind is `HEGEL_RUN_ERROR_HEALTH_CHECK`, or
+   0 for every other kind.
+
+ Returns `HEGEL_OK`.
+
+ Use this to choose which error to raise for an errored run; the message
+ from `hegel_run_result_error` is the diagnostic to attach to it.
+ */
+hegel_result_t hegel_run_result_error_kind(hegel_context_t *ctx,
+                                           const hegel_run_result_t *r,
+                                           hegel_run_error_kind_t *out_kind,
+                                           uint32_t *out_health_check);
 
 /*
  Parameters:

@@ -237,10 +237,111 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
             "{message}"
         );
         assert!(message.contains("bug in hegel"), "{message}");
+        assert_eq!(
+            error_kind_of(ctx, result),
+            (hegel_run_error_kind_t::HEGEL_RUN_ERROR_INTERNAL, 0)
+        );
 
         ok(hegel_run_result_free(ctx, result));
         ok(hegel_run_free(ctx, run));
         ok(hegel_context_free(ctx));
+    }
+}
+
+unsafe fn error_kind_of(
+    ctx: *mut HegelContext,
+    result: *const HegelRunResult,
+) -> (hegel_run_error_kind_t, u32) {
+    let mut kind = hegel_run_error_kind_t::HEGEL_RUN_ERROR_NONE;
+    let mut health_check = u32::MAX;
+    ok(unsafe { hegel_run_result_error_kind(ctx, result, &mut kind, &mut health_check) });
+    (kind, health_check)
+}
+
+/// Every `RunError` the engine can end a run with maps to its own kind
+/// through `hegel_run_result_error_kind`, a failed health check also naming
+/// the check as the same `hegel_health_check_t` bit
+/// `hegel_settings_set_suppress_health_check` takes, with the message
+/// unchanged by the classification.
+#[test]
+fn every_run_error_maps_to_its_kind_through_the_abi() {
+    use hegel_health_check_t::*;
+    use hegel_run_error_kind_t::*;
+    let cases: Vec<(RunError, hegel_run_error_kind_t, u32)> = vec![
+        (
+            RunError::HealthCheck(HealthCheck::FilterTooMuch, "m".to_string()),
+            HEGEL_RUN_ERROR_HEALTH_CHECK,
+            HEGEL_HC_FILTER_TOO_MUCH as u32,
+        ),
+        (
+            RunError::HealthCheck(HealthCheck::TooSlow, "m".to_string()),
+            HEGEL_RUN_ERROR_HEALTH_CHECK,
+            HEGEL_HC_TOO_SLOW as u32,
+        ),
+        (
+            RunError::HealthCheck(HealthCheck::TestCasesTooLarge, "m".to_string()),
+            HEGEL_RUN_ERROR_HEALTH_CHECK,
+            HEGEL_HC_TEST_CASES_TOO_LARGE as u32,
+        ),
+        (
+            RunError::HealthCheck(HealthCheck::LargeInitialTestCase, "m".to_string()),
+            HEGEL_RUN_ERROR_HEALTH_CHECK,
+            HEGEL_HC_LARGE_INITIAL_TEST_CASE as u32,
+        ),
+        (RunError::Flaky("m".to_string()), HEGEL_RUN_ERROR_FLAKY, 0),
+        (
+            RunError::NonDeterministic("m".to_string()),
+            HEGEL_RUN_ERROR_NONDETERMINISTIC,
+            0,
+        ),
+        (
+            RunError::Unsatisfiable("m".to_string()),
+            HEGEL_RUN_ERROR_UNSATISFIABLE,
+            0,
+        ),
+        (
+            RunError::UsageError("m".to_string()),
+            HEGEL_RUN_ERROR_USAGE,
+            0,
+        ),
+        (
+            RunError::Internal(crate::control::InternalError::new(format_args!("m"))),
+            HEGEL_RUN_ERROR_INTERNAL,
+            0,
+        ),
+    ];
+    for (error, expected_kind, expected_check) in cases {
+        let ctx = hegel_context_new();
+        let expected_message = error.to_string();
+        let engine: EngineFuture = Box::pin(async move { Err(error) });
+        let run = Box::into_raw(Box::new(HegelRun {
+            engine: Some(engine),
+            exchange: Arc::new(CaseExchange::new()),
+            current_family: None,
+            result: None,
+            reporter: None,
+        }));
+        unsafe {
+            let mut tc: *mut HegelTestCase = ptr::null_mut();
+            ok(hegel_next_test_case(ctx, run, &mut tc));
+            assert!(tc.is_null());
+            let mut result: *mut HegelRunResult = ptr::null_mut();
+            ok(hegel_run_result(ctx, run, &mut result));
+            let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
+            ok(hegel_run_result_status(ctx, result, &mut status));
+            assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
+            assert_eq!(
+                error_kind_of(ctx, result),
+                (expected_kind, expected_check),
+                "{expected_message}"
+            );
+            let mut message: *const c_char = ptr::null();
+            ok(hegel_run_result_error(ctx, result, &mut message));
+            assert_eq!(CStr::from_ptr(message).to_str().unwrap(), expected_message);
+            ok(hegel_run_result_free(ctx, result));
+            ok(hegel_run_free(ctx, run));
+            ok(hegel_context_free(ctx));
+        }
     }
 }
 

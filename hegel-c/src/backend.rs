@@ -7,6 +7,7 @@ use crate::native::bignum::BigInt;
 use crate::native::core::{ManyState, NativeStateMachine, NativeVariables, RecursionState};
 use crate::native::draws::special::{Date, DateTime, Time};
 use crate::native::draws::{FloatSpec, StringSpec};
+use crate::settings::HealthCheck;
 
 /// Error returned by [`DataSource`] methods when an operation cannot complete.
 ///
@@ -384,9 +385,8 @@ pub enum TestCaseResult {
 /// it through its error channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunError {
-    /// A failed health check (FilterTooMuch, TooSlow, TestCasesTooLarge,
-    /// LargeInitialTestCase).
-    HealthCheck(String),
+    /// A failed health check, naming which one.
+    HealthCheck(HealthCheck, String),
     /// The test produced different outcomes when run on identical data.
     Flaky(String),
     /// Data generation diverged between runs of the same choice sequence.
@@ -415,7 +415,7 @@ impl From<crate::control::InternalError> for RunError {
 impl core::fmt::Display for RunError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            RunError::HealthCheck(msg)
+            RunError::HealthCheck(_, msg)
             | RunError::Flaky(msg)
             | RunError::NonDeterministic(msg)
             | RunError::Unsatisfiable(msg)

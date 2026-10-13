@@ -77,6 +77,7 @@ macro_rules! for_each_hegel_fn {
             fn hegel_run_free(ctx: *mut HegelContext, run: *mut HegelRun) -> hegel_result_t;
             fn hegel_run_result(ctx: *mut HegelContext, run: *mut HegelRun, out_result: *mut *mut HegelRunResult) -> hegel_result_t;
             fn hegel_run_result_error(ctx: *mut HegelContext, r: *const HegelRunResult, out_error: *mut *const c_char) -> hegel_result_t;
+            fn hegel_run_result_error_kind(ctx: *mut HegelContext, r: *const HegelRunResult, out_kind: *mut hegel_run_error_kind_t, out_health_check: *mut u32) -> hegel_result_t;
             fn hegel_run_result_failure(ctx: *mut HegelContext, r: *const HegelRunResult, index: usize, out_failure: *mut *mut HegelFailure) -> hegel_result_t;
             fn hegel_run_result_failure_count(ctx: *mut HegelContext, r: *const HegelRunResult, out_count: *mut usize) -> hegel_result_t;
             fn hegel_run_result_free(ctx: *mut HegelContext, r: *mut HegelRunResult) -> hegel_result_t;
