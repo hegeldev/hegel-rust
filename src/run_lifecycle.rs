@@ -474,7 +474,8 @@ struct CapturedReport {
     /// grouped worker by worker.
     lines: Vec<String>,
     /// The rendered panic diagnostic (thread, location, message, backtrace);
-    /// `None` under quiet and for unstamped, non-final cases.
+    /// `None` under quiet and for unstamped, non-final cases, where the
+    /// report falls back to the origin and the payload's message.
     diagnostic: Option<String>,
     /// The caught panic payload, re-raised as the run's closing unwind.
     payload: Box<dyn std::any::Any + Send>,
@@ -641,6 +642,12 @@ fn drive_run<F: FnMut(TestCase)>(
                 }
                 if let Some(diagnostic) = report.diagnostic {
                     output.block(&diagnostic);
+                } else if !quiet {
+                    output.block(&format!(
+                        "{}:\n{}\n",
+                        failure.origin,
+                        panic_message(&report.payload)
+                    ));
                 }
                 if !quiet {
                     if let Some(caveat) = &failure.caveat {

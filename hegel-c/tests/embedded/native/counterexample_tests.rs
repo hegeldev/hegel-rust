@@ -118,9 +118,11 @@ fn rejection_evicts_the_incumbent_but_keeps_the_evidence() {
     );
     assert_eq!(c.reject((2, 30)), Some(vec![int_node(2)]));
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: failed 3 of 40 replays this run, below the \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: failed 3 of 40 replays this run, below the \
          confirmation bar — likely rare"
+        )
     );
 }
 
@@ -245,15 +247,19 @@ fn trust_seeds_and_folds_reuse_evidence() {
     let mut c = Counterexample::default();
     c.trust(None, (1, 4));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, reproduced from stored state: failed \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, reproduced from stored state: failed \
          1 of 4 replays this run"
+        )
     );
     c.trust(None, (2, 3));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, reproduced from stored state: failed \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, reproduced from stored state: failed \
          3 of 7 replays this run"
+        )
     );
     assert!(!c.needs_confirmation());
 }
@@ -284,8 +290,8 @@ fn promotion_folds_trusted_evidence_into_the_confirmed_counts() {
     c.record_trusted_batch((0, 20));
     c.confirm(0.3, None, graph_of(&[1, 2]), 2, (2, 8)).unwrap();
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, confirmed: failed 3 of 33 replays this run"
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 3 of 33 replays this run")
     );
     assert_eq!(
         c.graph().unwrap().edge_count(),
@@ -300,9 +306,11 @@ fn record_trusted_batch_folds_evidence_only_while_trusted() {
     c.record_trusted_batch((0, 20));
     assert!(c.needs_confirmation());
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: observed once, never replayed — a rare \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: observed once, never replayed — a rare \
          failure, or the environment changed between executions"
+        )
     );
 }
 
@@ -354,20 +362,24 @@ fn caveats_quote_the_accumulated_replay_evidence() {
     c.adopt(vec![int_node(1)], Vec::new());
     assert!(c.reject((1, 40)).is_some());
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: failed 1 of 40 replays this run, below the \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: failed 1 of 40 replays this run, below the \
          confirmation bar — likely rare"
+        )
     );
     c.reject((0, 10));
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: failed 1 of 50 replays this run, below the \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: failed 1 of 50 replays this run, below the \
          confirmation bar — likely rare"
+        )
     );
     c.confirm(0.3, None, graph_of(&[1]), 1, (4, 12)).unwrap();
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, confirmed: failed 5 of 62 replays this run"
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 5 of 62 replays this run")
     );
 }
 
@@ -379,10 +391,12 @@ fn a_dry_final_replay_switches_the_confirmed_caveat_wording() {
     c.confirm(0.4, None, graph_of(&[1]), 1, (4, 9)).unwrap();
     c.record_final_replay((0, 29));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, confirmed earlier this run (failed 4 of 9 \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, confirmed earlier this run (failed 4 of 9 \
          replays) but not reproduced at report time — a rare failure, or \
          something in the environment changed after discovery"
+        )
     );
 }
 
@@ -391,14 +405,16 @@ fn caveats_keep_report_time_counts_apart_from_confirmation_counts() {
     let mut c = Counterexample::default();
     c.confirm(0.4, None, graph_of(&[1]), 1, (4, 9)).unwrap();
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, confirmed: failed 4 of 9 replays this run"
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 4 of 9 replays this run")
     );
     c.record_final_replay((1, 3));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, confirmed: failed 4 of 9 replays at \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, confirmed: failed 4 of 9 replays at \
          confirmation and 1 of 3 at report time"
+        )
     );
 }
 
@@ -408,9 +424,11 @@ fn record_final_replay_records_report_counts_on_trusted() {
     c.trust(None, (1, 5));
     c.record_final_replay((2, 4));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, reproduced from stored state: failed \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, reproduced from stored state: failed \
          1 of 5 replays at reuse and 2 of 4 at report time"
+        )
     );
 }
 
@@ -420,11 +438,65 @@ fn a_dry_final_replay_switches_the_trusted_caveat_wording() {
     c.trust(None, (1, 5));
     c.record_final_replay((0, 20));
     assert_eq!(
-        c.caveat(),
-        "nondeterministic failure, reproduced from stored state earlier \
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, reproduced from stored state earlier \
          this run (failed 1 of 5 replays) but not reproduced at report time \
          — a rare failure, or something in the environment changed after \
          discovery"
+        )
+    );
+}
+
+#[test]
+fn a_confirmed_origin_that_reproduced_at_every_replay_has_no_caveat() {
+    let mut c = Counterexample::default();
+    c.confirm(nd::anchor_ceiling(), None, graph_of(&[1]), 1, (20, 20))
+        .unwrap();
+    c.record_final_replay((1, 1));
+    assert!(c.caveat().is_none());
+    c.record_final_replay((1, 2));
+    assert_eq!(
+        c.caveat().as_deref(),
+        Some(
+            "nondeterministic failure, confirmed: failed 20 of 20 replays at \
+             confirmation and 2 of 3 at report time"
+        )
+    );
+}
+
+#[test]
+fn a_miss_seen_outside_the_evidence_keeps_the_caveat() {
+    let mut c = Counterexample::default();
+    c.record_miss();
+    c.confirm(nd::anchor_ceiling(), None, graph_of(&[1]), 1, (20, 20))
+        .unwrap();
+    assert_eq!(
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 20 of 20 replays this run")
+    );
+}
+
+#[test]
+fn a_confirmation_batch_with_a_miss_keeps_the_caveat() {
+    let mut c = Counterexample::default();
+    c.confirm(0.7, None, graph_of(&[1]), 1, (19, 20)).unwrap();
+    assert_eq!(
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 19 of 20 replays this run")
+    );
+}
+
+#[test]
+fn stored_nondeterministic_state_keeps_its_caveat_through_promotion() {
+    let mut c = Counterexample::default();
+    c.trust(Some((Arc::new(graph_of(&[1])), 1)), (1, 1));
+    assert!(c.caveat().is_some());
+    c.confirm(nd::anchor_ceiling(), None, graph_of(&[1]), 1, (20, 20))
+        .unwrap();
+    assert_eq!(
+        c.caveat().as_deref(),
+        Some("nondeterministic failure, confirmed: failed 21 of 21 replays this run")
     );
 }
 
@@ -457,16 +529,20 @@ fn a_never_replayed_origin_gets_the_observed_once_caveat() {
     let mut c = Counterexample::default();
     c.adopt(vec![int_node(1)], Vec::new());
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: observed once, never replayed — a rare \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: observed once, never replayed — a rare \
          failure, or the environment changed between executions"
+        )
     );
     c.reject((0, 24));
     assert_eq!(
-        c.caveat(),
-        "unconfirmed failure: failed 0 of 24 replays after the observed \
+        c.caveat().as_deref(),
+        Some(
+            "unconfirmed failure: failed 0 of 24 replays after the observed \
          failure — a rare failure, or the environment changed between \
          executions"
+        )
     );
 }
 

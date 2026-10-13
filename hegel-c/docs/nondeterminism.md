@@ -298,12 +298,18 @@ run, or aborts under `error`), through the replay primitive plus
 handling. Failures report as plain `FAILED`; each carries a **caveat**
 (`hegel_failure_caveat`) quoting the run's own evidence — "confirmed:
 failed 7 of 20 replays at confirmation and 1 of 2 at report time" — so
-the wording is as strong as what was measured. An unconfirmed origin
-still fails the run, caveat-only and without a blob, and only when
-nothing confirmed or trusted was found, so a leaked fluke never displaces
-a real failure. Under `show_statistics` one line reports the measurement
-replays and how many failed — the only sub-Debug surface that reveals a
-quiet flip and its cost.
+the wording is as strong as what was measured. The flip is run-wide but
+the caveat is per origin: a confirmed origin whose failure was never seen
+not to reproduce — no miss in any evidence batch or at report time, no
+verdict change on its values, no dry shrink verify or final replay — is
+reported without one, because another origin's flake says nothing about
+it. An unconfirmed origin still fails the run, caveat-only and without a
+blob: after the confirmed and trusted failures under
+`report_multiple_failures`, and otherwise only when nothing confirmed or
+trusted was found, so a leaked fluke never displaces a real failure.
+Under `show_statistics` one line reports the measurement replays and how
+many failed — the only sub-Debug surface that reveals a quiet flip and
+its cost.
 
 Executions whose failure can become the report are **stamped**
 (`hegel_test_case_should_capture`): confirmation batches, database-reuse

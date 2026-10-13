@@ -874,8 +874,9 @@ impl<'a> Engine<'a> {
     /// before the sort and the single-failure truncation, so a leaked
     /// unconfirmed origin can never displace a confirmed one. Unconfirmed
     /// origins (bar rejects and never-replayed report-time admissions
-    /// alike) report caveat-only, and only when nothing confirmed or
-    /// trusted survived.
+    /// alike) report caveat-only, after the confirmed and trusted failures
+    /// when the run reports multiple failures and otherwise only when none
+    /// survived.
     fn build_report(&mut self) -> Result<TestRunResult, InternalError> {
         let nd_blobs = self.nd_handling();
         let mut origins_sorted: Vec<(
@@ -931,7 +932,7 @@ impl<'a> Engine<'a> {
                 caveat,
             });
         }
-        if failures.is_empty() && nd_blobs {
+        if nd_blobs && (failures.is_empty() || self.settings.report_multiple_failures) {
             let mut unconfirmed: Vec<String> =
                 self.origins.unconfirmed().map(str::to_string).collect();
             if !self.settings.report_multiple_failures {
@@ -1683,6 +1684,7 @@ impl<'a> Engine<'a> {
             } else if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                 return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
             } else {
+                self.origins.entry(&origin).record_miss();
                 self.nd_flip();
                 None
             }
@@ -1874,6 +1876,7 @@ impl<'a> Engine<'a> {
                     if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                         return Err(RunError::Flaky(flaky_diagnostic_for(&origin)));
                     }
+                    self.origins.entry(&origin).record_miss();
                     self.nd_flip();
                     if self.origins.needs_confirmation(&origin) && self.has_history(&origin) {
                         match self.backtrack(&origin).await? {
@@ -2702,7 +2705,9 @@ impl<'a> Engine<'a> {
                 if self.settings.nondeterminism_strictness == NondeterminismStrictness::Error {
                     return Err(err);
                 }
-                self.origins.entry(&origin).seed_evidence(evidence);
+                let checked = self.origins.entry(&origin);
+                checked.seed_evidence(evidence);
+                checked.record_miss();
                 self.nd_flip();
             }
         }
@@ -2986,6 +2991,11 @@ impl<'a> Engine<'a> {
                     .entry(&origin)
                     .adopt(run.nodes.clone(), run.spans.clone());
             }
+            if mismatch.is_some() {
+                if let Some(counterexample) = self.origins.get_mut(&origin) {
+                    counterexample.record_miss();
+                }
+            }
         }
         Ok(mismatch)
     }
@@ -3014,6 +3024,15 @@ impl<'a> Engine<'a> {
             &run.spans,
             !self.collect_statistics,
         );
+        if recorded.verdict_mismatch {
+            if let Some(counterexample) = recorded
+                .mismatched_origin
+                .as_deref()
+                .and_then(|origin| self.origins.get_mut(origin))
+            {
+                counterexample.record_miss();
+            }
+        }
         Ok(recorded.verdict_mismatch.then(|| {
             RunError::Flaky(match &recorded.mismatched_origin {
                 Some(origin) => flaky_diagnostic_for(origin),
