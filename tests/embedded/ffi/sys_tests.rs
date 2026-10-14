@@ -149,6 +149,7 @@ mod drift {
             HEGEL_E_INTERNAL,
             HEGEL_E_CONCURRENT_USE,
             HEGEL_E_RETRY,
+            HEGEL_E_NOT_FOUND,
         }
         hegel_status_t {
             HEGEL_STATUS_VALID,

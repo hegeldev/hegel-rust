@@ -9,15 +9,20 @@ use alloc::vec;
 struct Sources(Vec<(&'static str, &'static str)>);
 
 impl ImportSource for Sources {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
+    fn load(
+        &self,
+        base_path: Option<&str>,
+        grammar_path: &str,
+    ) -> crate::native::lark::GrammarResult<Option<(String, String)>> {
         let full = match base_path {
             Some(base) if !base.is_empty() => format!("{base}/{grammar_path}"),
             _ => grammar_path.to_string(),
         };
-        self.0
+        Ok(self
+            .0
             .iter()
             .find(|(p, _)| *p == full)
-            .map(|(p, text)| (p.to_string(), text.to_string()))
+            .map(|(p, text)| (p.to_string(), text.to_string())))
     }
 }
 
@@ -36,11 +41,15 @@ fn circular_imports_report_the_cycle() {
     }
 
     impl ImportSource for Circular {
-        fn load(&self, _: Option<&str>, path: &str) -> Option<(String, String)> {
+        fn load(
+            &self,
+            _: Option<&str>,
+            path: &str,
+        ) -> crate::native::lark::GrammarResult<Option<(String, String)>> {
             self.calls.set(self.calls.get() + 1);
             assert!(self.calls.get() < 10);
             let next = if path == "a.lark" { "b" } else { "a" };
-            Some((path.to_string(), format!("%import {next}.value\n")))
+            Ok(Some((path.to_string(), format!("%import {next}.value\n"))))
         }
     }
 
@@ -58,11 +67,18 @@ fn import_depth_is_bounded_even_when_paths_never_repeat() {
     struct Chain(core::cell::Cell<usize>);
 
     impl ImportSource for Chain {
-        fn load(&self, _: Option<&str>, _: &str) -> Option<(String, String)> {
+        fn load(
+            &self,
+            _: Option<&str>,
+            _: &str,
+        ) -> crate::native::lark::GrammarResult<Option<(String, String)>> {
             let i = self.0.get();
             self.0.set(i + 1);
             assert!(i < 100);
-            Some((format!("{i}.lark"), String::from("%import next.value\n")))
+            Ok(Some((
+                format!("{i}.lark"),
+                String::from("%import next.value\n"),
+            )))
         }
     }
 

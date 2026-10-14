@@ -2184,7 +2184,8 @@ unsafe extern "C" fn import_lib(
     out_path: *mut *const c_char,
     out_text: *mut *const c_char,
     out_text_len: *mut usize,
-) -> bool {
+    _out_error: *mut *const c_char,
+) -> hegel_c::hegel_result_t {
     let imports = unsafe { &mut *user_data.cast::<Imports>() };
     let base = unsafe { base_path.as_ref() }.map(|p| {
         unsafe { std::ffi::CStr::from_ptr(p) }
@@ -2205,7 +2206,7 @@ unsafe extern "C" fn import_lib(
             *out_text_len = imports.text.as_bytes().len();
         }
     }
-    found
+    if found { HEGEL_OK } else { HEGEL_E_NOT_FOUND }
 }
 
 #[test]
@@ -2296,7 +2297,8 @@ unsafe extern "C" fn import_sloppy(
     out_path: *mut *const c_char,
     out_text: *mut *const c_char,
     out_text_len: *mut usize,
-) -> bool {
+    _out_error: *mut *const c_char,
+) -> hegel_c::hegel_result_t {
     let imports = unsafe { &*user_data.cast::<SloppyImports>() };
     let path = unsafe { std::ffi::CStr::from_ptr(grammar_path) }
         .to_str()
@@ -2307,8 +2309,10 @@ unsafe extern "C" fn import_sloppy(
             *out_text = imports.text.as_ptr().cast::<c_char>();
             *out_text_len = imports.text.len();
         }
+        HEGEL_OK
+    } else {
+        HEGEL_E_NOT_FOUND
     }
-    true
 }
 
 #[test]
@@ -2413,4 +2417,137 @@ fn generate_grammar_validates_handles_and_reports_stop_test() {
         ok(hegel_grammar_free(ctx, g));
     }
     unsafe { ok(hegel_context_free(ctx)) };
+}
+
+struct ImportResult {
+    result: hegel_c::hegel_result_t,
+    message: Option<CString>,
+    path: CString,
+    text: CString,
+    null_path: bool,
+    null_text: bool,
+    calls: usize,
+}
+
+unsafe extern "C" fn import_result(
+    user_data: *mut c_void,
+    _base_path: *const c_char,
+    _grammar_path: *const c_char,
+    out_path: *mut *const c_char,
+    out_text: *mut *const c_char,
+    out_text_len: *mut usize,
+    out_error: *mut *const c_char,
+) -> hegel_c::hegel_result_t {
+    let state = unsafe { &mut *user_data.cast::<ImportResult>() };
+    state.calls += 1;
+    unsafe {
+        *out_path = if state.null_path {
+            ptr::null()
+        } else {
+            state.path.as_ptr()
+        };
+        *out_text = if state.null_text {
+            ptr::null()
+        } else {
+            state.text.as_ptr()
+        };
+        *out_text_len = state.text.as_bytes().len();
+        *out_error = state.message.as_ref().map_or(ptr::null(), |s| s.as_ptr());
+    }
+    state.result
+}
+
+#[test]
+fn grammar_import_errors_abort_without_bundled_fallback() {
+    for (result, message, null_path, null_text) in [
+        (HEGEL_E_BACKEND, Some("permission denied"), false, false),
+        (HEGEL_E_INTERNAL, None, false, false),
+        (HEGEL_OK, None, true, false),
+        (HEGEL_OK, None, false, true),
+    ] {
+        let ctx = hegel_context_new();
+        let mut state = ImportResult {
+            result,
+            message: message.map(|m| CString::new(m).unwrap()),
+            path: CString::new("common.lark").unwrap(),
+            text: CString::new("INT: \"x\"\n").unwrap(),
+            null_path,
+            null_text,
+            calls: 0,
+        };
+        let text =
+            CString::new("%import common.INT\n%import missing.WORD\nstart: INT WORD\n").unwrap();
+        let mut grammar = ptr::null_mut();
+        unsafe {
+            let expected = if result == HEGEL_OK {
+                HEGEL_E_INVALID_ARG
+            } else {
+                result
+            };
+            assert_eq!(
+                hegel_grammar_new(
+                    ctx,
+                    text.as_ptr(),
+                    ptr::null(),
+                    0,
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    Some(import_result),
+                    (&raw mut state).cast(),
+                    &mut grammar
+                ),
+                expected
+            );
+            assert!(grammar.is_null());
+            assert_eq!(state.calls, 1);
+            let diagnostic = last_error(ctx);
+            if let Some(message) = message {
+                assert_eq!(diagnostic, message);
+            } else if result == HEGEL_OK {
+                assert!(diagnostic.contains("NULL path or text"), "{diagnostic}");
+            } else {
+                assert!(diagnostic.contains("common.lark"), "{diagnostic}");
+                assert!(diagnostic.contains("HEGEL_E_INTERNAL"), "{diagnostic}");
+            }
+            ok(hegel_context_free(ctx));
+        }
+    }
+}
+
+#[test]
+fn grammar_import_not_found_ignores_callback_outputs() {
+    let ctx = hegel_context_new();
+    let mut state = ImportResult {
+        result: HEGEL_E_NOT_FOUND,
+        message: Some(CString::new("ignored diagnostic").unwrap()),
+        path: CString::new("common.lark").unwrap(),
+        text: CString::new("invalid grammar").unwrap(),
+        null_path: false,
+        null_text: false,
+        calls: 0,
+    };
+    let text = CString::new("%import common.INT\nstart: INT\n").unwrap();
+    let mut grammar = ptr::null_mut();
+    unsafe {
+        ok(hegel_grammar_new(
+            ctx,
+            text.as_ptr(),
+            ptr::null(),
+            0,
+            0,
+            ptr::null(),
+            ptr::null(),
+            0,
+            Some(import_result),
+            (&raw mut state).cast(),
+            &mut grammar,
+        ));
+        assert!(!grammar.is_null());
+        assert_eq!(state.calls, 1);
+        assert_eq!(last_error(ctx), "");
+        ok(hegel_grammar_free(ctx, grammar));
+        ok(hegel_context_free(ctx));
+    }
 }

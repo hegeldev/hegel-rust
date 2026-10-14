@@ -1506,6 +1506,7 @@ impl std::fmt::Debug for Grammar {
 struct GrammarImports<'a> {
     dirs: &'a [PathBuf],
     loaded: Vec<(CString, String)>,
+    error: Option<CString>,
 }
 
 /// Resolve an `%import` for the engine, as Lark does: the import
@@ -1520,7 +1521,8 @@ unsafe extern "C" fn load_grammar_import(
     out_path: *mut *const c_char,
     out_text: *mut *const c_char,
     out_text_len: *mut usize,
-) -> bool {
+    out_error: *mut *const c_char,
+) -> hegel_result_t {
     // SAFETY: `hegel_grammar_new` calls this only while the `GrammarImports`
     // that `Grammar::new` passed as `user_data` is alive, and the two C
     // strings are valid for the duration of the call.
@@ -1531,8 +1533,18 @@ unsafe extern "C" fn load_grammar_import(
     let dirs = imports.dirs.iter().cloned().chain(base.map(PathBuf::from));
     for dir in dirs {
         let joined = dir.join(&*grammar_path);
-        let Ok(text) = std::fs::read_to_string(&joined) else {
-            continue;
+        let text = match std::fs::read_to_string(&joined) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                let diagnostic = cstring_lossy(&format!(
+                    "Could not read grammar `{}`: {error}",
+                    joined.display()
+                ));
+                unsafe { *out_error = diagnostic.as_ptr() };
+                imports.error = Some(diagnostic);
+                return hegel_result_t::HEGEL_E_BACKEND;
+            }
         };
         imports
             .loaded
@@ -1543,9 +1555,9 @@ unsafe extern "C" fn load_grammar_import(
             *out_text = text.as_ptr().cast::<c_char>();
             *out_text_len = text.len();
         }
-        return true;
+        return hegel_result_t::HEGEL_OK;
     }
-    false
+    hegel_result_t::HEGEL_E_NOT_FOUND
 }
 
 impl Grammar {
@@ -1572,6 +1584,7 @@ impl Grammar {
         let mut imports = GrammarImports {
             dirs: import_paths,
             loaded: Vec::new(),
+            error: None,
         };
         let mut raw: *mut hegel_c::HegelGrammar = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {

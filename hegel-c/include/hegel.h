@@ -189,6 +189,10 @@ typedef enum {
      start again from the root directly.
      */
     HEGEL_E_RETRY = -10,
+    /*
+     The requested object or file was not found.
+     */
+    HEGEL_E_NOT_FOUND = -11,
 } hegel_result_t;
 
 /*
@@ -684,18 +688,20 @@ typedef struct {
  `out_path` to the NUL-terminated path it was found at, `out_text` and
  `out_text_len` to its UTF-8 text (bytes that are not UTF-8 are read
  with each invalid sequence replaced by U+FFFD), all kept alive until
- `hegel_grammar_new` returns, and return true; return false when there
- is no such grammar (a true return that leaves `out_path` or `out_text`
- NULL counts as false), in which case the import, absolute or relative,
- still resolves against the grammars bundled with libhegel, as Lark's
- does: `common`, `lark`, `python` and `unicode`.
+ `hegel_grammar_new` returns, and return `HEGEL_OK`.
+ Return `HEGEL_E_NOT_FOUND` to try the bundled grammars (`common`, `lark`,
+ `python` and `unicode`). Any other result aborts compilation and is returned
+ by `hegel_grammar_new`. On error, optionally set `out_error` to a
+ NUL-terminated diagnostic kept alive until `hegel_grammar_new` returns.
+ Returning `HEGEL_OK` with a NULL path or text is `HEGEL_E_INVALID_ARG`.
  */
-typedef bool (*hegel_grammar_import_t)(void *user_data,
-                                       const char *base_path,
-                                       const char *grammar_path,
-                                       const char **out_path,
-                                       const char **out_text,
-                                       size_t *out_text_len);
+typedef hegel_result_t (*hegel_grammar_import_t)(void *user_data,
+                                                 const char *base_path,
+                                                 const char *grammar_path,
+                                                 const char **out_path,
+                                                 const char **out_text,
+                                                 size_t *out_text_len,
+                                                 const char **out_error);
 
 /*
  A drawn proleptic Gregorian calendar date: `year` in
@@ -2288,7 +2294,8 @@ hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
  what is wrong with the grammar or the options: a syntax error, an
  undefined or unused symbol, a rule that can never produce a finite
  string, a `%declare`d terminal not named in `explicit_names`, or a
- cap below the smallest string.
+ cap below the smallest string. Callback failures return the callback's
+ result and diagnostic without trying bundled grammars.
  */
 hegel_result_t hegel_grammar_new(hegel_context_t *ctx,
                                  const char *text,

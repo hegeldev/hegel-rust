@@ -485,3 +485,28 @@ fn ffi_set_default_profile_reports_engine_errors() {
 fn ffi_set_default_profile_accepts_a_clear() {
     set_default_profile(None).unwrap();
 }
+
+#[test]
+fn ffi_grammar_import_read_errors_do_not_fall_back() {
+    for directory in [false, true] {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("common.lark");
+        if directory {
+            std::fs::create_dir(&path).unwrap();
+        } else {
+            std::fs::write(&path, [0xff]).unwrap();
+        }
+        let error = Grammar::new(
+            "%import common.INT\nstart: INT\n",
+            None,
+            0,
+            0,
+            None,
+            &[],
+            &[root.path().to_path_buf()],
+        )
+        .unwrap_err();
+        assert!(error.contains("Could not read grammar"), "{error}");
+        assert!(error.contains(&path.display().to_string()), "{error}");
+    }
+}

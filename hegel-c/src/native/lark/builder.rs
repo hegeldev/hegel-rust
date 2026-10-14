@@ -22,17 +22,26 @@ use alloc::vec::Vec;
 /// Where `%import`ed grammars come from: a lookup of `grammar_path`
 /// (a relative file path such as `common.lark` or `dir/sub.lark`) given
 /// the directory of the importing grammar when that is known. Returns the
-/// path the grammar was found at and its text.
+/// path the grammar was found at and its text. `Ok(None)` permits bundled
+/// fallback; `Err` aborts compilation.
 pub trait ImportSource {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)>;
+    fn load(
+        &self,
+        base_path: Option<&str>,
+        grammar_path: &str,
+    ) -> GrammarResult<Option<(String, String)>>;
 }
 
 /// An import source with no grammars: only the bundled ones resolve.
 pub struct NoImports;
 
 impl ImportSource for NoImports {
-    fn load(&self, _base_path: Option<&str>, _grammar_path: &str) -> Option<(String, String)> {
-        None
+    fn load(
+        &self,
+        _base_path: Option<&str>,
+        _grammar_path: &str,
+    ) -> GrammarResult<Option<(String, String)>> {
+        Ok(None)
     }
 }
 
@@ -541,7 +550,7 @@ impl<'s> GrammarBuilder<'s> {
             base: base_mangle.map(|m| Box::new(m.clone())),
         };
         let grammar_path = format!("{}.lark", stmt.path.join("/"));
-        let loaded = self.source.load(base_path, &grammar_path).or_else(|| {
+        let loaded = self.source.load(base_path, &grammar_path)?.or_else(|| {
             bundled_grammar(&grammar_path).map(|text| (grammar_path.clone(), text.to_string()))
         });
         let Some((joined_path, text)) = loaded else {

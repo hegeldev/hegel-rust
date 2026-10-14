@@ -22,11 +22,19 @@ fn fixtures_dir() -> PathBuf {
 struct FixtureImports;
 
 impl ImportSource for FixtureImports {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
-        let base = base_path?;
+    fn load(
+        &self,
+        base_path: Option<&str>,
+        grammar_path: &str,
+    ) -> crate::native::lark::GrammarResult<Option<(String, String)>> {
+        let Some(base) = base_path else {
+            return Ok(None);
+        };
         let path = Path::new(base).join(grammar_path);
-        let text = std::fs::read_to_string(&path).ok()?;
-        Some((path.to_str().unwrap().to_string(), text))
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Ok(None);
+        };
+        Ok(Some((path.to_str().unwrap().to_string(), text)))
     }
 }
 

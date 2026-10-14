@@ -16,6 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 #[cfg(target_family = "wasm")]
 use core::alloc::Layout;
+use core::cell::Cell;
 use core::ffi::{CStr, c_char, c_void};
 use core::future::Future;
 use core::pin::Pin;
@@ -312,6 +313,9 @@ pub enum hegel_result_t {
     /// was mispriced and the engine has already discarded it: drop it and
     /// start again from the root directly.
     HEGEL_E_RETRY = -10,
+
+    /// The requested object or file was not found.
+    HEGEL_E_NOT_FOUND = -11,
 }
 
 use hegel_result_t::*;
@@ -4879,11 +4883,12 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
 /// `out_path` to the NUL-terminated path it was found at, `out_text` and
 /// `out_text_len` to its UTF-8 text (bytes that are not UTF-8 are read
 /// with each invalid sequence replaced by U+FFFD), all kept alive until
-/// `hegel_grammar_new` returns, and return true; return false when there
-/// is no such grammar (a true return that leaves `out_path` or `out_text`
-/// NULL counts as false), in which case the import, absolute or relative,
-/// still resolves against the grammars bundled with libhegel, as Lark's
-/// does: `common`, `lark`, `python` and `unicode`.
+/// `hegel_grammar_new` returns, and return `HEGEL_OK`.
+/// Return `HEGEL_E_NOT_FOUND` to try the bundled grammars (`common`, `lark`,
+/// `python` and `unicode`). Any other result aborts compilation and is returned
+/// by `hegel_grammar_new`. On error, optionally set `out_error` to a
+/// NUL-terminated diagnostic kept alive until `hegel_grammar_new` returns.
+/// Returning `HEGEL_OK` with a NULL path or text is `HEGEL_E_INVALID_ARG`.
 #[allow(non_camel_case_types)]
 pub type hegel_grammar_import_t = Option<
     unsafe extern "C" fn(
@@ -4893,7 +4898,8 @@ pub type hegel_grammar_import_t = Option<
         out_path: *mut *const c_char,
         out_text: *mut *const c_char,
         out_text_len: *mut usize,
-    ) -> bool,
+        out_error: *mut *const c_char,
+    ) -> hegel_result_t,
 >;
 
 /// A caller-supplied import callback paired with its `user_data` pointer.
@@ -4905,12 +4911,18 @@ struct CallbackImports {
         *mut *const c_char,
         *mut *const c_char,
         *mut usize,
-    ) -> bool,
+        *mut *const c_char,
+    ) -> hegel_result_t,
     user_data: *mut c_void,
+    error: Cell<Option<hegel_result_t>>,
 }
 
 impl crate::native::lark::builder::ImportSource for CallbackImports {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
+    fn load(
+        &self,
+        base_path: Option<&str>,
+        grammar_path: &str,
+    ) -> crate::native::lark::GrammarResult<Option<(String, String)>> {
         let base = base_path.map(cstring_lossy);
         let path = cstring_lossy(grammar_path);
         let mut out_path: *const c_char = ptr::null();
@@ -4918,7 +4930,8 @@ impl crate::native::lark::builder::ImportSource for CallbackImports {
         let mut out_text_len = 0usize;
         // SAFETY: the two paths are NUL-terminated `CString`s alive across
         // the call, and the out-pointers are to locals the callback writes.
-        let found = unsafe {
+        let mut out_error = ptr::null();
+        let result = unsafe {
             (self.callback)(
                 self.user_data,
                 base.as_ref().map_or(ptr::null(), |b| b.as_ptr()),
@@ -4926,20 +4939,38 @@ impl crate::native::lark::builder::ImportSource for CallbackImports {
                 &mut out_path,
                 &mut out_text,
                 &mut out_text_len,
+                &mut out_error,
             )
         };
-        if !found || out_path.is_null() || out_text.is_null() {
-            return None;
+        if result == HEGEL_E_NOT_FOUND {
+            return Ok(None);
+        }
+        if result != HEGEL_OK {
+            self.error.set(Some(result));
+            let message = if out_error.is_null() {
+                format!("Could not load grammar `{grammar_path}`: {result:?}")
+            } else {
+                unsafe { CStr::from_ptr(out_error) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            return Err(crate::native::lark::GrammarError::new(message));
+        }
+        if out_path.is_null() || out_text.is_null() {
+            self.error.set(Some(HEGEL_E_INVALID_ARG));
+            return Err(crate::native::lark::GrammarError::new(format!(
+                "Import callback returned HEGEL_OK with NULL path or text for `{grammar_path}`"
+            )));
         }
         // SAFETY: per the `hegel_grammar_import_t` contract, a callback that
-        // returned true set `out_path` to a NUL-terminated string and
+        // returned HEGEL_OK set `out_path` to a NUL-terminated string and
         // `out_text` to `out_text_len` bytes, both alive until
         // `hegel_grammar_new` returns; they are copied out here.
         let path = unsafe { CStr::from_ptr(out_path) }
             .to_string_lossy()
             .into_owned();
         let text = unsafe { core::slice::from_raw_parts(out_text.cast::<u8>(), out_text_len) };
-        Some((path, String::from_utf8_lossy(text).into_owned()))
+        Ok(Some((path, String::from_utf8_lossy(text).into_owned())))
     }
 }
 
@@ -4989,7 +5020,8 @@ pub struct HegelGrammar {
 /// what is wrong with the grammar or the options: a syntax error, an
 /// undefined or unused symbol, a rule that can never produce a finite
 /// string, a `%declare`d terminal not named in `explicit_names`, or a
-/// cap below the smallest string.
+/// cap below the smallest string. Callback failures return the callback's
+/// result and diagnostic without trying bundled grammars.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_grammar_new(
     ctx: *mut HegelContext,
@@ -5046,6 +5078,7 @@ pub unsafe extern "C" fn hegel_grammar_new(
     let callback = import_callback.map(|callback| CallbackImports {
         callback,
         user_data: import_data,
+        error: Cell::new(None),
     });
     let source: &dyn ImportSource = match &callback {
         Some(callback) => callback,
@@ -5063,7 +5096,10 @@ pub unsafe extern "C" fn hegel_grammar_new(
         }
         Err(e) => {
             set_last_error(ctx, &e.message);
-            HEGEL_E_INVALID_ARG
+            callback
+                .as_ref()
+                .and_then(|c| c.error.get())
+                .unwrap_or(HEGEL_E_INVALID_ARG)
         }
     }
 }

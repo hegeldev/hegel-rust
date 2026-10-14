@@ -58,6 +58,8 @@ pub(crate) enum hegel_result_t {
     HEGEL_E_INTERNAL = -8,
     HEGEL_E_CONCURRENT_USE = -9,
     HEGEL_E_RETRY = -10,
+
+    HEGEL_E_NOT_FOUND = -11,
 }
 
 #[repr(C)]
@@ -132,7 +134,8 @@ pub(crate) type hegel_grammar_import_t = Option<
         out_path: *mut *const c_char,
         out_text: *mut *const c_char,
         out_text_len: *mut usize,
-    ) -> bool,
+        out_error: *mut *const c_char,
+    ) -> hegel_result_t,
 >;
 
 pub(crate) const HEGEL_STATE_MACHINE_DONE: i64 = i64::MIN;
