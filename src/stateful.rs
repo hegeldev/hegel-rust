@@ -150,8 +150,8 @@ use crate::control::{
 use crate::ffi::{PoolHandle, StateMachineHandle};
 use crate::generators::{Generator, label_from_name};
 use crate::run_lifecycle::{self, PanicInfo};
-use crate::test_case::raise_for_rc;
-use std::cell::RefCell;
+use crate::test_case::{invalid_argument, raise_for_rc};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::{Mutex, mpsc};
@@ -254,13 +254,27 @@ fn pool_generate(tc: &TestCase, pool: &crate::ffi::PoolHandle, consume: bool) ->
     }
 }
 
-/// Ask the engine to put back the variable `tc` most recently consumed from
-/// `pool`, returning its id.
-fn pool_restore(tc: &TestCase, pool: &crate::ffi::PoolHandle) -> i64 {
-    match tc.with_ctc(|ctc| ctc.pool_restore(pool)) {
-        Ok(id) => id,
-        Err(rc) => raise_for_rc(rc),
-    }
+/// Ask the engine to put back `variable_id`, consumed from `pool`.
+fn pool_restore(tc: &TestCase, pool: &crate::ffi::PoolHandle, variable_id: i64) {
+    tc.with_ctc(|ctc| ctc.pool_restore(pool, variable_id))
+        .unwrap_or_else(|rc| raise_for_rc(rc))
+}
+
+/// The error for a `reject` that no draw through the same test case
+/// precedes, so there is no variable to put back.
+fn rejected_without_a_draw() -> ! {
+    invalid_argument!(
+        "reject called on a values_consumed generator with a value it did not just \
+         draw: a rejected value must be the generator's most recent draw through \
+         the same test case"
+    )
+}
+
+/// The identity of a test case, for pairing a consuming draw with the
+/// rejection of its value: a combinator rejects a value through the same
+/// `tc` it drew it with, before drawing from that generator again.
+fn test_case_identity(tc: &TestCase) -> usize {
+    tc as *const TestCase as usize
 }
 
 impl<T> Pool<T> {
@@ -317,6 +331,7 @@ impl<T> Pool<T> {
         ValuesConsumed {
             pool: &self.pool,
             values: RefCell::new(&mut self.values),
+            drawn: Cell::new(None),
         }
     }
 }
@@ -362,6 +377,8 @@ impl<'a, T: std::fmt::Debug> crate::generators::PrintableGenerator<&'a T>
 pub struct ValuesConsumed<'a, T> {
     pool: &'a crate::ffi::PoolHandle,
     values: RefCell<&'a mut HashMap<i64, T>>,
+    /// The id of the most recent draw, which a rejection refers to.
+    drawn: Cell<Option<i64>>,
 }
 
 impl<T> Generator<T> for ValuesConsumed<'_, T> {
@@ -372,11 +389,16 @@ impl<T> Generator<T> for ValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         tc.assume(!self.values.borrow().is_empty());
         let variable_id = pool_generate(tc, self.pool, true);
+        self.drawn.set(Some(variable_id));
         self.values.borrow_mut().remove(&variable_id).unwrap()
     }
 
     fn reject(&self, tc: &TestCase, value: T) {
-        let variable_id = pool_restore(tc, self.pool);
+        let variable_id = self
+            .drawn
+            .take()
+            .unwrap_or_else(|| rejected_without_a_draw());
+        pool_restore(tc, self.pool, variable_id);
         let previous = self.values.borrow_mut().insert(variable_id, value);
         hegel_internal_assert!(previous.is_none(), "restored variable id is still in map");
     }
@@ -492,7 +514,10 @@ impl<T> ConcurrentPool<T> {
     /// the value the rule receives; anything else that consumed a value
     /// keeps it consumed, exactly as for [`Pool::values_consumed`].
     pub fn values_consumed(&self) -> ConcurrentValuesConsumed<'_, T> {
-        ConcurrentValuesConsumed { pool: self }
+        ConcurrentValuesConsumed {
+            pool: self,
+            drawn: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -527,13 +552,22 @@ impl<T: Clone + std::fmt::Debug> crate::generators::PrintableGenerator<T>
 /// each value it yields. Returned by [`ConcurrentPool::values_consumed`].
 pub struct ConcurrentValuesConsumed<'a, T> {
     pool: &'a ConcurrentPool<T>,
+    /// The id of the most recent draw through each test case (see
+    /// [`test_case_identity`]), which a rejection through it refers to.
+    drawn: Mutex<HashMap<usize, i64>>,
 }
 
 impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     fn do_draw(&self, tc: &TestCase) -> T {
         let mut values = self.pool.lock();
         match tc.with_ctc(|ctc| ctc.pool_generate(&self.pool.handle, true)) {
-            Ok(variable_id) => values.remove(&variable_id).unwrap(),
+            Ok(variable_id) => {
+                self.drawn
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(test_case_identity(tc), variable_id);
+                values.remove(&variable_id).unwrap()
+            }
             Err(rc) => {
                 drop(values);
                 raise_for_rc(rc)
@@ -545,9 +579,15 @@ impl<T> Generator<T> for ConcurrentValuesConsumed<'_, T> {
     /// [`ConcurrentPool::add`] does: the id is drawable again the moment
     /// the engine puts it back, so its value must already be in the map.
     fn reject(&self, tc: &TestCase, value: T) {
+        let variable_id = self
+            .drawn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&test_case_identity(tc))
+            .unwrap_or_else(|| rejected_without_a_draw());
         let mut values = self.pool.lock();
-        match tc.with_ctc(|ctc| ctc.pool_restore(&self.pool.handle)) {
-            Ok(variable_id) => {
+        match tc.with_ctc(|ctc| ctc.pool_restore(&self.pool.handle, variable_id)) {
+            Ok(()) => {
                 let previous = values.insert(variable_id, value);
                 hegel_internal_assert!(previous.is_none(), "restored variable id is still in map");
             }

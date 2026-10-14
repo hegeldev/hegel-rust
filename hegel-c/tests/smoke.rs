@@ -126,7 +126,7 @@ type FnMarkComplete = unsafe extern "C" fn(*mut u8, *mut u8, CStatus, *const c_c
 type FnNewPool = unsafe extern "C" fn(*mut u8, *mut u8, *mut *mut u8) -> c_int;
 type FnPoolAdd = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut i64) -> c_int;
 type FnPoolGenerate = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, bool, *mut i64) -> c_int;
-type FnPoolRestore = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut i64) -> c_int;
+type FnPoolRestore = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, i64) -> c_int;
 type FnPoolFree = unsafe extern "C" fn(*mut u8, *mut u8) -> c_int;
 type FnNewStateMachine = unsafe extern "C" fn(
     *mut u8,
@@ -989,10 +989,9 @@ fn libhegel_pool_primitives_draw_added_variables() {
                     "expected HEGEL_E_ASSUME on empty pool, got rc={}",
                     rc
                 );
-                let mut restored: i64 = -1;
-                let rc = (a.pool_restore)(ctx, tc, pool, &mut restored);
+                let restored = consumed.pop().unwrap();
+                let rc = (a.pool_restore)(ctx, tc, pool, restored);
                 assert_eq!(rc, HEGEL_OK, "pool_restore failed: rc={}", rc);
-                assert_eq!(Some(restored), consumed.pop());
                 let rc = (a.pool_generate)(ctx, tc, pool, true, &mut v);
                 assert_eq!(
                     rc, HEGEL_OK,

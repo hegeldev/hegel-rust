@@ -176,7 +176,9 @@ fn test_values_consumed_through_a_map_stay_consumed_when_filtered(tc: TestCase) 
 }
 
 #[hegel::test]
-#[should_panic(expected = "pool_restore called with no consumed variable to put back")]
+#[should_panic(
+    expected = "reject called on a values_consumed generator with a value it did not just draw"
+)]
 fn test_rejecting_a_value_that_was_not_drawn_is_an_error(tc: TestCase) {
     let mut numbers: Pool<i32> = pool(&tc);
     numbers.add(1);

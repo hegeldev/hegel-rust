@@ -376,7 +376,7 @@ fn null_handles_are_rejected_without_crashing() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_pool_restore(ctx, tc, ptr::null_mut(), &mut id),
+            hegel_pool_restore(ctx, tc, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("test case pointer is null"));
@@ -1044,7 +1044,7 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_pool_restore(ctx, tc, ptr::null_mut(), &mut var_id),
+            hegel_pool_restore(ctx, tc, ptr::null_mut(), 0),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("pool handle is null"));
@@ -1087,16 +1087,8 @@ fn live_test_case_argument_validation() {
             hegel_pool_generate(ctx, tc, pool, false, &mut var_id),
             HEGEL_E_ASSUME
         );
-        assert_eq!(
-            hegel_pool_restore(ctx, tc, pool, ptr::null_mut()),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("out parameter is null"));
-        assert_eq!(
-            hegel_pool_restore(ctx, tc, pool, &mut var_id),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("no consumed variable to put back"));
+        assert_eq!(hegel_pool_restore(ctx, tc, pool, 0), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("not a consumed variable"));
         assert_eq!(hegel_pool_free(ctx, pool), HEGEL_OK);
 
         let mut recursion: *mut HegelRecursion = ptr::null_mut();
@@ -1717,10 +1709,7 @@ fn primitives_after_overrun_all_report_stop_test() {
             hegel_pool_generate(ctx, tc, pool, false, &mut id),
             HEGEL_E_STOP_TEST
         );
-        assert_eq!(
-            hegel_pool_restore(ctx, tc, pool, &mut id),
-            HEGEL_E_STOP_TEST
-        );
+        assert_eq!(hegel_pool_restore(ctx, tc, pool, 0), HEGEL_E_STOP_TEST);
         let mut post_overrun_machine: *mut HegelStateMachine = ptr::null_mut();
         assert_eq!(
             hegel_new_state_machine(
@@ -3020,11 +3009,11 @@ impl<T> Clone for SendPtr<T> {
 unsafe impl<T> Send for SendPtr<T> {}
 unsafe impl<T> Sync for SendPtr<T> {}
 
-/// `hegel_pool_restore` puts back the calling handle's consumes one at a
-/// time, most recent first, and the restored variable can be drawn again;
-/// once they are all back it is an argument error.
+/// `hegel_pool_restore` puts back the named consumed variable, which can
+/// then be drawn again; a variable that is not consumed, or not the
+/// pool's, is an argument error.
 #[test]
-fn pool_restore_puts_back_consumes_most_recent_first() {
+fn pool_restore_puts_back_the_named_variable() {
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings_no_db(ctx);
@@ -3050,18 +3039,19 @@ fn pool_restore_puts_back_consumes_most_recent_first() {
             HEGEL_E_ASSUME
         );
 
-        let mut restored = 0i64;
-        ok(hegel_pool_restore(ctx, tc, pool, &mut restored));
-        assert_eq!(restored, second);
+        ok(hegel_pool_restore(ctx, tc, pool, first));
         ok(hegel_pool_generate(ctx, tc, pool, false, &mut drawn));
-        assert_eq!(drawn, second, "the restored variable is drawable again");
-        ok(hegel_pool_restore(ctx, tc, pool, &mut restored));
-        assert_eq!(restored, first);
+        assert_eq!(drawn, first, "the restored variable is drawable again");
         assert_eq!(
-            hegel_pool_restore(ctx, tc, pool, &mut restored),
+            hegel_pool_restore(ctx, tc, pool, first),
             HEGEL_E_INVALID_ARG
         );
-        assert!(last_error(ctx).contains("no consumed variable to put back"));
+        assert!(last_error(ctx).contains("not a consumed variable"));
+        ok(hegel_pool_restore(ctx, tc, pool, second));
+        ok(hegel_pool_generate(ctx, tc, pool, true, &mut drawn));
+        ok(hegel_pool_generate(ctx, tc, pool, true, &mut drawn));
+        assert_eq!(hegel_pool_restore(ctx, tc, pool, 99), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("variable 99"));
 
         ok(hegel_mark_complete(
             ctx,
@@ -3080,8 +3070,8 @@ fn pool_restore_puts_back_consumes_most_recent_first() {
 /// One pool shared between two clone handles driven from parallel threads:
 /// the pool's internal lock serializes concurrent `hegel_pool_add` /
 /// `hegel_pool_generate` / `hegel_pool_restore` calls, every drawn id is
-/// one that was added, consumed ids are handed out exactly once, and each
-/// handle puts back exactly its own consumes.
+/// one that was added, consumed ids are handed out exactly once, and a
+/// variable a handle puts back can be drawn again.
 #[test]
 fn pool_is_shared_across_two_clone_threads() {
     let ctx = hegel_context_new();
@@ -3130,18 +3120,8 @@ fn pool_is_shared_across_two_clone_threads() {
                         consumed.lock().unwrap().push(drawn);
                         mine.push(drawn);
                     }
-                    let mut put_back = 0i64;
-                    ok(hegel_pool_restore(
-                        worker_ctx,
-                        clone.0,
-                        pool.0,
-                        &mut put_back,
-                    ));
-                    assert_eq!(
-                        Some(put_back),
-                        mine.pop(),
-                        "a handle puts back its own most recent consume"
-                    );
+                    let put_back = mine.pop().unwrap();
+                    ok(hegel_pool_restore(worker_ctx, clone.0, pool.0, put_back));
                     restored.lock().unwrap().push(put_back);
                     let mut drawn = 0i64;
                     ok(hegel_pool_generate(

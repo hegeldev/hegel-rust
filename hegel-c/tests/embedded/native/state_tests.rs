@@ -1831,33 +1831,15 @@ fn native_variables_add_active_and_consume_round_trip() {
     assert_eq!(vars.active(), vec![0]);
     vars.consume(0);
     assert_eq!(vars.active(), Vec::<i64>::new());
-    vars.restore(1);
+    assert!(vars.restore(1));
     assert_eq!(vars.active(), vec![1]);
-    vars.restore(2);
+    assert!(!vars.restore(1), "an active variable is not restored");
+    assert!(!vars.restore(7), "an unknown id is not restored");
+    assert_eq!(vars.active(), vec![1]);
+    assert!(vars.restore(2));
     assert_eq!(vars.active(), vec![1, 2]);
     vars.consume(2);
     assert_eq!(vars.active(), vec![1]);
-}
-
-#[test]
-fn native_variables_have_distinct_ids() {
-    let a = NativeVariables::new();
-    let b = NativeVariables::new();
-    assert_ne!(a.id(), b.id());
-}
-
-#[test]
-fn pool_consumes_are_taken_back_most_recent_first_per_pool() {
-    let mut tc = NativeTestCase::for_choices(&[], None, None);
-    assert_eq!(tc.take_pool_consume(1), None);
-    tc.record_pool_consume(1, 10);
-    tc.record_pool_consume(2, 20);
-    tc.record_pool_consume(1, 11);
-    assert_eq!(tc.take_pool_consume(1), Some(11));
-    assert_eq!(tc.take_pool_consume(2), Some(20));
-    assert_eq!(tc.take_pool_consume(2), None);
-    assert_eq!(tc.take_pool_consume(1), Some(10));
-    assert_eq!(tc.take_pool_consume(1), None);
 }
 
 #[test]

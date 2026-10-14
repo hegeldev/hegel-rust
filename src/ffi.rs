@@ -1022,14 +1022,17 @@ impl CTestCase {
         rc_to_value(rc, id)
     }
 
-    /// Put back the variable this handle's stream most recently consumed
-    /// from `pool` and has not yet put back, returning its id.
-    pub(crate) fn pool_restore(&self, pool: &PoolHandle) -> Result<i64, hegel_result_t> {
-        let mut id: i64 = 0;
+    /// Put back `variable_id`, which a consuming [`Self::pool_generate`]
+    /// removed from `pool`, so it can be drawn again.
+    pub(crate) fn pool_restore(
+        &self,
+        pool: &PoolHandle,
+        variable_id: i64,
+    ) -> Result<(), hegel_result_t> {
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_pool_restore(ctx, self.raw, pool.raw, &mut id)
+            hegel_c::hegel_pool_restore(ctx, self.raw, pool.raw, variable_id)
         });
-        rc_to_value(rc, id)
+        rc_to_unit(rc)
     }
 
     /// Register a state machine. Each rule is assigned to a concurrency

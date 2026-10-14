@@ -593,7 +593,9 @@ fn test_concurrent_filters_put_back_the_consumed_values_they_reject(tc: TestCase
 }
 
 #[hegel::test]
-#[should_panic(expected = "pool_restore called with no consumed variable to put back")]
+#[should_panic(
+    expected = "reject called on a values_consumed generator with a value it did not just draw"
+)]
 fn test_concurrent_rejecting_a_value_that_was_not_drawn_is_an_error(tc: TestCase) {
     let pool: ConcurrentPool<i64> = concurrent_pool(&tc);
     pool.add(&tc, 1);
