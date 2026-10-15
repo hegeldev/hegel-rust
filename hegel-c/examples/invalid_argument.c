@@ -37,7 +37,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 1);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 1, true);
 
@@ -69,7 +69,7 @@ int main(void) {
     }
 
     hegel_string_generator_t *gen;
-    rc = hegel_string_generator_text(ctx, 0, 10, &STRING_LITERAL("ebcdic"), 0, UINT32_MAX, NULL, 0, NULL, 0, STRING_LITERAL(""), STRING_LITERAL(""), &gen);
+    rc = hegel_string_generator_text(ctx, 0, 10, &STRING("ebcdic"), 0, UINT32_MAX, NULL, 0, NULL, 0, STRING(""), STRING(""), &gen);
     if (rc != HEGEL_E_INVALID_ARG) {
         fprintf(stderr, "expected HEGEL_E_INVALID_ARG (%d) for unknown codec, got rc=%d\n",
                 HEGEL_E_INVALID_ARG, rc);

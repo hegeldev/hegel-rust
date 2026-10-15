@@ -531,9 +531,11 @@ pub enum hegel_health_check_t {
 pub type hegel_output_callback_t =
     Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
 
-/// A borrowed UTF-8 string. `len` counts bytes; no NUL terminator is
-/// required. `{NULL, 0}` is the empty string. Any pointer with zero length
-/// is treated as empty; returned empty strings always use `{NULL, 0}`.
+/// A borrowed UTF-8 string. `len` counts bytes. Inputs need no NUL
+/// terminator; zero length accepts any pointer, including NULL. Output
+/// strings have non-NULL data and a trailing NUL, including empty strings.
+/// `len` excludes the terminator. Interior NUL bytes are preserved; use
+/// `len` to read the complete string.
 /// Optional strings use a nullable pointer to this type: NULL means absent,
 /// and a pointer to an empty string means present and empty. The caller
 /// keeps input bytes alive for the call. Output bytes borrow their
@@ -601,22 +603,27 @@ unsafe impl Send for StoredString {}
 unsafe impl Sync for StoredString {}
 
 impl From<String> for StoredString {
-    fn from(value: String) -> Self {
-        let string = value.as_str().into();
+    fn from(mut value: String) -> Self {
+        let len = value.len();
+        value.push('\0');
+        let string = hegel_string_t {
+            data: value.as_ptr().cast(),
+            len,
+        };
         Self { value, string }
     }
 }
 
 impl Clone for StoredString {
     fn clone(&self) -> Self {
-        self.value.clone().into()
+        self.value[..self.string.len].to_string().into()
     }
 }
 
 /// Opaque error-reporting context: holds the diagnostic message of a failed
 /// call. Passed as the first argument to nearly every function.
 pub struct HegelContext {
-    last_error: String,
+    last_error: StoredString,
 }
 
 /// A caller-supplied output callback paired with its `user_data` pointer,
@@ -671,7 +678,7 @@ fn output_from_callback(callback: hegel_output_callback_t, user_data: *mut c_voi
 #[unsafe(no_mangle)]
 pub extern "C" fn hegel_context_new() -> *mut HegelContext {
     Box::into_raw(Box::new(HegelContext {
-        last_error: String::default(),
+        last_error: String::new().into(),
     }))
 }
 
@@ -692,12 +699,16 @@ pub unsafe extern "C" fn hegel_context_free(ctx: *mut HegelContext) -> hegel_res
 ///
 /// Returns the most recent error message recorded on `ctx`, or the empty
 /// string if the most recent call taking `ctx` succeeded or `ctx` is NULL.
-/// The string borrows the context's internal buffer and is invalidated by the next call taking the same context.
+/// The string borrows the context's internal buffer and is invalidated by
+/// the next call taking the same context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_context_last_error(ctx: *const HegelContext) -> hegel_string_t {
     match unsafe { ctx.as_ref() } {
-        Some(c) => c.last_error.as_str().into(),
-        None => hegel_string_t::default(),
+        Some(c) => c.last_error.string,
+        None => hegel_string_t {
+            data: c"".as_ptr(),
+            len: 0,
+        },
     }
 }
 
@@ -705,7 +716,7 @@ pub unsafe extern "C" fn hegel_context_last_error(ctx: *const HegelContext) -> h
 /// message (the caller opted out of error reporting).
 fn set_last_error(ctx: *mut HegelContext, msg: &str) {
     if let Some(c) = unsafe { ctx.as_mut() } {
-        c.last_error = msg.to_string();
+        c.last_error = msg.to_string().into();
     }
 }
 
@@ -714,8 +725,10 @@ fn set_last_error(ctx: *mut HegelContext, msg: &str) {
 /// empty — this runs at the top of every draw in the hot loop.
 fn clear_last_error(ctx: *mut HegelContext) {
     if let Some(c) = unsafe { ctx.as_mut() } {
-        if !c.last_error.is_empty() {
-            c.last_error.clear();
+        if c.last_error.string.len != 0 {
+            c.last_error.value.clear();
+            c.last_error.value.push('\0');
+            c.last_error.string.len = 0;
         }
     }
 }
@@ -1021,7 +1034,7 @@ impl From<&RunError> for HegelRunError {
 /// for reproducing the failure later via `hegel_run_start_blob`.
 #[derive(Clone)]
 pub struct HegelFailure {
-    origin: String,
+    origin: StoredString,
     /// Base64 failure blob encoding the minimal counterexample's choice
     /// sequence — or, for a nondeterministic failure, its replay state — or
     /// `None` when the engine produced no blob (an unconfirmed
@@ -1037,7 +1050,7 @@ pub struct HegelFailure {
 impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
-            origin: f.origin,
+            origin: f.origin.into(),
             reproduce_blob: f.reproduce_blob.map(StoredString::from),
             caveat: f.caveat.map(StoredString::from),
         }
@@ -4889,10 +4902,10 @@ pub unsafe extern "C" fn hegel_string_generator_free(
 
 /// An engine-allocated string buffer returned by `hegel_generate_string`.
 ///
-/// `data` points to `len` bytes of UTF-8. The buffer is **not**
-/// NUL-terminated and may contain interior NUL bytes (the drawn alphabet
-/// can include U+0000), so it is not a C string — always use `len`. The
-/// caller owns the buffer and must release it with
+/// `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
+/// Interior NUL bytes are preserved (the drawn alphabet can include
+/// U+0000), so use `len` to read the complete string. The caller owns the
+/// buffer and must release it with
 /// `hegel_generate_string_result_free` (freeing through any other allocator
 /// is undefined behaviour). `data` is never NULL after a successful draw,
 /// even for `len == 0`.
@@ -4906,9 +4919,9 @@ pub struct hegel_generate_string_result_t {
 /// Parameters:
 /// `generator`: A generator built by one of the constructors above.
 /// `out_result`: Receives a libhegel-allocated
-///   `{char *data; size_t len;}` the caller owns. Not NUL-terminated, and
-///   it may contain interior NUL bytes since the drawn alphabet can include
-///   U+0000, so always use `len`. Release with
+///   `{char *data; size_t len;}` the caller owns. A NUL terminator follows
+///   the `len` bytes. The drawn alphabet can include U+0000, so use `len`
+///   to read the complete string. Release with
 ///   `hegel_generate_string_result_free`.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` when the
@@ -4944,10 +4957,11 @@ pub unsafe extern "C" fn hegel_generate_string(
 /// buffer, to be released with `hegel_generate_string_result_free`.
 unsafe fn write_string_result(
     out_result: *mut hegel_generate_string_result_t,
-    s: String,
+    mut s: String,
 ) -> hegel_result_t {
+    let len = s.len();
+    s.push('\0');
     let boxed = s.into_bytes().into_boxed_slice();
-    let len = boxed.len();
     let data = Box::into_raw(boxed).cast::<c_char>();
     unsafe { *out_result = hegel_generate_string_result_t { data, len } };
     HEGEL_OK
@@ -4968,10 +4982,10 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
         return HEGEL_OK;
     };
     if !result.data.is_null() {
-        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
-        // `hegel_generate_string` and are freed exactly once here (the
-        // struct is zeroed below, making a second call a no-op).
-        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len) };
+        // SAFETY: write_string_result allocates len + 1 bytes, including the
+        // terminator. The caller returns that allocation exactly once;
+        // resetting the struct makes a second call a no-op.
+        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len + 1) };
     }
     result.data = ptr::null_mut();
     result.len = 0;
@@ -5068,7 +5082,7 @@ pub struct HegelGrammar {
     spec: crate::native::lark::generate::GrammarSpec,
     /// The explicit terminals' markers, borrowed by
     /// `hegel_grammar_placeholder`.
-    placeholders: Vec<(String, String)>,
+    placeholders: Vec<(String, StoredString)>,
 }
 
 /// Compile a grammar written in Lark's syntax (see
@@ -5170,7 +5184,7 @@ pub unsafe extern "C" fn hegel_grammar_new(
             let placeholders = spec
                 .placeholders()
                 .iter()
-                .map(|(name, marker)| (name.clone(), marker.to_string()))
+                .map(|(name, marker)| (name.clone(), marker.to_string().into()))
                 .collect();
             unsafe { *out_grammar = into_raw_send_sync(HegelGrammar { spec, placeholders }) };
             HEGEL_OK
@@ -5249,7 +5263,7 @@ pub unsafe extern "C" fn hegel_grammar_placeholder(
         );
         return HEGEL_E_INVALID_ARG;
     };
-    unsafe { *out_marker = marker.as_str().into() };
+    unsafe { *out_marker = marker.string };
     HEGEL_OK
 }
 
@@ -5270,8 +5284,8 @@ pub unsafe extern "C" fn hegel_grammar_placeholder(
 ///   caller replacing markers with values of its own uses it to draw
 ///   again, under a smaller cap, when the values pushed the string past
 ///   the cap it has in mind.
-/// `out_result`: Receives a libhegel-allocated UTF-8 buffer (not
-///   NUL-terminated) with the string. Release with
+/// `out_result`: Receives a libhegel-allocated UTF-8 buffer with a trailing
+///   NUL outside its reported length. Release with
 ///   `hegel_generate_string_result_free`.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME`, which
@@ -6493,9 +6507,9 @@ pub unsafe extern "C" fn hegel_printer_is_live(
 
 /// An engine-allocated string buffer returned by `hegel_printer_value`.
 ///
-/// `data` points to `len` bytes of UTF-8. The buffer is **not**
-/// NUL-terminated (printed values can contain any character), so always use
-/// `len`. The caller owns the buffer and must release it with
+/// `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
+/// Interior NUL bytes are preserved, so use `len` to read the complete
+/// string. The caller owns the buffer and must release it with
 /// `hegel_printer_value_result_free` (freeing through any other allocator is
 /// undefined behaviour). `data` is never NULL after a successful call, even
 /// for `len == 0`.
@@ -6541,8 +6555,10 @@ pub unsafe extern "C" fn hegel_printer_value(
     }
     match handle.inner.lock().value() {
         Ok(s) => {
-            let boxed = s.as_bytes().to_vec().into_boxed_slice();
-            let len = boxed.len();
+            let len = s.len();
+            let mut bytes = s.as_bytes().to_vec();
+            bytes.push(0);
+            let boxed = bytes.into_boxed_slice();
             let data = Box::into_raw(boxed).cast::<c_char>();
             unsafe { *out_result = hegel_printer_value_result_t { data, len } };
             HEGEL_OK
@@ -6564,10 +6580,10 @@ pub unsafe extern "C" fn hegel_printer_value_result_free(
         return HEGEL_OK;
     };
     if !result.data.is_null() {
-        // SAFETY: `data`/`len` came from `Box::into_raw` on a boxed slice in
-        // `hegel_printer_value` and are freed exactly once here (the struct
-        // is zeroed below, making a second call a no-op).
-        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len) };
+        // SAFETY: hegel_printer_value allocates len + 1 bytes, including the
+        // terminator. The caller returns that allocation exactly once;
+        // resetting the struct makes a second call a no-op.
+        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len + 1) };
     }
     result.data = ptr::null_mut();
     result.len = 0;
@@ -7014,7 +7030,7 @@ pub unsafe extern "C" fn hegel_failure_origin(
         set_last_error(ctx, "hegel_failure_origin: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe { *out_origin = f.origin.as_str().into() };
+    unsafe { *out_origin = f.origin.string };
     HEGEL_OK
 }
 
@@ -7107,8 +7123,13 @@ pub unsafe extern "C" fn hegel_version(
         set_last_error(ctx, "hegel_version: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    const VERSION: &str = env!("CARGO_PKG_VERSION");
-    unsafe { *out_version = VERSION.into() };
+    const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
+    unsafe {
+        *out_version = hegel_string_t {
+            data: VERSION.as_ptr().cast(),
+            len: VERSION.len() - 1,
+        }
+    };
     HEGEL_OK
 }
 

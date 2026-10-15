@@ -801,6 +801,7 @@ unsafe fn draw_string(
         HEGEL_OK
     );
     assert!(!result.data.is_null());
+    assert_eq!(unsafe { *result.data.add(result.len) }, 0);
     let s = String::from_utf8(
         unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec(),
     )
@@ -2612,6 +2613,8 @@ unsafe fn test_views(
 }
 
 unsafe fn test_bytes(value: hegel_c::hegel_string_t) -> &'static [u8] {
+    assert!(!value.data.is_null());
+    assert_eq!(unsafe { *value.data.add(value.len) }, 0);
     if value.len == 0 {
         &[]
     } else {

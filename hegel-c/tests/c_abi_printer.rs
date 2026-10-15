@@ -59,6 +59,7 @@ unsafe fn value(ctx: *mut HegelContext, p: *mut HegelPrinter) -> String {
     };
     ok(unsafe { hegel_printer_value(ctx, p, &mut result) });
     assert!(!result.data.is_null());
+    assert_eq!(unsafe { *result.data.add(result.len) }, 0);
     let bytes =
         unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec();
     ok(unsafe { hegel_printer_value_result_free(ctx, &mut result) });

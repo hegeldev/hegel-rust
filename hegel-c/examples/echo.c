@@ -32,7 +32,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 50);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));      /* disable database */
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING(""));      /* disable database */
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true); /* deterministic */
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
 
@@ -64,7 +64,7 @@ int main(void) {
         if (n < 0 || n > 100) {
             char origin[64];
             snprintf(origin, sizeof origin, "out-of-range value %lld", (long long)n);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING(origin, strlen(origin)));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &HEGEL_STRING(origin, strlen(origin)));
         } else {
             cases++;
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);

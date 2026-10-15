@@ -49,9 +49,9 @@
  * UTF-8 strings use hegel_string_t. Ordinary inputs pass it by value;
  * optional inputs use const hegel_string_t* with NULL meaning absent.
  * Borrowed outputs write a descriptor, or a descriptor pointer when
- * optional. No NUL terminator is required. Lengths count bytes and may
- * include interior NULs. {NULL, 0} is empty; any zero-length input is
- * treated as empty, and returned empty strings always use {NULL, 0}.
+ * optional. Inputs need no NUL terminator; zero length accepts NULL data.
+ * Output strings have non-NULL data and a trailing NUL, including empty
+ * strings. Lengths exclude the terminator and may include interior NULs.
  * NULL data with nonzero length and lengths above PTRDIFF_MAX are invalid.
  * String arrays contain hegel_string_t elements and take a separate count.
  *
@@ -681,9 +681,11 @@ typedef struct hegel_string_generator_t hegel_string_generator_t;
 typedef struct hegel_test_case_t hegel_test_case_t;
 
 /*
- A borrowed UTF-8 string. `len` counts bytes; no NUL terminator is
- required. `{NULL, 0}` is the empty string. Any pointer with zero length
- is treated as empty; returned empty strings always use `{NULL, 0}`.
+ A borrowed UTF-8 string. `len` counts bytes. Inputs need no NUL
+ terminator; zero length accepts any pointer, including NULL. Output
+ strings have non-NULL data and a trailing NUL, including empty strings.
+ `len` excludes the terminator. Interior NUL bytes are preserved; use
+ `len` to read the complete string.
  Optional strings use a nullable pointer to this type: NULL means absent,
  and a pointer to an empty string means present and empty. The caller
  keeps input bytes alive for the call. Output bytes borrow their
@@ -720,10 +722,10 @@ typedef struct {
 /*
  An engine-allocated string buffer returned by `hegel_generate_string`.
 
- `data` points to `len` bytes of UTF-8. The buffer is **not**
- NUL-terminated and may contain interior NUL bytes (the drawn alphabet
- can include U+0000), so it is not a C string — always use `len`. The
- caller owns the buffer and must release it with
+ `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
+ Interior NUL bytes are preserved (the drawn alphabet can include
+ U+0000), so use `len` to read the complete string. The caller owns the
+ buffer and must release it with
  `hegel_generate_string_result_free` (freeing through any other allocator
  is undefined behaviour). `data` is never NULL after a successful draw,
  even for `len == 0`.
@@ -796,9 +798,9 @@ typedef struct {
 /*
  An engine-allocated string buffer returned by `hegel_printer_value`.
 
- `data` points to `len` bytes of UTF-8. The buffer is **not**
- NUL-terminated (printed values can contain any character), so always use
- `len`. The caller owns the buffer and must release it with
+ `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
+ Interior NUL bytes are preserved, so use `len` to read the complete
+ string. The caller owns the buffer and must release it with
  `hegel_printer_value_result_free` (freeing through any other allocator is
  undefined behaviour). `data` is never NULL after a successful call, even
  for `len == 0`.
@@ -832,7 +834,8 @@ hegel_result_t hegel_context_free(hegel_context_t *ctx);
 
  Returns the most recent error message recorded on `ctx`, or the empty
  string if the most recent call taking `ctx` succeeded or `ctx` is NULL.
- The string borrows the context's internal buffer and is invalidated by the next call taking the same context.
+ The string borrows the context's internal buffer and is invalidated by
+ the next call taking the same context.
  */
 hegel_string_t hegel_context_last_error(const hegel_context_t *ctx);
 
@@ -2321,9 +2324,9 @@ hegel_result_t hegel_string_generator_free(hegel_context_t *ctx,
  Parameters:
  `generator`: A generator built by one of the constructors above.
  `out_result`: Receives a libhegel-allocated
-   `{char *data; size_t len;}` the caller owns. Not NUL-terminated, and
-   it may contain interior NUL bytes since the drawn alphabet can include
-   U+0000, so always use `len`. Release with
+   `{char *data; size_t len;}` the caller owns. A NUL terminator follows
+   the `len` bytes. The drawn alphabet can include U+0000, so use `len`
+   to read the complete string. Release with
    `hegel_generate_string_result_free`.
 
  Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` when the
@@ -2443,8 +2446,8 @@ hegel_result_t hegel_grammar_placeholder(hegel_context_t *ctx,
    caller replacing markers with values of its own uses it to draw
    again, under a smaller cap, when the values pushed the string past
    the cap it has in mind.
- `out_result`: Receives a libhegel-allocated UTF-8 buffer (not
-   NUL-terminated) with the string. Release with
+ `out_result`: Receives a libhegel-allocated UTF-8 buffer with a trailing
+   NUL outside its reported length. Release with
    `hegel_generate_string_result_free`.
 
  Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME`, which

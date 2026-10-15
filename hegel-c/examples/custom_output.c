@@ -55,7 +55,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 10);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL("")); /* disable database */
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING("")); /* disable database */
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
     HEGEL_CHECK(hegel_settings_set_verbosity, ctx, s, HEGEL_VERBOSITY_DEBUG);
 

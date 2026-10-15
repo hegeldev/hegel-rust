@@ -51,9 +51,9 @@ header = """
  * UTF-8 strings use hegel_string_t. Ordinary inputs pass it by value;
  * optional inputs use const hegel_string_t* with NULL meaning absent.
  * Borrowed outputs write a descriptor, or a descriptor pointer when
- * optional. No NUL terminator is required. Lengths count bytes and may
- * include interior NULs. {NULL, 0} is empty; any zero-length input is
- * treated as empty, and returned empty strings always use {NULL, 0}.
+ * optional. Inputs need no NUL terminator; zero length accepts NULL data.
+ * Output strings have non-NULL data and a trailing NUL, including empty
+ * strings. Lengths exclude the terminator and may include interior NULs.
  * NULL data with nonzero length and lengths above PTRDIFF_MAX are invalid.
  * String arrays contain hegel_string_t elements and take a separate count.
  *

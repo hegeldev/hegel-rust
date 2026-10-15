@@ -496,6 +496,7 @@ fn last_error_view_preserves_interior_nuls() {
     let ctx = hegel_context_new();
     set_last_error(ctx, "before\0after");
     let message = unsafe { hegel_context_last_error(ctx) };
+    assert_eq!(unsafe { *message.data.add(message.len) }, 0);
     assert_eq!(
         unsafe { std::slice::from_raw_parts(message.data.cast::<u8>(), message.len) },
         b"before\0after"

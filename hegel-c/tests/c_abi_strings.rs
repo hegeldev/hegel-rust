@@ -6,6 +6,8 @@ use hegel_c::*;
 use std::ptr;
 
 unsafe fn bytes<'a>(view: hegel_string_t) -> &'a [u8] {
+    assert!(!view.data.is_null());
+    assert_eq!(unsafe { *view.data.add(view.len) }, 0);
     if view.len == 0 {
         &[]
     } else {
@@ -48,7 +50,7 @@ fn strings_preserve_lengths_nuls_and_optional_values() {
         ));
         ok(hegel_settings_get_database(ctx, settings, &mut output));
         assert!(!output.is_null());
-        assert!((*output).data.is_null());
+        assert_eq!(bytes(*output), b"");
         assert_eq!((*output).len, 0);
         ok(hegel_settings_set_database(
             ctx,
@@ -63,7 +65,7 @@ fn strings_preserve_lengths_nuls_and_optional_values() {
         ok(hegel_settings_free(ctx, settings));
         ok(hegel_context_free(ctx));
         let absent = hegel_context_last_error(ptr::null());
-        assert!(absent.data.is_null());
+        assert_eq!(bytes(absent), b"");
         assert_eq!(absent.len, 0);
     }
 }

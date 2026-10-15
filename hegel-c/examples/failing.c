@@ -28,7 +28,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 200);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xc0ffee, true);
 
@@ -58,7 +58,7 @@ int main(void) {
         if (n < 5) {
             HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
         } else {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING_LITERAL(ORIGIN));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING(ORIGIN));
         }
         /* The caller owns every handle from hegel_next_test_case and must free it. */
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);

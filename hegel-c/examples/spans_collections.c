@@ -30,11 +30,11 @@ static uint64_t LIST_ELEMENT_LABEL;
 
 static void init_labels(hegel_context_t *ctx) {
     uint64_t list_kind, boolean_kind;
-    HEGEL_CHECK(hegel_label_from_name, ctx, STRING_LITERAL("example.list"), &list_kind);
-    HEGEL_CHECK(hegel_label_from_name, ctx, STRING_LITERAL("example.boolean"), &boolean_kind);
+    HEGEL_CHECK(hegel_label_from_name, ctx, STRING("example.list"), &list_kind);
+    HEGEL_CHECK(hegel_label_from_name, ctx, STRING("example.boolean"), &boolean_kind);
     uint64_t parts[2] = {list_kind, boolean_kind};
     HEGEL_CHECK(hegel_label_combine, ctx, parts, 2, &LIST_LABEL);
-    HEGEL_CHECK(hegel_label_from_name, ctx, STRING_LITERAL("example.list_element"), &LIST_ELEMENT_LABEL);
+    HEGEL_CHECK(hegel_label_from_name, ctx, STRING("example.list_element"), &LIST_ELEMENT_LABEL);
 }
 
 /* Draw a list of booleans, sized between min_size and max_size, using
@@ -91,7 +91,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 100);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xfeedface, true);
 
@@ -117,7 +117,7 @@ int main(void) {
         if ((uint64_t)n < MIN_SIZE || (uint64_t)n > MAX_SIZE) {
             char origin[64];
             snprintf(origin, sizeof origin, "size %d out of range", n);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING(origin, strlen(origin)));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &HEGEL_STRING(origin, strlen(origin)));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }

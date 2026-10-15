@@ -54,7 +54,7 @@ impl Context {
     fn last_error(&self) -> String {
         // SAFETY: self.raw is a live, non-null context handle.
         let p = unsafe { hegel_c::hegel_context_last_error(self.raw) };
-        if p.data.is_null() {
+        if p.len == 0 {
             return String::new();
         }
         String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p.data.cast::<u8>(), p.len) })

@@ -65,7 +65,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 100);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0x5ca1ab1e, true);
 
@@ -128,7 +128,7 @@ int main(void) {
         HEGEL_CHECK(hegel_pool_free, ctx, pool);
 
         if (bad) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING_LITERAL("drew a non-live variable"));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING("drew a non-live variable"));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             ok = false;
             continue;
