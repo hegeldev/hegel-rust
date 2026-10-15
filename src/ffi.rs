@@ -1570,8 +1570,8 @@ impl Drop for GrammarBuilder {
     }
 }
 
-/// The grammar file at `path` in the first of `dirs` that has one, read as
-/// one layered directory would be: `None` when none does.
+/// The text of `path` in the first of `dirs` that has it, or `None` when
+/// none does.
 fn read_grammar_file(dirs: &[PathBuf], path: &str) -> Result<Option<String>, String> {
     for dir in dirs {
         let file = dir.join(path);

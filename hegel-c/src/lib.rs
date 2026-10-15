@@ -5045,9 +5045,8 @@ pub unsafe extern "C" fn hegel_owned_string_free(
 /// Paths: a path is slash-separated and relative, and ends in `.lark`.
 /// `%import a.b.X` needs `a/b.lark`. A relative import, `%import .c.X`,
 /// needs `c.lark` in the directory of the file that makes it, so
-/// `x/c.lark` from `x/y.lark`; the grammar text itself sits at the top
-/// level, so its relative imports need top-level files (a frontend that
-/// wants them elsewhere can map paths under a directory of its choosing).
+/// `x/c.lark` from `x/y.lark`. The grammar text itself sits at the top
+/// level, so its relative imports need top-level files.
 /// Every component of a path is a Lark name (`[_a-zA-Z][_a-zA-Z0-9]*`),
 /// so a path never contains `.` or `..` as a component, an empty
 /// component, a leading `/`, a backslash or a NUL: joined under a root
@@ -5057,10 +5056,9 @@ pub unsafe extern "C" fn hegel_owned_string_free(
 /// however many grammars import it, an import of a path already being
 /// imported is reported as circular, and errors name files by path.
 ///
-/// Unlike Lark, which searches several `import_paths` and resolves a
-/// relative import beside the file it actually found, libhegel sees one
-/// tree of files: a frontend with several directories to search presents
-/// them as one, a path resolving to the first directory holding it.
+/// libhegel sees one tree of files. A frontend with several directories
+/// to search presents them as one, each path read from the first
+/// directory that holds it.
 pub struct HegelGrammarBuilder {
     files: crate::native::lark::builder::GrammarFiles,
     /// The path of each file, NUL-terminated for
@@ -5255,9 +5253,9 @@ pub struct HegelGrammar {
 /// generator of the strings it accepts, drawn with `hegel_generate_grammar`.
 ///
 /// Parameters:
-/// `builder`: The grammar and its files, every one of them provided. The
-///   builder is only read: it stays the caller's to free, and may build
-///   further grammars (with another `start`, say).
+/// `builder`: The grammar and its files, all provided. The builder is
+///   only read: the caller still frees it, and can build more grammars
+///   from it.
 /// `start`: The rule whose strings to generate, or NULL for `start`.
 /// `max_size`: The most characters a string may have, or 0 for the default
 ///   of 8192. Must not be below the shortest string the start rule can

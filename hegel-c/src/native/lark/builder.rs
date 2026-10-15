@@ -718,8 +718,8 @@ impl<'s> GrammarBuilder<'s> {
     }
 
     /// Load one grammar's statements, importing what it imports first.
-    /// `path` is the file the text is, `None` for the root text. `mangle`
-    /// is set when this grammar is itself being imported.
+    /// `path` is the file the text came from, `None` for the root text.
+    /// `mangle` is set when this grammar is itself being imported.
     pub fn load_grammar(
         &mut self,
         text: &str,
@@ -1011,8 +1011,8 @@ impl GrammarFiles {
         self.files.get(index).map(|f| f.path.as_str())
     }
 
-    /// Supply the `index`th file: its text, or `None` when there is no
-    /// such file, for the bundled grammar with its path to stand in.
+    /// Supply the `index`th file: its text, or `None` to use the bundled
+    /// grammar at its path.
     pub fn provide(&mut self, index: usize, text: Option<String>) -> GrammarResult<()> {
         let Some(file) = self.files.get(index) else {
             return Err(GrammarError::new(format!(
