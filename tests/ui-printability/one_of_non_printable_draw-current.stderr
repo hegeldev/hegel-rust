@@ -6,12 +6,13 @@ LL |     let _ = tc.draw(hegel::one_of!(gs::just(Opaque), gs::just(Opaque)));
  |                |
  |                required by a bound introduced by this call
  |
- = note: add `#[derive(Debug)]` to `Opaque` or manually `impl std::fmt::Debug for Opaque`
-help: the trait `PrintableGenerator<T>` is implemented for `OneOfGenerator<'_, T, A>`
+help: the trait `PrintableGenerator<T>` is conditionally implemented for `OneOfGenerator<'_, T, A>`
  --> src/generators/combinators.rs
  |
 LL | impl<'a, T, A: PrintableAlternatives<T>> PrintableGenerator<T> for OneOfGenerator<'a, T, A> {
- | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ | ^^^^^^^^^^^^^^^------------------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ |                |
+ |                unsatisfied requirement introduced here
  = note: required for `JustGenerator<Opaque>` to implement `PrintableGenerator<Opaque>`
  = note: required for `OneOfCons<JustGenerator<Opaque>, OneOfLast<JustGenerator<Opaque>>>` to implement `PrintableAlternatives<Opaque>`
  = note: 1 redundant requirement hidden
