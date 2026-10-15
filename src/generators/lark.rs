@@ -58,7 +58,7 @@ pub struct LarkGenerator {
     alphabet: Option<CharactersGenerator>,
     max_size: Option<usize>,
     max_depth: Option<u32>,
-    import_paths: Vec<PathBuf>,
+    import_dir: Option<PathBuf>,
     label: u64,
     handle: OnceLock<Compiled>,
 }
@@ -140,17 +140,16 @@ impl LarkGenerator {
         self
     }
 
-    /// Add a directory to search for `%import`ed grammars, as Lark's
-    /// `import_paths` does. `%import a.b.X` reads `a/b.lark` from the first
-    /// directory, in the order added, that has it. A relative import
-    /// (`%import .lib.X`) in `a/b.lark` reads `a/lib.lark` the same way; in
-    /// the grammar text itself it reads `lib.lark`. Unlike Lark, a relative
-    /// import does not depend on which directory its importer came from.
-    /// Lark's bundled `common`, `python`, `unicode` and `lark` grammars are
-    /// used when no directory has the file.
+    /// Set the directory `%import`ed grammars are read from, replacing
+    /// any set before. `%import a.b.X` reads `a/b.lark` from it, and Lark's
+    /// bundled `common`, `python`, `unicode` and `lark` grammars stand in
+    /// when it has no such file. A relative import (`%import .lib.X`) in
+    /// `a/b.lark` reads `a/lib.lark`, and in the grammar text itself reads
+    /// `lib.lark`; no bundled grammar stands in for it, as in Lark. Unlike
+    /// Lark's `import_paths`, there is one directory and no search path.
     pub fn import_path(mut self, dir: impl Into<PathBuf>) -> Self {
         self.handle = OnceLock::new();
-        self.import_paths.push(dir.into());
+        self.import_dir = Some(dir.into());
         self
     }
 
@@ -220,7 +219,7 @@ impl LarkGenerator {
                 self.max_depth.unwrap_or(0),
                 alphabet.as_ref(),
                 &names,
-                &self.import_paths,
+                self.import_dir.as_deref(),
             )
             .and_then(|grammar| {
                 let markers = names
@@ -318,7 +317,7 @@ pub fn from_lark(grammar: &str) -> LarkGenerator {
         alphabet: None,
         max_size: None,
         max_depth: None,
-        import_paths: Vec::new(),
+        import_dir: None,
         label: 0,
         handle: OnceLock::new(),
     };

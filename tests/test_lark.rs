@@ -95,6 +95,20 @@ fn test_from_lark_import_path_resolves_imports() {
 }
 
 #[test]
+fn test_from_lark_import_path_replaces_the_previous_one() {
+    let earlier = tempfile::TempDir::new().unwrap();
+    let later = tempfile::TempDir::new().unwrap();
+    std::fs::write(earlier.path().join("lib.lark"), "LETTERS: /[a-z]+/\n").unwrap();
+    std::fs::write(later.path().join("lib.lark"), "LETTERS: /[A-Z]+/\n").unwrap();
+    assert_all_examples(
+        gs::from_lark("%import lib.LETTERS\nstart: LETTERS\n")
+            .import_path(earlier.path())
+            .import_path(later.path()),
+        |s: &String| !s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase()),
+    );
+}
+
+#[test]
 fn test_from_lark_inserts_ignored_terminals() {
     find_any(
         gs::from_lark("start: \"a\" \"b\"\n%import common.WS\n%ignore WS\n"),

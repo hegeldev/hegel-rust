@@ -5056,9 +5056,13 @@ pub unsafe extern "C" fn hegel_owned_string_free(
 /// however many grammars import it, an import of a path already being
 /// imported is reported as circular, and errors name files by path.
 ///
-/// libhegel sees one tree of files. A frontend with several directories
-/// to search presents them as one, each path read from the first
-/// directory that holds it.
+/// Files come from the frontend or from the grammars bundled with
+/// libhegel (Lark's `common.lark`, `lark.lark`, `python.lark` and
+/// `unicode.lark`). Every path is asked of the frontend first. When the
+/// frontend has no such file, the bundled grammar at that path stands in
+/// if only absolute imports name it, as in Lark; nothing stands in for
+/// the file of a relative import. There is no search path: a frontend
+/// serves one tree of files.
 pub struct HegelGrammarBuilder {
     files: crate::native::lark::builder::GrammarFiles,
     /// The path of each file, NUL-terminated for
@@ -5169,17 +5173,18 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
 /// `index`: Which file, as numbered by `hegel_grammar_builder_file`.
 /// `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
 ///   NULL (with `text_len` 0) when there is no such file, in which case
-///   the grammar bundled with libhegel at that path stands in: Lark's
-///   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`. Unlike
-///   other strings, a NULL `text` here is not the empty string: pass any
-///   non-NULL pointer with `text_len` 0 for a file that exists but is
-///   empty.
+///   the grammar bundled with libhegel at that path stands in, unless a
+///   relative import names it. Unlike other strings, a NULL `text` here
+///   is not the empty string: pass any non-NULL pointer with `text_len` 0
+///   for a file that exists but is empty.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
 /// `HEGEL_E_INVALID_ARG` for an `index` past the end of the list or of a
 /// file already provided, text that is not UTF-8 or does not parse,
-/// imports that nest too deeply, or a NULL `text` for a path with no
-/// bundled grammar. On error the file stays unprovided.
+/// imports that nest too deeply, a NULL `text` for a path with no bundled
+/// grammar or that a relative import names, or text that relatively
+/// imports a file the bundled grammar already stood in for. On error the
+/// file stays unprovided.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_grammar_builder_provide(
     ctx: *mut HegelContext,

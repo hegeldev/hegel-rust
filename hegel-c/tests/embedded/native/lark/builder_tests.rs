@@ -529,15 +529,61 @@ fn relative_imports_resolve_against_the_importing_file() {
 }
 
 #[test]
-fn bundled_grammars_are_the_last_resort_for_relative_imports_too() {
-    let built = load_grammar("%import .common.INT\nstart: INT", &NoImports).unwrap();
-    assert_eq!(term_names(&built), vec!["INT"]);
-    assert!(
-        load_grammar("%import .missing.INT\nstart: INT", &NoImports)
-            .unwrap_err()
-            .message
-            .contains("Could not find grammar `missing.lark`")
+fn no_bundled_grammar_stands_in_for_a_relative_import() {
+    assert_eq!(
+        err("%import .common.INT\nstart: INT"),
+        "Could not find grammar `common.lark` to import"
     );
+    assert_eq!(
+        err("%import common.INT\n%import .common.WS\nstart: INT WS"),
+        "Could not find grammar `common.lark` to import"
+    );
+    let sources = Sources(vec![("common.lark", "INT: \"7\"\n")]);
+    let built = build_with("%import .common.INT\nstart: INT", &sources).unwrap();
+    assert_eq!(term_names(&built), vec!["INT"]);
+}
+
+#[test]
+fn a_relative_import_of_a_file_the_bundled_grammar_stood_in_for_is_an_error() {
+    let mut files = GrammarFiles::new(String::from(
+        "%import common.INT\n%import a.x\nstart: INT x\n",
+    ))
+    .unwrap();
+    assert_eq!(paths(&files), vec!["common.lark", "a.lark"]);
+    files.provide(0, None).unwrap();
+    assert_eq!(
+        files
+            .provide(1, Some(String::from("%import .common.WS\nx: WS\n")))
+            .unwrap_err()
+            .message,
+        "In grammar `a.lark`: Could not find grammar `common.lark` to import"
+    );
+}
+
+#[test]
+fn a_relative_import_of_a_file_not_yet_provided_keeps_the_bundled_grammar_out() {
+    let mut files = GrammarFiles::new(String::from(
+        "%import common.INT\n%import a.x\nstart: INT x\n",
+    ))
+    .unwrap();
+    files
+        .provide(1, Some(String::from("%import .common.WS\nx: WS\n")))
+        .unwrap();
+    assert_eq!(
+        files.provide(0, None).unwrap_err().message,
+        "Could not find grammar `common.lark` to import"
+    );
+}
+
+#[test]
+fn the_bundled_grammars_make_no_relative_imports() {
+    for path in ["common.lark", "lark.lark", "python.lark", "unicode.lark"] {
+        for statement in parse_grammar(bundled_grammar(path).unwrap()).unwrap() {
+            if let Statement::Import(stmt) = statement {
+                assert!(!stmt.relative, "{path}");
+            }
+        }
+    }
 }
 
 #[test]

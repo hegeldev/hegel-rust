@@ -51,7 +51,7 @@ fn ffi_drives_a_passing_run_exercising_every_primitive() {
     let sh = SettingsHandle::build(&settings, None, None);
     let run = RunHandle::start(&sh, None).unwrap();
     let text = StringGenerator::text(0, 5, None, 0, None, None, None, None, None).unwrap();
-    let grammar = Grammar::new("start: \"a\"+ \"b\"", None, 0, 0, None, &[], &[]).unwrap();
+    let grammar = Grammar::new("start: \"a\"+ \"b\"", None, 0, 0, None, &[], None).unwrap();
 
     let mut cases = 0usize;
     drive_run(&run, |tc| {
@@ -192,15 +192,15 @@ fn ffi_object_constructors_error_on_a_completed_case() {
 
 #[test]
 fn ffi_grammar_debug_is_opaque() {
-    let g = Grammar::new("start: \"a\"", None, 0, 0, None, &[], &[]).unwrap();
+    let g = Grammar::new("start: \"a\"", None, 0, 0, None, &[], None).unwrap();
     assert_eq!(format!("{g:?}"), "Grammar { .. }");
 }
 
 #[test]
 fn ffi_grammar_construction_reports_engine_diagnostics() {
-    let err = Grammar::new("start: )", None, 0, 0, None, &[], &[]).unwrap_err();
+    let err = Grammar::new("start: )", None, 0, 0, None, &[], None).unwrap_err();
     assert!(err.contains("line 1"), "{err}");
-    let err = Grammar::new("start: \"ab\"", None, 1, 0, None, &[], &[]).unwrap_err();
+    let err = Grammar::new("start: \"ab\"", None, 1, 0, None, &[], None).unwrap_err();
     assert!(err.contains("max_size is 1"), "{err}");
     let alphabet =
         StringGenerator::text(0, 0, None, 0, Some(0x7F), None, None, None, None).unwrap();
@@ -211,7 +211,7 @@ fn ffi_grammar_construction_reports_engine_diagnostics() {
         10,
         Some(&alphabet),
         &["NUM".to_string()],
-        &[],
+        None,
     )
     .unwrap();
     let marker = grammar.placeholder("NUM").unwrap();
@@ -224,63 +224,46 @@ fn ffi_grammar_construction_reports_engine_diagnostics() {
 }
 
 #[test]
-fn ffi_grammar_imports_are_read_from_the_import_paths_layered() {
-    let root = tempfile::TempDir::new().unwrap();
-    let overlay = tempfile::TempDir::new().unwrap();
-    let sub = root.path().join("sub");
+fn ffi_grammar_imports_are_read_from_the_import_dir() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let sub = dir.path().join("sub");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("lib.lark"), "%import .inner.DIGIT\nNUM: DIGIT+\n").unwrap();
-    std::fs::write(overlay.path().join("sub"), "not a directory").unwrap();
+    std::fs::write(sub.join("inner.lark"), "DIGIT: /[0-9]/\n").unwrap();
     let text = "%import sub.lib.NUM\n%import common.WS\nstart: NUM\n%ignore WS\n";
-    let err = Grammar::new(
-        text,
-        None,
-        0,
-        0,
-        None,
-        &[],
-        &[overlay.path().to_path_buf(), root.path().to_path_buf()],
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("Could not find grammar `sub/inner.lark`"),
-        "{err}"
-    );
+    let new =
+        |text: &str, dir: Option<&std::path::Path>| Grammar::new(text, None, 0, 0, None, &[], dir);
+    new(text, Some(dir.path())).unwrap();
 
-    let layer = overlay.path().join("layer");
-    std::fs::create_dir_all(layer.join("sub")).unwrap();
-    std::fs::write(layer.join("sub/inner.lark"), "DIGIT: /[0-9]/\n").unwrap();
-    let paths = [layer.clone(), root.path().to_path_buf()];
-    Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap();
-
-    std::fs::write(layer.join("sub/inner.lark"), b"DIGIT: \"\xff\"\n").unwrap();
-    let err = Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap_err();
-    assert!(err.contains("Could not read grammar"), "{err}");
-
-    std::fs::write(layer.join("sub/inner.lark"), "DIGIT: (\n").unwrap();
-    let err = Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap_err();
-    assert!(err.contains("In grammar `sub/inner.lark`"), "{err}");
-
-    let err = Grammar::new("start: (", None, 0, 0, None, &[], &paths).unwrap_err();
-    assert!(err.contains("Unclosed parenthesis"), "{err}");
-
-    let err = Grammar::new(text, None, 0, 0, None, &[], &[]).unwrap_err();
+    let err = new(text, None).unwrap_err();
     assert!(
         err.contains("Could not find grammar `sub/lib.lark`"),
         "{err}"
     );
 
-    let err = Grammar::new(
-        "%import .inner.DIGIT\nstart: DIGIT",
-        None,
-        0,
-        0,
-        None,
-        &[],
-        &paths,
-    )
-    .unwrap_err();
-    assert!(err.contains("Could not find grammar `inner.lark`"), "{err}");
+    let err = new("%import .common.WS\nstart: WS", Some(dir.path())).unwrap_err();
+    assert!(
+        err.contains("Could not find grammar `common.lark`"),
+        "{err}"
+    );
+
+    std::fs::write(dir.path().join("file"), "not a directory").unwrap();
+    let err = new("%import file.lib.X\nstart: X", Some(dir.path())).unwrap_err();
+    assert!(
+        err.contains("Could not find grammar `file/lib.lark`"),
+        "{err}"
+    );
+
+    std::fs::write(sub.join("inner.lark"), b"DIGIT: \"\xff\"\n").unwrap();
+    let err = new(text, Some(dir.path())).unwrap_err();
+    assert!(err.contains("Could not read grammar"), "{err}");
+
+    std::fs::write(sub.join("inner.lark"), "DIGIT: (\n").unwrap();
+    let err = new(text, Some(dir.path())).unwrap_err();
+    assert!(err.contains("In grammar `sub/inner.lark`"), "{err}");
+
+    let err = new("start: (", Some(dir.path())).unwrap_err();
+    assert!(err.contains("Unclosed parenthesis"), "{err}");
 }
 
 #[test]

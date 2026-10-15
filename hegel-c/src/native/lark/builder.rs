@@ -921,18 +921,27 @@ fn tree_mentions(tree: &Expr, name: &str, as_terminal: bool) -> bool {
     }
 }
 
+fn not_found(path: &str) -> GrammarError {
+    GrammarError::new(format!("Could not find grammar `{path}` to import"))
+}
+
 fn nesting_error() -> GrammarError {
     GrammarError::new(format!(
         "Grammar imports nest more than {MAX_IMPORT_NESTING} levels deep"
     ))
 }
 
-/// The file an `%import` made by the grammar file `importer` names
-/// (`None` for the root text, which sits at the top level):
+/// The frontend file an `%import` made by the grammar file `importer`
+/// names (`None` for the root text, which sits at the top level):
 /// `a/b.lark` for `%import a.b.X`, and for a relative import
 /// (`%import .c.X`) the importer's directory joined with `c.lark`. Every
 /// component is a Lark name, so the path never holds `.`, `..`, an
 /// empty segment, a leading `/`, a backslash or a NUL.
+///
+/// As in Lark, the bundled grammar at an absolute import's path stands
+/// in when the frontend has no such file, but nothing stands in for a
+/// relative import's file. The bundled grammars make no relative imports
+/// of their own, so every relative import names a frontend file.
 pub fn import_path(stmt: &ImportStmt, importer: Option<&str>) -> String {
     let file = format!("{}.lark", stmt.path.join("/"));
     if stmt.relative {
@@ -948,7 +957,12 @@ struct GrammarFile {
     /// How many imports lead to it from the root text along the chain
     /// that first named it.
     depth: usize,
-    text: Option<String>,
+    /// Whether a relative import names it, so that no bundled grammar
+    /// may stand in for it.
+    relative: bool,
+    /// Its text once provided, and whether that is the bundled grammar
+    /// standing in for a file the frontend does not have.
+    text: Option<(String, bool)>,
 }
 
 /// A grammar's text and the files its `%import`s need, gathered one at a
@@ -985,24 +999,39 @@ impl GrammarFiles {
     }
 
     fn add_imports(&mut self, text: &str, path: Option<&str>, depth: usize) -> GrammarResult<()> {
-        let mut new = Vec::new();
+        let mut named: Vec<(String, bool)> = Vec::new();
         for statement in parse_grammar(text)? {
             let Statement::Import(stmt) = statement else {
                 continue;
             };
             let imported = import_path(&stmt, path);
-            if !new.contains(&imported) && !self.files.iter().any(|f| f.path == imported) {
-                new.push(imported);
+            match named.iter_mut().find(|(p, _)| *p == imported) {
+                Some((_, relative)) => *relative |= stmt.relative,
+                None => named.push((imported, stmt.relative)),
             }
         }
-        if !new.is_empty() && depth >= MAX_IMPORT_NESTING {
+        let new = named
+            .iter()
+            .any(|(p, _)| !self.files.iter().any(|f| f.path == *p));
+        if new && depth >= MAX_IMPORT_NESTING {
             return Err(nesting_error());
         }
-        self.files.extend(new.into_iter().map(|path| GrammarFile {
-            path,
-            depth: depth + 1,
-            text: None,
-        }));
+        for (imported, relative) in named {
+            match self.files.iter_mut().find(|f| f.path == imported) {
+                Some(file) => {
+                    if relative && matches!(file.text, Some((_, true))) {
+                        return Err(not_found(&imported));
+                    }
+                    file.relative |= relative;
+                }
+                None => self.files.push(GrammarFile {
+                    path: imported,
+                    depth: depth + 1,
+                    relative,
+                    text: None,
+                }),
+            }
+        }
         Ok(())
     }
 
@@ -1011,8 +1040,9 @@ impl GrammarFiles {
         self.files.get(index).map(|f| f.path.as_str())
     }
 
-    /// Supply the `index`th file: its text, or `None` to use the bundled
-    /// grammar at its path.
+    /// Supply the `index`th file: its text, or `None` when the frontend
+    /// has no such file, for the bundled grammar at its path to stand in
+    /// if only absolute imports name it.
     pub fn provide(&mut self, index: usize, text: Option<String>) -> GrammarResult<()> {
         let Some(file) = self.files.get(index) else {
             return Err(GrammarError::new(format!(
@@ -1026,23 +1056,22 @@ impl GrammarFiles {
                 "Grammar file `{path}` was already provided"
             )));
         }
-        let text = match text {
-            Some(text) => text,
-            None => bundled_grammar(&path)
-                .ok_or_else(|| {
-                    GrammarError::new(format!("Could not find grammar `{path}` to import"))
-                })?
-                .to_string(),
+        let (text, bundled) = match text {
+            Some(text) => (text, false),
+            None => match bundled_grammar(&path) {
+                Some(text) if !file.relative => (text.to_string(), true),
+                _ => return Err(not_found(&path)),
+            },
         };
         self.add_imports(&text, Some(&path), file.depth)
             .map_err(|e| GrammarError::new(format!("In grammar `{path}`: {}", e.message)))?;
-        self.files[index].text = Some(text);
+        self.files[index].text = Some((text, bundled));
         Ok(())
     }
 
     fn text(&self, path: &str) -> &str {
         let file = self.files.iter().find(|f| f.path == path).unwrap();
-        file.text.as_deref().unwrap()
+        &file.text.as_ref().unwrap().0
     }
 
     /// Parse and build the grammar, once every file is supplied.

@@ -27,7 +27,7 @@ use crate::test_case::OutputSink;
 use hegel_c::hegel_result_t;
 use std::ffi::c_void;
 use std::os::raw::c_char;
-use std::path::PathBuf;
+use std::path::Path;
 use std::ptr;
 
 /// Owns a `*mut HegelContext` — libhegel's explicit per-call error channel —
@@ -1509,10 +1509,9 @@ struct GrammarBuilder {
 }
 
 impl GrammarBuilder {
-    /// A builder for `text` with every file it imports supplied from the
-    /// first of `dirs` holding it, or left to libhegel's bundled grammars
-    /// when none does.
-    fn new(text: &str, dirs: &[PathBuf]) -> Result<Self, String> {
+    /// A builder for `text` with every file it imports read from `dir`,
+    /// or reported missing when `dir` has no such file (or is `None`).
+    fn new(text: &str, dir: Option<&Path>) -> Result<Self, String> {
         let mut raw: *mut hegel_c::HegelGrammarBuilder = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_grammar_builder_new(
@@ -1528,7 +1527,10 @@ impl GrammarBuilder {
         let builder = GrammarBuilder { raw };
         let mut index = 0;
         while let Some(path) = builder.file(index) {
-            let text = read_grammar_file(dirs, &path)?;
+            let text = match dir {
+                Some(dir) => read_grammar_file(&dir.join(&path))?,
+                None => None,
+            };
             let (ptr, len) = text
                 .as_ref()
                 .map_or((ptr::null(), 0), |t| (t.as_ptr().cast::<c_char>(), t.len()));
@@ -1570,22 +1572,20 @@ impl Drop for GrammarBuilder {
     }
 }
 
-/// The text of `path` in the first of `dirs` that has it, or `None` when
-/// none does.
-fn read_grammar_file(dirs: &[PathBuf], path: &str) -> Result<Option<String>, String> {
-    for dir in dirs {
-        let file = dir.join(path);
-        match std::fs::read_to_string(&file) {
-            Ok(text) => return Ok(Some(text)),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) => {}
-            Err(e) => return Err(format!("Could not read grammar `{}`: {e}", file.display())),
+/// The text of the grammar file `file`, or `None` when there is none.
+fn read_grammar_file(file: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => Ok(Some(text)),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(None)
         }
+        Err(e) => Err(format!("Could not read grammar `{}`: {e}", file.display())),
     }
-    Ok(None)
 }
 
 impl Grammar {
@@ -1594,9 +1594,8 @@ impl Grammar {
     /// `max_depth` of `0` take the engine's defaults. `alphabet` constrains
     /// the characters of every terminal drawn from its pattern, `explicit`
     /// names the terminals whose values the caller splices in for their
-    /// [`placeholder`](Self::placeholder) markers, and `import_paths` are
-    /// the directories `%import`ed grammars are read from, layered: a file
-    /// is read from the first that holds it.
+    /// [`placeholder`](Self::placeholder) markers, and `import_dir` is the
+    /// directory `%import`ed grammars are read from.
     pub(crate) fn new(
         text: &str,
         start: Option<&str>,
@@ -1604,9 +1603,9 @@ impl Grammar {
         max_depth: u32,
         alphabet: Option<&StringGenerator>,
         explicit: &[String],
-        import_paths: &[PathBuf],
+        import_dir: Option<&Path>,
     ) -> Result<Self, String> {
-        let builder = GrammarBuilder::new(text, import_paths)?;
+        let builder = GrammarBuilder::new(text, import_dir)?;
         let c_start = start.map(|s| view(s.as_bytes()));
         let name_ptrs: Vec<hegel_c::hegel_string_t> =
             explicit.iter().map(|name| view(name.as_bytes())).collect();
