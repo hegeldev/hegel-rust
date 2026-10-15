@@ -36,7 +36,7 @@ header = """
  * ------------------
  * Every function takes a hegel_context_t* as its first argument and returns
  * a hegel_result_t code, except for hegel_context_new, which returns a
- * context, and hegel_context_last_error, which returns the message view
+ * context, and hegel_context_last_error, which returns the message string
  * directly.
  *
  * HEGEL_OK is zero and every error code is negative. Anything else a call
@@ -48,13 +48,14 @@ header = """
  * out-parameter, inverted bounds, a non-UTF-8 string, and so on). The
  * functions below leave these implicit.
  *
- * UTF-8 strings use hegel_string_t, passed by value for inputs and through
- * an out pointer for borrowed outputs. No NUL terminator is required.
- * Lengths count bytes and may include interior NULs. {NULL, 0} means
- * absent for optional strings; non-NULL with zero length means empty.
- * Required strings reject absence. NULL with nonzero length and lengths
- * above PTRDIFF_MAX are invalid. String arrays contain hegel_string_t
- * elements and take a separate element count.
+ * UTF-8 strings use hegel_string_t. Ordinary inputs pass it by value;
+ * optional inputs use const hegel_string_t* with NULL meaning absent.
+ * Borrowed outputs write a descriptor, or a descriptor pointer when
+ * optional. No NUL terminator is required. Lengths count bytes and may
+ * include interior NULs. {NULL, 0} is empty; any zero-length input is
+ * treated as empty, and returned empty strings always use {NULL, 0}.
+ * NULL data with nonzero length and lengths above PTRDIFF_MAX are invalid.
+ * String arrays contain hegel_string_t elements and take a separate count.
  *
  * A NULL context is always allowed and opts out of error messages. The call
  * still returns its usual error code. A context must not be used
@@ -94,7 +95,7 @@ header = """
  *     hegel_test_case_printer    ->  hegel_printer_free
  *     hegel_printer_value        ->  hegel_printer_value_result_free
  *
- * Every other string libhegel hands back is a borrowed view. The caller
+ * Every other string libhegel hands back is borrowed. The caller
  * must not free it, and it is valid only until a documented point.
  * hegel_context_last_error is invalidated by the next call on that context.
  *

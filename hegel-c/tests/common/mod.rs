@@ -40,7 +40,7 @@ pub unsafe fn make_settings_no_db(ctx: *mut HegelContext) -> *mut HegelSettings 
     let s = unsafe { make_settings(ctx) };
     let empty = CString::new("").unwrap();
     assert_eq!(
-        unsafe { hegel_settings_set_database(ctx, s, test_view(empty.as_ptr())) },
+        unsafe { hegel_settings_set_database(ctx, s, test_optional(&test_view(empty.as_ptr()))) },
         HEGEL_OK
     );
     s
@@ -93,5 +93,13 @@ unsafe fn test_bytes(value: hegel_c::hegel_string_t) -> &'static [u8] {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(value.data.cast(), value.len) }
+    }
+}
+
+fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
+    if value.data.is_null() && value.len == 0 {
+        std::ptr::null()
+    } else {
+        value
     }
 }

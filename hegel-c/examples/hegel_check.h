@@ -21,12 +21,8 @@
 
 #include "hegel.h"
 
-static inline hegel_string_t string_view(const char *data, size_t len) {
-    hegel_string_t result = {data, len};
-    return result;
-}
-
-#define STRING_LITERAL(value) string_view((value), sizeof(value) - 1)
+#define STRING(data, len) ((hegel_string_t){(len) == 0 ? NULL : (data), (len)})
+#define STRING_LITERAL(value) STRING((value), sizeof(value) - 1)
 
 #define HEGEL_CHECK(fn, ctx, ...) \
     do { \

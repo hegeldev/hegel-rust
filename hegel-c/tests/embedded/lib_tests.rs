@@ -23,7 +23,7 @@ unsafe fn start_run_and_first_case() -> (
     let mut s: *mut HegelSettings = ptr::null_mut();
     assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
     let empty = CString::new("").unwrap();
-    ok(unsafe { hegel_settings_set_database(ctx, s, test_view(empty.as_ptr())) });
+    ok(unsafe { hegel_settings_set_database(ctx, s, test_optional(&test_view(empty.as_ptr()))) });
     ok(unsafe { hegel_settings_set_seed(ctx, s, 1, true) });
     let mut run: *mut HegelRun = ptr::null_mut();
     assert_eq!(
@@ -48,7 +48,7 @@ unsafe fn finish(
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -104,7 +104,7 @@ fn mark_complete_waits_for_an_in_flight_operation() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                test_view(ptr::null()),
+                test_optional(&test_view(ptr::null())),
             ));
         });
 
@@ -128,7 +128,7 @@ fn completion_is_reported_before_concurrent_use() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                test_view(ptr::null())
+                test_optional(&test_view(ptr::null()))
             ),
             HEGEL_OK
         );
@@ -167,7 +167,12 @@ fn concurrent_use_of_one_collection_is_rejected() {
             HEGEL_E_CONCURRENT_USE
         );
         assert_eq!(
-            hegel_collection_reject(ctx, clone, collection, test_view(ptr::null())),
+            hegel_collection_reject(
+                ctx,
+                clone,
+                collection,
+                test_optional(&test_view(ptr::null()))
+            ),
             HEGEL_E_CONCURRENT_USE
         );
         drop(held);
@@ -229,9 +234,9 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
         let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         ok(hegel_run_result_status(ctx, result, &mut status));
         assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
-        let mut message = crate::hegel_string_t::default();
+        let mut message = ptr::null();
         ok(hegel_run_result_error(ctx, result, &mut message));
-        let message = std::str::from_utf8(test_bytes(message)).unwrap();
+        let message = std::str::from_utf8(test_bytes(*message)).unwrap();
         assert!(
             message.contains("suspended without offering a test case"),
             "{message}"
@@ -335,10 +340,10 @@ fn every_run_error_maps_to_its_kind_through_the_abi() {
                 (expected_kind, expected_check),
                 "{expected_message}"
             );
-            let mut message = crate::hegel_string_t::default();
+            let mut message = ptr::null();
             ok(hegel_run_result_error(ctx, result, &mut message));
             assert_eq!(
-                std::str::from_utf8(test_bytes(message)).unwrap(),
+                std::str::from_utf8(test_bytes(*message)).unwrap(),
                 expected_message
             );
             ok(hegel_run_result_free(ctx, result));
@@ -414,9 +419,9 @@ fn internal_run_error_surfaces_through_run_result_error() {
         let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         ok(hegel_run_result_status(ctx, result, &mut status));
         assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
-        let mut message = crate::hegel_string_t::default();
+        let mut message = ptr::null();
         ok(hegel_run_result_error(ctx, result, &mut message));
-        let message = std::str::from_utf8(test_bytes(message)).unwrap();
+        let message = std::str::from_utf8(test_bytes(*message)).unwrap();
         assert!(
             message.contains("exploration invariant violated"),
             "{message}"
@@ -496,4 +501,12 @@ fn last_error_view_preserves_interior_nuls() {
         b"before\0after"
     );
     unsafe { ok(hegel_context_free(ctx)) };
+}
+
+fn test_optional(value: &crate::hegel_string_t) -> *const crate::hegel_string_t {
+    if value.data.is_null() && value.len == 0 {
+        std::ptr::null()
+    } else {
+        value
+    }
 }

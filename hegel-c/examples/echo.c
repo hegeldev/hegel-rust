@@ -32,7 +32,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 50);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, STRING_LITERAL(""));      /* disable database */
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, &STRING_LITERAL(""));      /* disable database */
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true); /* deterministic */
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
 
@@ -49,14 +49,14 @@ int main(void) {
         int64_t n;
         hegel_result_t rc = hegel_generate_integer(ctx, tc, 0, 100, &n);
         if (rc == HEGEL_E_STOP_TEST) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, string_view(NULL, 0));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if (rc != HEGEL_OK) {
             hegel_string_t err = hegel_context_last_error(ctx);
             fprintf(stderr, "hegel_generate_integer failed: rc=%d %.*s\n", rc, (int)err.len, err.data);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, string_view(NULL, 0));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
@@ -64,10 +64,10 @@ int main(void) {
         if (n < 0 || n > 100) {
             char origin[64];
             snprintf(origin, sizeof origin, "out-of-range value %lld", (long long)n);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, string_view(origin, strlen(origin)));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, &STRING(origin, strlen(origin)));
         } else {
             cases++;
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, string_view(NULL, 0));
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
         }
         /* Every handle hegel_next_test_case hands back is owned by the caller
            and must be released, even though the run keeps its own reference. */
@@ -93,9 +93,9 @@ int main(void) {
         HEGEL_CHECK(hegel_failure_free, ctx, f);
     }
     if (status == HEGEL_RUN_STATUS_ERROR) {
-        hegel_string_t run_err;
+        const hegel_string_t *run_err;
         HEGEL_CHECK(hegel_run_result_error, ctx, result, &run_err);
-        fprintf(stderr, "run error: %.*s\n", (int)run_err.len, run_err.data);
+        fprintf(stderr, "run error: %.*s\n", (int)run_err->len, run_err->data);
     }
     /* The result is a caller-owned snapshot, freed independently of the run. */
     HEGEL_CHECK(hegel_run_result_free, ctx, result);

@@ -209,7 +209,7 @@ impl Settings {
     /// over. Takes precedence over `HEGEL_DEFAULT_PROFILE` and the
     /// `default` entry in `hegel.toml`; the `--profile` flag of a
     /// `#[hegel::main]` binary calls this. The name is not required to
-    /// exist yet.
+    /// exist yet. An empty name clears the process override.
     ///
     /// Like [`Settings::register_profile`] this is not retroactive, so it
     /// must run before the tests that should see it; under `cargo test`

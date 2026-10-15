@@ -527,3 +527,12 @@ fn ffi_set_default_profile_reports_engine_errors() {
 fn ffi_set_default_profile_accepts_a_clear() {
     set_default_profile(None).unwrap();
 }
+
+#[test]
+fn a_successful_call_clears_the_context_error() {
+    with_context(|ctx| unsafe {
+        let mut version = hegel_c::hegel_string_t::default();
+        require_ok(hegel_c::hegel_version(ctx, &mut version));
+    });
+    assert!(last_error_string().is_empty());
+}

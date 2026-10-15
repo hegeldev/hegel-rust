@@ -14,7 +14,7 @@ unsafe fn bytes<'a>(view: hegel_string_t) -> &'a [u8] {
 }
 
 #[test]
-fn string_views_preserve_lengths_nuls_and_optional_values() {
+fn strings_preserve_lengths_nuls_and_optional_values() {
     unsafe {
         let ctx = hegel_context_new();
         let mut settings = ptr::null_mut();
@@ -28,29 +28,38 @@ fn string_views_preserve_lengths_nuls_and_optional_values() {
             data: input.as_ptr().cast(),
             len: 3,
         };
-        ok(hegel_settings_set_database(ctx, settings, view));
-        let mut output = hegel_string_t::default();
+        ok(hegel_settings_set_database(
+            ctx,
+            settings,
+            test_optional(&view),
+        ));
+        let mut output = ptr::null();
         ok(hegel_settings_get_database(ctx, settings, &mut output));
-        assert_eq!(bytes(output), b"a\0b");
+        assert_eq!(bytes(*output), b"a\0b");
         let mut full = 0;
         let mut prefix = 0;
         ok(hegel_label_from_name(ctx, view, &mut full));
         ok(hegel_label_from_name(ctx, "a".into(), &mut prefix));
         assert_ne!(full, prefix);
-        ok(hegel_settings_set_database(ctx, settings, "".into()));
-        ok(hegel_settings_get_database(ctx, settings, &mut output));
-        assert!(!output.data.is_null());
-        assert_eq!(output.len, 0);
         ok(hegel_settings_set_database(
             ctx,
             settings,
-            hegel_string_t::default(),
+            &hegel_string_t::default(),
         ));
         ok(hegel_settings_get_database(ctx, settings, &mut output));
-        assert!(output.data.is_null());
-        assert_eq!(output.len, 0);
-        ok(hegel_version(ctx, &mut output));
-        assert_eq!(bytes(output), env!("CARGO_PKG_VERSION").as_bytes());
+        assert!(!output.is_null());
+        assert!((*output).data.is_null());
+        assert_eq!((*output).len, 0);
+        ok(hegel_settings_set_database(
+            ctx,
+            settings,
+            test_optional(&hegel_string_t::default()),
+        ));
+        ok(hegel_settings_get_database(ctx, settings, &mut output));
+        assert!(output.is_null());
+        let mut version = hegel_string_t::default();
+        ok(hegel_version(ctx, &mut version));
+        assert_eq!(bytes(version), env!("CARGO_PKG_VERSION").as_bytes());
         ok(hegel_settings_free(ctx, settings));
         ok(hegel_context_free(ctx));
         let absent = hegel_context_last_error(ptr::null());
@@ -60,7 +69,7 @@ fn string_views_preserve_lengths_nuls_and_optional_values() {
 }
 
 #[test]
-fn string_views_reject_invalid_layouts_and_utf8_before_reading() {
+fn strings_reject_invalid_layouts_and_utf8_before_reading() {
     unsafe {
         let ctx = hegel_context_new();
         let mut settings = ptr::null_mut();
@@ -85,7 +94,7 @@ fn string_views_reject_invalid_layouts_and_utf8_before_reading() {
             },
         ] {
             assert_eq!(
-                hegel_settings_set_database_key(ctx, settings, value),
+                hegel_settings_set_database_key(ctx, settings, test_optional(&value)),
                 HEGEL_E_INVALID_ARG
             );
             assert!(!last_error(ctx).is_empty());
@@ -98,10 +107,6 @@ fn string_views_reject_invalid_layouts_and_utf8_before_reading() {
         }
         let mut label = 0;
         assert_eq!(
-            hegel_label_from_name(ctx, hegel_string_t::default(), &mut label),
-            HEGEL_E_INVALID_ARG
-        );
-        assert_eq!(
             hegel_label_from_name(
                 ctx,
                 hegel_string_t {
@@ -113,13 +118,29 @@ fn string_views_reject_invalid_layouts_and_utf8_before_reading() {
             HEGEL_E_INVALID_ARG
         );
         ok(hegel_label_from_name(ctx, "".into(), &mut label));
+        let mut empty_label = 0;
+        ok(hegel_label_from_name(
+            ctx,
+            hegel_string_t::default(),
+            &mut empty_label,
+        ));
+        assert_eq!(label, empty_label);
+        ok(hegel_label_from_name(
+            ctx,
+            hegel_string_t {
+                data: ptr::dangling(),
+                len: 0,
+            },
+            &mut empty_label,
+        ));
+        assert_eq!(label, empty_label);
         ok(hegel_settings_free(ctx, settings));
         ok(hegel_context_free(ctx));
     }
 }
 
 #[test]
-fn string_view_arrays_use_each_elements_length() {
+fn string_arrays_use_each_elements_length() {
     unsafe {
         let ctx = hegel_context_new();
         let category = b"Luignored";
@@ -132,7 +153,7 @@ fn string_view_arrays_use_each_elements_length() {
             ctx,
             0,
             1,
-            hegel_string_t::default(),
+            test_optional(&hegel_string_t::default()),
             0,
             u32::MAX,
             categories.as_ptr(),
@@ -158,7 +179,7 @@ fn string_view_arrays_use_each_elements_length() {
                     ctx,
                     0,
                     1,
-                    hegel_string_t::default(),
+                    test_optional(&hegel_string_t::default()),
                     0,
                     u32::MAX,
                     array,
@@ -173,5 +194,13 @@ fn string_view_arrays_use_each_elements_length() {
             );
         }
         ok(hegel_context_free(ctx));
+    }
+}
+
+fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
+    if value.data.is_null() && value.len == 0 {
+        std::ptr::null()
+    } else {
+        value
     }
 }

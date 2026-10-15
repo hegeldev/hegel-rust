@@ -853,7 +853,7 @@ fn family_document_is_shared_and_survives_completion() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
 
         ok(hegel_printer_resolve(ctx, p1));
@@ -916,7 +916,7 @@ fn note_during_a_speculative_draw_lands_after_the_value() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -993,7 +993,7 @@ fn clone_regions_anchor_where_the_clone_was_made() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, grandchild));
         ok(hegel_test_case_free(ctx, clone));
@@ -1071,7 +1071,7 @@ fn first_explicit_width_configures_the_family_document() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -1138,7 +1138,7 @@ fn note_and_test_case_printer_validate_arguments() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -1419,7 +1419,7 @@ fn straggler_clones_share_their_parents_dead_region() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_printer_free(ctx, root));
         ok(hegel_test_case_free(ctx, block));
@@ -1551,7 +1551,7 @@ fn block_handles_indent_their_region_and_share_the_stream() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, clone));
         ok(hegel_test_case_free(ctx, nested));
@@ -1676,7 +1676,7 @@ fn worker_attribution_stamps_lines_recorded_through_the_handle() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_view(ptr::null()),
+            test_optional(&test_view(ptr::null())),
         ));
         ok(hegel_test_case_free(ctx, grandchild));
         ok(hegel_test_case_free(ctx, block));
@@ -1696,5 +1696,13 @@ unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
         } else {
             unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
         },
+    }
+}
+
+fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
+    if value.data.is_null() && value.len == 0 {
+        std::ptr::null()
+    } else {
+        value
     }
 }

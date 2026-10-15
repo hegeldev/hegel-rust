@@ -36,7 +36,7 @@ just c-build-wasm
 `hegel-c/wasm-toolchain` pins Rust 1.97.1 for local builds, CI, and release
 artifacts. Wasm consumers must use its C-compatible aggregate ABI: a
 by-value `hegel_string_t` input is passed as an address of an eight-byte
-`{data, len}` descriptor in linear memory; a returned view uses a hidden
+`{data, len}` descriptor in linear memory; a returned string uses a hidden
 output address before the explicit parameters. Rust 1.86 used a different
 aggregate ABI and is unsupported for Wasm builds. The native MSRV remains
 1.86. Rust callers linking the Wasm static archive must also use the pinned

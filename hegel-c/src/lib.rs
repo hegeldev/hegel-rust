@@ -531,10 +531,13 @@ pub enum hegel_health_check_t {
 pub type hegel_output_callback_t =
     Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
 
-/// A borrowed UTF-8 string view. `len` counts bytes; no NUL terminator is
-/// required. Optional strings use `{NULL, 0}` for absence; a non-NULL
-/// pointer with zero length is present and empty. The caller keeps input
-/// bytes alive for the call. Output bytes borrow their documented owner.
+/// A borrowed UTF-8 string. `len` counts bytes; no NUL terminator is
+/// required. `{NULL, 0}` is the empty string. Any pointer with zero length
+/// is treated as empty; returned empty strings always use `{NULL, 0}`.
+/// Optional strings use a nullable pointer to this type: NULL means absent,
+/// and a pointer to an empty string means present and empty. The caller
+/// keeps input bytes alive for the call. Output bytes borrow their
+/// documented owner.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct hegel_string_t {
@@ -553,16 +556,20 @@ impl Default for hegel_string_t {
 
 impl From<&str> for hegel_string_t {
     fn from(value: &str) -> Self {
-        Self {
-            data: value.as_ptr().cast(),
-            len: value.len(),
+        if value.is_empty() {
+            Self::default()
+        } else {
+            Self {
+                data: value.as_ptr().cast(),
+                len: value.len(),
+            }
         }
     }
 }
 
 impl hegel_string_t {
-    fn is_absent(self) -> bool {
-        self.data.is_null() && self.len == 0
+    fn is_empty(self) -> bool {
+        self.len == 0
     }
 
     unsafe fn as_bytes<'a>(self) -> Result<&'a [u8], &'static str> {
@@ -580,6 +587,29 @@ impl hegel_string_t {
 
     unsafe fn as_str<'a>(self) -> Result<&'a str, &'static str> {
         core::str::from_utf8(unsafe { self.as_bytes() }?).map_err(|_| "is not valid UTF-8")
+    }
+}
+
+struct StoredString {
+    value: String,
+    string: hegel_string_t,
+}
+
+// SAFETY: string points into the immutable allocation owned by value.
+unsafe impl Send for StoredString {}
+// SAFETY: shared access cannot mutate value or its descriptor.
+unsafe impl Sync for StoredString {}
+
+impl From<String> for StoredString {
+    fn from(value: String) -> Self {
+        let string = value.as_str().into();
+        Self { value, string }
+    }
+}
+
+impl Clone for StoredString {
+    fn clone(&self) -> Self {
+        self.value.clone().into()
     }
 }
 
@@ -661,9 +691,8 @@ pub unsafe extern "C" fn hegel_context_free(ctx: *mut HegelContext) -> hegel_res
 /// `ctx`: The context to read.
 ///
 /// Returns the most recent error message recorded on `ctx`, or the empty
-/// string if the most recent call taking `ctx` succeeded. `{NULL, 0}` only
-/// if `ctx` is NULL. The view borrows the context's internal buffer and is
-/// invalidated by the next call taking the same context.
+/// string if the most recent call taking `ctx` succeeded or `ctx` is NULL.
+/// The string borrows the context's internal buffer and is invalidated by the next call taking the same context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_context_last_error(ctx: *const HegelContext) -> hegel_string_t {
     match unsafe { ctx.as_ref() } {
@@ -708,7 +737,7 @@ pub struct HegelSettings {
     /// in step with `inner.database` by the constructors and
     /// `hegel_settings_set_database` so the getter can hand out a borrowed
     /// pointer.
-    database_c: Option<String>,
+    database_c: Option<StoredString>,
     /// Where the test under these settings lives, for reporting its verdict
     /// to Antithesis. Like the database key, per-test identity rather than
     /// a setting: not part of `Settings` and not snapshotted into profiles.
@@ -719,8 +748,8 @@ impl HegelSettings {
     fn from_settings(inner: Settings) -> Self {
         let database_c = match &inner.database {
             Database::Unset => None,
-            Database::Disabled => Some(String::new()),
-            Database::Path(path) => Some(path.clone()),
+            Database::Disabled => Some(String::new().into()),
+            Database::Path(path) => Some(path.clone().into()),
         };
         HegelSettings {
             inner,
@@ -956,7 +985,7 @@ struct HegelRunError {
     /// The `hegel_health_check_t` flag of the failed check, or 0 when the
     /// error is not a health check.
     health_check: u32,
-    message: String,
+    message: StoredString,
 }
 
 impl From<&RunError> for HegelRunError {
@@ -975,7 +1004,7 @@ impl From<&RunError> for HegelRunError {
         HegelRunError {
             kind,
             health_check,
-            message: e.to_string(),
+            message: e.to_string().into(),
         }
     }
 }
@@ -983,7 +1012,7 @@ impl From<&RunError> for HegelRunError {
 /// One distinct interesting test case surfaced by the run.
 /// `hegel_run_result_failure` writes a caller-owned run result.
 /// Reading strings within the run result via `hegel_failure_origin` /
-/// `_reproduction_blob` returns borrowed string views that stay valid until
+/// `_reproduction_blob` returns borrowed strings that stay valid until
 /// the memory is released with `hegel_failure_free`. The snapshot is
 /// independent of the result and run it came from.
 ///
@@ -998,19 +1027,19 @@ pub struct HegelFailure {
     /// `None` when the engine produced no blob (an unconfirmed
     /// nondeterministic failure, or a failure returned from a blob replay).
     /// Read via `hegel_failure_reproduction_blob`.
-    reproduce_blob: Option<String>,
+    reproduce_blob: Option<StoredString>,
     /// The failure's confirmation standing when the run handled
     /// nondeterminism, quoting the run's own replay evidence; `None` for
     /// a deterministic failure. Read via `hegel_failure_caveat`.
-    caveat: Option<String>,
+    caveat: Option<StoredString>,
 }
 
 impl From<Failure> for HegelFailure {
     fn from(f: Failure) -> Self {
         HegelFailure {
             origin: f.origin,
-            reproduce_blob: f.reproduce_blob,
-            caveat: f.caveat,
+            reproduce_blob: f.reproduce_blob.map(StoredString::from),
+            caveat: f.caveat.map(StoredString::from),
         }
     }
 }
@@ -1147,10 +1176,6 @@ pub unsafe extern "C" fn hegel_settings_new_for_profile(
     out_settings: *mut *mut HegelSettings,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    if name.is_absent() {
-        set_last_error(ctx, "hegel_settings_new_for_profile: name is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let Ok(name) = (unsafe { name.as_str() }) else {
         set_last_error(
             ctx,
@@ -1490,7 +1515,7 @@ pub unsafe extern "C" fn hegel_settings_set_unbounded_choices(
 }
 
 /// Parameters:
-/// `database`: `{NULL, 0}` sets it to the default: `./.hegel/examples/`, including
+/// `database`: NULL sets it to the default: `./.hegel/examples/`, including
 ///   resetting a value the handle already carries. `""` disables the
 ///   database entirely. Discovered failures will not be stored. Anything
 ///   else is used as the database root directory. The directory will be
@@ -1501,28 +1526,28 @@ pub unsafe extern "C" fn hegel_settings_set_unbounded_choices(
 pub unsafe extern "C" fn hegel_settings_set_database(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
-    database: hegel_string_t,
+    database: *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let handle = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
-    if database.is_absent() {
+    if database.is_null() {
         handle.inner.database = Database::Unset;
         handle.database_c = None;
         return HEGEL_OK;
     }
-    let cstr = unsafe { database.as_str() };
+    let cstr = unsafe { (*database).as_str() };
     match cstr {
         Ok("") => {
             handle.inner = handle.inner.clone().database(None);
-            handle.database_c = Some(String::new());
+            handle.database_c = Some(String::new().into());
             HEGEL_OK
         }
         Ok(path) => {
             handle.inner = handle.inner.clone().database(Some(path.to_string()));
-            handle.database_c = Some(path.to_string());
+            handle.database_c = Some(path.to_string().into());
             HEGEL_OK
         }
         Err(_) => {
@@ -1533,7 +1558,7 @@ pub unsafe extern "C" fn hegel_settings_set_database(
 }
 
 /// Parameters:
-/// `key`: Scopes stored and replayed examples. `{NULL, 0}` clears it (the
+/// `key`: Scopes stored and replayed examples. NULL clears it (the
 ///   default).
 ///
 /// Returns `HEGEL_OK`.
@@ -1541,18 +1566,18 @@ pub unsafe extern "C" fn hegel_settings_set_database(
 pub unsafe extern "C" fn hegel_settings_set_database_key(
     ctx: *mut HegelContext,
     s: *mut HegelSettings,
-    key: hegel_string_t,
+    key: *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let hs = match unsafe { settings_mut(ctx, s, "hegel_settings_set_database_key") } {
         Ok(h) => h,
         Err(rc) => return rc,
     };
-    if key.is_absent() {
+    if key.is_null() {
         hs.database_key = None;
         return HEGEL_OK;
     }
-    match unsafe { key.as_str() } {
+    match unsafe { (*key).as_str() } {
         Ok(k) => {
             hs.database_key = Some(k.to_string());
             HEGEL_OK
@@ -1738,10 +1763,6 @@ pub unsafe extern "C" fn hegel_settings_register_profile(
     settings: *const HegelSettings,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    if name.is_absent() {
-        set_last_error(ctx, "hegel_settings_register_profile: name is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let Ok(name) = (unsafe { name.as_str() }) else {
         set_last_error(
             ctx,
@@ -1763,7 +1784,7 @@ pub unsafe extern "C" fn hegel_settings_register_profile(
 }
 
 /// Parameters:
-/// `name`: The profile the `default` alias should resolve to, or `{NULL, 0}` to
+/// `name`: The profile the `default` alias should resolve to, or an empty string to
 ///   clear an earlier call. The name is not required to exist yet; naming
 ///   the `default` alias itself is rejected.
 ///
@@ -1780,7 +1801,7 @@ pub unsafe extern "C" fn hegel_set_default_profile(
     name: hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    let name = if name.is_absent() {
+    let name = if name.is_empty() {
         None
     } else {
         match unsafe { name.as_str() } {
@@ -1911,9 +1932,9 @@ pub unsafe extern "C" fn hegel_settings_get_derandomize(
 }
 
 /// Parameters:
-/// `out_database`: Receives the database value, mirroring the setter's
-///   convention: `{NULL, 0}` for the default, a present empty view for disabled, else the root
-///   directory path. The view borrows the handle and stays valid until
+/// `out_database`: Receives NULL for the default database, a pointer to an
+///   empty string for disabled, or a pointer to the root directory string.
+///   The string borrows the handle and stays valid until
 ///   the next `hegel_settings_set_database` call on it or
 ///   `hegel_settings_free`.
 ///
@@ -1922,7 +1943,7 @@ pub unsafe extern "C" fn hegel_settings_get_derandomize(
 pub unsafe extern "C" fn hegel_settings_get_database(
     ctx: *mut HegelContext,
     s: *const HegelSettings,
-    out_database: *mut hegel_string_t,
+    out_database: *mut *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let handle = match unsafe { settings_ref(ctx, s, "hegel_settings_get_database") } {
@@ -1934,8 +1955,8 @@ pub unsafe extern "C" fn hegel_settings_get_database(
         return HEGEL_E_INVALID_ARG;
     }
     let ptr = match &handle.database_c {
-        Some(string) => string.as_str().into(),
-        None => hegel_string_t::default(),
+        Some(string) => &string.string as *const hegel_string_t,
+        None => ptr::null(),
     };
     unsafe { *out_database = ptr };
     HEGEL_OK
@@ -2286,10 +2307,6 @@ pub unsafe extern "C" fn hegel_run_start_blob(
         set_last_error(ctx, "hegel_run_start_blob: settings pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    if blob.is_absent() {
-        set_last_error(ctx, "hegel_run_start_blob: blob pointer is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let Ok(blob) = (unsafe { blob.as_str() }) else {
         set_last_error(ctx, "hegel_run_start_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
@@ -2549,10 +2566,6 @@ pub unsafe extern "C" fn hegel_test_case_from_blob(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_test_case = ptr::null_mut() };
-    if blob.is_absent() {
-        set_last_error(ctx, "hegel_test_case_from_blob: blob pointer is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let Ok(blob) = (unsafe { blob.as_str() }) else {
         set_last_error(ctx, "hegel_test_case_from_blob: blob is not valid UTF-8");
         return HEGEL_E_INVALID_ARG;
@@ -3013,11 +3026,11 @@ pub unsafe extern "C" fn hegel_stop_span(
 /// names and of other libraries'.
 ///
 /// Parameters:
-/// `name`: A present string view. Hashed as bytes, so any encoding
+/// `name`: A string. Hashed as bytes, so any encoding
 ///   works as long as the generator always uses the same one.
 /// `out_label`: Receives the label.
 ///
-/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on an absent `name` or
+/// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a malformed `name` or
 /// NULL `out_label`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_label_from_name(
@@ -3026,10 +3039,6 @@ pub unsafe extern "C" fn hegel_label_from_name(
     out_label: *mut u64,
 ) -> hegel_result_t {
     clear_last_error(ctx);
-    if name.is_absent() {
-        set_last_error(ctx, "hegel_label_from_name: name is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     if out_label.is_null() {
         set_last_error(ctx, "hegel_label_from_name: out parameter is null");
         return HEGEL_E_INVALID_ARG;
@@ -3037,7 +3046,7 @@ pub unsafe extern "C" fn hegel_label_from_name(
     let bytes = match unsafe { name.as_bytes() } {
         Ok(bytes) => bytes,
         Err(_) => {
-            set_last_error(ctx, "hegel_label_from_name: invalid string view");
+            set_last_error(ctx, "hegel_label_from_name: invalid string");
             return HEGEL_E_INVALID_ARG;
         }
     };
@@ -3239,7 +3248,7 @@ pub unsafe extern "C" fn hegel_collection_more(
 }
 
 /// Parameters:
-/// `why`: Optional human-readable rejection reason (`{NULL, 0}` is allowed).
+/// `why`: Optional human-readable rejection reason (NULL means absent).
 ///   Validated but currently unused, reserved for future rejection
 ///   diagnostics.
 ///
@@ -3252,7 +3261,7 @@ pub unsafe extern "C" fn hegel_collection_reject(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     collection: *mut HegelCollection,
-    why: hegel_string_t,
+    why: *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_collection_reject", tc) } {
@@ -3263,10 +3272,10 @@ pub unsafe extern "C" fn hegel_collection_reject(
         Ok(c) => c,
         Err(rc) => return rc,
     };
-    let why_str = if why.is_absent() {
+    let why_str = if why.is_null() {
         None
     } else {
-        match unsafe { why.as_str() } {
+        match unsafe { (*why).as_str() } {
             Ok(s) => Some(s),
             Err(_) => {
                 set_last_error(ctx, "hegel_collection_reject: why is not valid UTF-8");
@@ -3788,9 +3797,9 @@ pub unsafe extern "C" fn hegel_pool_free(
     HEGEL_OK
 }
 
-/// Convert a C array of `len` string views into owned Rust
+/// Convert a C array of `len` strings into owned Rust
 /// strings, setting `hegel_context_last_error` and returning the error
-/// code on a null array (with `len > 0`), a null entry, or a non-UTF-8
+/// code on a null array (with `len > 0`), a malformed entry, or a non-UTF-8
 /// entry.
 unsafe fn names_from_c_array(
     ctx: *mut HegelContext,
@@ -3808,13 +3817,13 @@ unsafe fn names_from_c_array(
         );
         return Err(HEGEL_E_INVALID_ARG);
     }
-    let views = if len == 0 {
+    let strings = if len == 0 {
         &[]
     } else {
         unsafe { core::slice::from_raw_parts(names, len) }
     };
     let mut out = Vec::with_capacity(len);
-    for (i, &value) in views.iter().enumerate() {
+    for (i, &value) in strings.iter().enumerate() {
         out.push(unsafe { required_utf8_arg(ctx, func, &format!("{what}[{i}]"), value) }?);
     }
     Ok(out)
@@ -3860,7 +3869,7 @@ unsafe fn state_machine_ref<'a>(
 /// `rule_names`, and given a selection weight by `rule_weights`, an array
 /// of `num_rules` finite, strictly positive doubles parallel to
 /// `rule_names` (NULL for all-equal weights) — and `num_invariants`
-/// invariants, with names as UTF-8 string views, plus concurrency bounds. `invariant_always_check`
+/// invariants, with names as UTF-8 strings, plus concurrency bounds. `invariant_always_check`
 /// is an array of `num_invariants` flags parallel to `invariant_names`
 /// (NULL for all-false): `hegel_state_machine_should_check_invariant`
 /// answers true unconditionally for a flagged invariant and samples the
@@ -4615,12 +4624,12 @@ unsafe fn optional_utf8_arg(
     ctx: *mut HegelContext,
     fn_name: &str,
     arg_name: &str,
-    value: hegel_string_t,
+    value: *const hegel_string_t,
 ) -> Result<Option<String>, hegel_result_t> {
-    if value.is_absent() {
+    if value.is_null() {
         return Ok(None);
     }
-    match unsafe { value.as_str() } {
+    match unsafe { (*value).as_str() } {
         Ok(s) => Ok(Some(s.to_string())),
         Err(message) => {
             set_last_error(ctx, &format!("{fn_name}: {arg_name} {message}"));
@@ -4635,13 +4644,12 @@ unsafe fn required_utf8_arg(
     arg_name: &str,
     value: hegel_string_t,
 ) -> Result<String, hegel_result_t> {
-    match unsafe { optional_utf8_arg(ctx, fn_name, arg_name, value) } {
-        Ok(Some(s)) => Ok(s),
-        Ok(None) => {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
+    match unsafe { value.as_str() } {
+        Ok(s) => Ok(s.to_string()),
+        Err(message) => {
+            set_last_error(ctx, &format!("{fn_name}: {arg_name} {message}"));
             Err(HEGEL_E_INVALID_ARG)
         }
-        Err(rc) => Err(rc),
     }
 }
 
@@ -4674,7 +4682,7 @@ unsafe fn write_string_generator(
 /// Parameters:
 /// `min_size` / `max_size`: Inclusive length bounds, in characters.
 /// `codec`: The alphabet's starting range: `"ascii"`, `"latin-1"` /
-///   `"iso-8859-1"`, or `"utf-8"` / `{NULL, 0}` for Unicode.
+///   `"iso-8859-1"`, or `"utf-8"` / NULL for Unicode.
 /// `min_codepoint` / `max_codepoint`: Intersected with the codec's range.
 ///   Pass `0` and `UINT32_MAX` for no constraint. Surrogates are always
 ///   removed.
@@ -4682,7 +4690,7 @@ unsafe fn write_string_generator(
 ///   categories. NULL means no restriction. A non-NULL empty list means an
 ///   empty alphabet.
 /// `exclude_categories`: Removes the named categories.
-/// `include_characters` / `exclude_characters`: UTF-8 string views
+/// `include_characters` / `exclude_characters`: UTF-8 strings
 ///   of individual characters. Characters in
 ///   `include_characters` are included first, then characters in
 ///   `exclude_characters` are removed.
@@ -4694,7 +4702,7 @@ pub unsafe extern "C" fn hegel_string_generator_text(
     ctx: *mut HegelContext,
     min_size: u64,
     max_size: u64,
-    codec: hegel_string_t,
+    codec: *const hegel_string_t,
     min_codepoint: u32,
     max_codepoint: u32,
     categories: *const hegel_string_t,
@@ -4735,12 +4743,12 @@ pub unsafe extern "C" fn hegel_string_generator_text(
         Err(rc) => return rc,
     };
     let include_characters =
-        match unsafe { optional_utf8_arg(ctx, FN, "include_characters", include_characters) } {
+        match unsafe { required_utf8_arg(ctx, FN, "include_characters", include_characters) } {
             Ok(v) => v,
             Err(rc) => return rc,
         };
     let exclude_characters =
-        match unsafe { optional_utf8_arg(ctx, FN, "exclude_characters", exclude_characters) } {
+        match unsafe { required_utf8_arg(ctx, FN, "exclude_characters", exclude_characters) } {
             Ok(v) => v,
             Err(rc) => return rc,
         };
@@ -4750,8 +4758,8 @@ pub unsafe extern "C" fn hegel_string_generator_text(
         max_codepoint,
         categories,
         exclude_categories,
-        include_characters,
-        exclude_characters,
+        include_characters: Some(include_characters),
+        exclude_characters: Some(exclude_characters),
     };
     match crate::native::draws::StringSpec::text(&alphabet, size_arg(min_size), size_arg(max_size))
     {
@@ -4761,7 +4769,7 @@ pub unsafe extern "C" fn hegel_string_generator_text(
 }
 
 /// Parameters:
-/// `pattern`: Borrowed UTF-8 view of
+/// `pattern`: Borrowed UTF-8 string of
 ///   the pattern to match, in Python `re` syntax. Length-delimited so the
 ///   pattern may contain the NUL character, which `re` accepts.
 /// `fullmatch`: When true, the whole string must match the pattern.
@@ -4791,9 +4799,8 @@ pub unsafe extern "C" fn hegel_string_generator_regex(
     }
     unsafe { *out_generator = ptr::null_mut() };
     const FN: &str = "hegel_string_generator_regex";
-    let pattern = match unsafe { optional_utf8_arg(ctx, FN, "pattern", pattern) } {
-        Ok(Some(s)) => s,
-        Ok(None) => String::new(),
+    let pattern = match unsafe { required_utf8_arg(ctx, FN, "pattern", pattern) } {
+        Ok(s) => s,
         Err(rc) => return rc,
     };
     let alphabet_spec = unsafe { alphabet.as_ref() }.map(|g| &*g.spec);
@@ -5069,8 +5076,8 @@ pub struct HegelGrammar {
 /// generator of the strings it accepts, drawn with `hegel_generate_grammar`.
 ///
 /// Parameters:
-/// `text`: The grammar, as a UTF-8 string view.
-/// `start`: The rule whose strings to generate, or `{NULL, 0}` for `start`.
+/// `text`: The grammar, as a UTF-8 string.
+/// `start`: The rule whose strings to generate, or NULL for `start`.
 /// `max_size`: The most characters a string may have, or 0 for the default
 ///   of 8192. Must not be below the shortest string the start rule can
 ///   produce, nor above 1048576. A placeholder marker counts as no
@@ -5101,7 +5108,7 @@ pub struct HegelGrammar {
 pub unsafe extern "C" fn hegel_grammar_new(
     ctx: *mut HegelContext,
     text: hegel_string_t,
-    start: hegel_string_t,
+    start: *const hegel_string_t,
     max_size: u64,
     max_depth: u32,
     alphabet: *const HegelStringGenerator,
@@ -5205,11 +5212,11 @@ pub unsafe extern "C" fn hegel_grammar_free(
 /// Parameters:
 /// `grammar`: A grammar built by `hegel_grammar_new`.
 /// `name`: The terminal's name, as given in `explicit_names`.
-/// `out_marker`: Receives a string view the grammar owns, valid
+/// `out_marker`: Receives a string the grammar owns, valid
 ///   until the grammar is freed.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL grammar;
-/// `HEGEL_E_INVALID_ARG` for an absent `name` or NULL `out_marker`, a `name` that
+/// `HEGEL_E_INVALID_ARG` for a malformed `name` or NULL `out_marker`, a `name` that
 /// is not valid UTF-8, or one that is not an explicit terminal of the
 /// grammar.
 #[unsafe(no_mangle)]
@@ -5561,7 +5568,7 @@ pub unsafe extern "C" fn hegel_generate_ipv6(
 /// `value`: A numeric observation. Must be finite. Higher is "more
 ///   interesting." libhegel biases later test cases toward inputs that
 ///   produced higher observations under the same label.
-/// `label`: A present UTF-8 string view. Each label may be recorded at most
+/// `label`: A present UTF-8 string. Each label may be recorded at most
 ///   once per test case.
 ///
 /// Returns `HEGEL_OK`.
@@ -5579,10 +5586,6 @@ pub unsafe extern "C" fn hegel_target(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if label.is_absent() {
-        set_last_error(ctx, "hegel_target: label is null");
-        return HEGEL_E_INVALID_ARG;
-    }
     let label = match unsafe { label.as_str() } {
         Ok(s) => s,
         Err(_) => {
@@ -5604,7 +5607,7 @@ pub unsafe extern "C" fn hegel_target(
 /// nothing and report nothing.
 ///
 /// Parameters:
-/// `label`: A present UTF-8 string view.
+/// `label`: A present UTF-8 string.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
 /// label.
@@ -5627,7 +5630,7 @@ pub unsafe extern "C" fn hegel_event(
 ///
 /// Parameters:
 /// `value`: The observation. Must be finite.
-/// `label`: A present UTF-8 string view. Unlike `hegel_target`, a label may be
+/// `label`: A present UTF-8 string. Unlike `hegel_target`, a label may be
 ///   observed any number of times per test case.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_INVALID_ARG` on a null / non-UTF-8
@@ -5655,10 +5658,6 @@ unsafe fn event_observation(
         Ok(t) => t,
         Err(rc) => return rc,
     };
-    if label.is_absent() {
-        set_last_error(ctx, &format!("{fn_name}: label is null"));
-        return HEGEL_E_INVALID_ARG;
-    }
     let label = match unsafe { label.as_str() } {
         Ok(s) => s,
         Err(_) => {
@@ -5921,7 +5920,7 @@ unsafe fn printer_text_arg(
     arg_name: &str,
     value: hegel_string_t,
 ) -> Result<String, hegel_result_t> {
-    let text = unsafe { optional_utf8_arg(ctx, fn_name, arg_name, value) }?.unwrap_or_default();
+    let text = unsafe { required_utf8_arg(ctx, fn_name, arg_name, value) }?;
     if text.contains('\n') {
         set_last_error(
             ctx,
@@ -5980,7 +5979,7 @@ pub unsafe extern "C" fn hegel_printer_free(
     HEGEL_OK
 }
 
-/// Emit the UTF-8 string view `text` only if the innermost group open at
+/// Emit the UTF-8 string `text` only if the innermost group open at
 /// this point renders broken; a group that fits on one line renders nothing
 /// here. The text never counts toward width (measurement uses the flat
 /// form, which is empty).
@@ -6014,7 +6013,7 @@ pub unsafe extern "C" fn hegel_printer_if_break(
     }
 }
 
-/// Emit the UTF-8 string view `text` as literal, unbreakable text.
+/// Emit the UTF-8 string `text` as literal, unbreakable text.
 ///
 /// The text must not contain newlines: express line structure with
 /// `hegel_printer_hard_break` (or breakable points) so column accounting
@@ -6259,7 +6258,7 @@ pub unsafe extern "C" fn hegel_reflow_options_free(
     HEGEL_OK
 }
 
-/// Re-emit a one-line debug representation — the UTF-8 string view `text`
+/// Re-emit a one-line debug representation — the UTF-8 string `text`
 /// — through the printer's groups and break points, so a value the client
 /// can only format flat (Rust's `{:?}`, Go's `%#v`, Python's `repr`,
 /// JavaScript's `util.inspect`, Java's `toString`, …) wraps like one printed
@@ -6296,8 +6295,8 @@ pub unsafe extern "C" fn hegel_printer_reflow(
         Ok(pair) => pair,
         Err(rc) => return rc,
     };
-    let text = match unsafe { optional_utf8_arg(ctx, FN, "text", text) } {
-        Ok(text) => text.unwrap_or_default(),
+    let text = match unsafe { required_utf8_arg(ctx, FN, "text", text) } {
+        Ok(text) => text,
         Err(rc) => return rc,
     };
     let default_options = ReflowOptions::default();
@@ -6652,7 +6651,7 @@ pub unsafe extern "C" fn hegel_test_case_printer(
     HEGEL_OK
 }
 
-/// Append the UTF-8 string view `text` to this test-case
+/// Append the UTF-8 string `text` to this test-case
 /// handle's print region (see `hegel_test_case_printer` for the region
 /// model). Each `\n`-separated line of the note becomes its own output
 /// line, so notes may contain newlines. Notes and drawn values from *one
@@ -6684,8 +6683,8 @@ pub unsafe extern "C" fn hegel_note(
         set_last_error(ctx, "hegel_note: test case pointer is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    let text = match unsafe { optional_utf8_arg(ctx, FN, "text", text) } {
-        Ok(text) => text.unwrap_or_default(),
+    let text = match unsafe { required_utf8_arg(ctx, FN, "text", text) } {
+        Ok(text) => text,
         Err(rc) => return rc,
     };
     let attribution = Attribution {
@@ -6707,7 +6706,7 @@ pub unsafe extern "C" fn hegel_note(
 /// Parameters:
 /// `status`: A `hegel_status_t` value describing how the test case ended.
 /// `origin`: Identifies the origin of a failure. Used only when `status`
-///   is `HEGEL_STATUS_INTERESTING`; `{NULL, 0}` otherwise.
+///   is `HEGEL_STATUS_INTERESTING`; NULL otherwise.
 ///
 /// Returns `HEGEL_OK`, or `HEGEL_E_ALREADY_COMPLETE` if called twice on the
 /// same handle.
@@ -6729,7 +6728,7 @@ pub unsafe extern "C" fn hegel_mark_complete(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     status: u32,
-    origin: hegel_string_t,
+    origin: *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, mut guard) = match unsafe { tc_lock(ctx, "hegel_mark_complete", tc) } {
@@ -6749,10 +6748,10 @@ pub unsafe extern "C" fn hegel_mark_complete(
         x if x == hegel_status_t::HEGEL_STATUS_INVALID as u32 => TestCaseResult::Invalid,
         x if x == hegel_status_t::HEGEL_STATUS_OVERRUN as u32 => TestCaseResult::Overrun,
         x if x == hegel_status_t::HEGEL_STATUS_INTERESTING as u32 => {
-            let origin_str = if origin.is_absent() {
+            let origin_str = if origin.is_null() {
                 "Panic at <unknown>".to_string()
             } else {
-                match unsafe { origin.as_str() } {
+                match unsafe { (*origin).as_str() } {
                     Ok(s) => s.to_string(),
                     Err(_) => {
                         set_last_error(ctx, "hegel_mark_complete: origin is not valid UTF-8");
@@ -6843,7 +6842,7 @@ pub unsafe extern "C" fn hegel_run_result_status(
 /// Parameters:
 /// `out_error`: Receives the run-level error message when the run
 ///   errored — a failed health check, a nondeterministic test, a violated
-///   engine invariant — or `{NULL, 0}` when it completed normally. Owned by the
+///   engine invariant — or NULL when it completed normally. Owned by the
 ///   run result and valid until `hegel_run_result_free`. The message is
 ///   for people; classify the error with `hegel_run_result_error_kind`
 ///   rather than by its wording, which may change between releases.
@@ -6853,7 +6852,7 @@ pub unsafe extern "C" fn hegel_run_result_status(
 pub unsafe extern "C" fn hegel_run_result_error(
     ctx: *mut HegelContext,
     r: *const HegelRunResult,
-    out_error: *mut hegel_string_t,
+    out_error: *mut *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let r = match unsafe { result_ref(ctx, r, "hegel_run_result_error") } {
@@ -6864,13 +6863,7 @@ pub unsafe extern "C" fn hegel_run_result_error(
         set_last_error(ctx, "hegel_run_result_error: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
-    unsafe {
-        *out_error = r
-            .error
-            .as_ref()
-            .map(|e| e.message.as_str().into())
-            .unwrap_or_default()
-    };
+    unsafe { *out_error = r.error.as_ref().map_or(ptr::null(), |e| &e.message.string) };
     HEGEL_OK
 }
 
@@ -7029,7 +7022,7 @@ pub unsafe extern "C" fn hegel_failure_origin(
 /// `out_blob`: Receives a base64 reproduce blob — the minimal
 ///   counterexample's choice sequence, or for a nondeterministic failure a
 ///   self-identifying entry carrying its replay state (timeline pool) — or
-///   `{NULL, 0}` if libhegel produced none for this failure. Valid until
+///   NULL if libhegel produced none for this failure. Valid until
 ///   `hegel_failure_free`.
 ///
 /// Returns `HEGEL_OK`.
@@ -7044,7 +7037,7 @@ pub unsafe extern "C" fn hegel_failure_origin(
 pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     ctx: *mut HegelContext,
     f: *const HegelFailure,
-    out_blob: *mut hegel_string_t,
+    out_blob: *mut *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let f = match unsafe { failure_ref(ctx, f, "hegel_failure_reproduction_blob") } {
@@ -7060,8 +7053,8 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
     }
     unsafe {
         *out_blob = match &f.reproduce_blob {
-            Some(blob) => blob.as_str().into(),
-            None => hegel_string_t::default(),
+            Some(blob) => &blob.string as *const hegel_string_t,
+            None => ptr::null(),
         };
     }
     HEGEL_OK
@@ -7070,7 +7063,7 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
 /// Parameters:
 /// `out_caveat`: Receives the failure's confirmation caveat — its
 ///   standing under the run's nondeterministic handling, quoting the
-///   run's own replay evidence — or `{NULL, 0}` for a deterministic failure.
+///   run's own replay evidence — or NULL for a deterministic failure.
 ///   Valid until `hegel_failure_free`. Print it alongside the failure
 ///   report so the reader sees how reliably the failure reproduced.
 ///
@@ -7079,7 +7072,7 @@ pub unsafe extern "C" fn hegel_failure_reproduction_blob(
 pub unsafe extern "C" fn hegel_failure_caveat(
     ctx: *mut HegelContext,
     f: *const HegelFailure,
-    out_caveat: *mut hegel_string_t,
+    out_caveat: *mut *const hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let f = match unsafe { failure_ref(ctx, f, "hegel_failure_caveat") } {
@@ -7092,8 +7085,8 @@ pub unsafe extern "C" fn hegel_failure_caveat(
     }
     unsafe {
         *out_caveat = match &f.caveat {
-            Some(caveat) => caveat.as_str().into(),
-            None => hegel_string_t::default(),
+            Some(caveat) => &caveat.string as *const hegel_string_t,
+            None => ptr::null(),
         };
     }
     HEGEL_OK

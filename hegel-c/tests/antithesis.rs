@@ -117,7 +117,7 @@ unsafe fn drive(
                 ctx,
                 tc,
                 status as u32,
-                test_view(c"the bug".as_ptr()),
+                test_optional(&test_view(c"the bug".as_ptr())),
             ));
             ok(hegel_test_case_free(ctx, tc));
         }
@@ -171,11 +171,11 @@ fn a_failing_run_reports_a_false_condition_and_its_blob_replays_do_too() {
 
         let mut f: *mut HegelFailure = ptr::null_mut();
         ok(hegel_run_result_failure(ctx, r, 0, &mut f));
-        let mut blob_ptr = hegel_c::hegel_string_t::default();
+        let mut blob_ptr = ptr::null();
         ok(hegel_failure_reproduction_blob(ctx, f, &mut blob_ptr));
         let blob: CString = CString::new(std::slice::from_raw_parts(
-            blob_ptr.data.cast::<u8>(),
-            blob_ptr.len,
+            (*blob_ptr).data.cast::<u8>(),
+            (*blob_ptr).len,
         ))
         .unwrap();
         ok(hegel_failure_free(ctx, f));
@@ -203,7 +203,7 @@ fn a_failing_run_reports_a_false_condition_and_its_blob_replays_do_too() {
                 ctx,
                 tc,
                 status as u32,
-                test_view(c"the bug".as_ptr()),
+                test_optional(&test_view(c"the bug".as_ptr())),
             ));
             assert_eq!(
                 read_events(&sdk),
@@ -249,7 +249,11 @@ fn a_run_that_errors_reports_a_false_condition() {
             test_view(c"base".as_ptr()),
             &mut s,
         ));
-        ok(hegel_settings_set_database(ctx, s, test_view(c"".as_ptr())));
+        ok(hegel_settings_set_database(
+            ctx,
+            s,
+            test_optional(&test_view(c"".as_ptr())),
+        ));
         set_location(ctx, s);
         let run = start(ctx, s);
         let r = drive(ctx, run, hegel_status_t::HEGEL_STATUS_INVALID);
@@ -310,5 +314,13 @@ unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
         } else {
             unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
         },
+    }
+}
+
+fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
+    if value.data.is_null() && value.len == 0 {
+        std::ptr::null()
+    } else {
+        value
     }
 }
