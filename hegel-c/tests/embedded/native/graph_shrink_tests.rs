@@ -733,7 +733,7 @@ fn ab_string_body(tc: &mut NativeTestCase, _: &mut Lcg) -> Option<bool> {
 
 fn under_grammar(text: &str, simplest: &str, value: &str) -> ChoiceData {
     use crate::native::lark::builder::{NoImports, load_grammar};
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     let grammar = crate::native::lark::compile::compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let cps = |s: &str| s.chars().map(u32::from).collect::<Vec<u32>>();

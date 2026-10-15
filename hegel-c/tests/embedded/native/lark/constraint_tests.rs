@@ -13,7 +13,7 @@ use alloc::vec;
 use core::hash::BuildHasher;
 
 fn compiled(text: &str, start: &str) -> Grammar {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     compile(&built, &[start]).unwrap()
 }
 

@@ -15,19 +15,21 @@ use common::{last_error, make_settings_no_db, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
 use hegel_c::hegel_string_t;
 use hegel_c::{
-    HegelContext, HegelGrammar, HegelRun, HegelStringGenerator, HegelTestCase, hegel_context_free,
-    hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
+    HegelContext, HegelGrammar, HegelGrammarBuilder, HegelRun, HegelStringGenerator, HegelTestCase,
+    hegel_context_free, hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
     hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_date,
     hegel_generate_datetime, hegel_generate_float, hegel_generate_grammar, hegel_generate_integer,
     hegel_generate_integer_big, hegel_generate_ipv4, hegel_generate_ipv6, hegel_generate_string,
-    hegel_generate_time, hegel_generate_uuid, hegel_grammar_free, hegel_grammar_new,
-    hegel_grammar_placeholder, hegel_mark_complete, hegel_owned_string_free, hegel_owned_string_t,
-    hegel_run_free, hegel_settings_free, hegel_settings_set_test_cases, hegel_status_t,
-    hegel_string_generator_domain, hegel_string_generator_email, hegel_string_generator_free,
-    hegel_string_generator_regex, hegel_string_generator_text, hegel_string_generator_url,
+    hegel_generate_time, hegel_generate_uuid, hegel_grammar_builder_file,
+    hegel_grammar_builder_free, hegel_grammar_builder_new, hegel_grammar_builder_provide,
+    hegel_grammar_free, hegel_grammar_new, hegel_grammar_placeholder, hegel_mark_complete,
+    hegel_owned_string_free, hegel_owned_string_t, hegel_run_free, hegel_settings_free,
+    hegel_settings_set_test_cases, hegel_status_t, hegel_string_generator_domain,
+    hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
+    hegel_string_generator_text, hegel_string_generator_url,
 };
-use std::ffi::CString;
-use std::os::raw::{c_char, c_void};
+use std::ffi::CStr;
+use std::os::raw::c_char;
 use std::ptr;
 
 const FULL_MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
@@ -1831,9 +1833,49 @@ fn structured_draws_respect_explicit_bounds() {
     unsafe { ok(hegel_context_free(ctx)) };
 }
 
-unsafe fn grammar(
+/// A builder for `text` with each file it asks for provided from `files`
+/// by path, or as missing when `files` has no such path.
+unsafe fn grammar_builder(
     ctx: *mut HegelContext,
     text: &str,
+    files: &[(&str, &str)],
+) -> Result<*mut HegelGrammarBuilder, String> {
+    let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
+    let rc = unsafe { hegel_grammar_builder_new(ctx, text.as_ptr().cast(), text.len(), &mut b) };
+    if rc != HEGEL_OK {
+        assert_eq!(rc, HEGEL_E_INVALID_ARG);
+        assert!(b.is_null());
+        return Err(last_error(ctx));
+    }
+    for index in 0.. {
+        let mut path: *const c_char = ptr::null();
+        let mut path_len = 0;
+        if unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path, &mut path_len) }
+            == HEGEL_E_NOT_FOUND
+        {
+            break;
+        }
+        let path = unsafe { CStr::from_ptr(path) }.to_str().unwrap();
+        assert_eq!(path.len(), path_len);
+        let rc = match files.iter().find(|(p, _)| *p == path) {
+            Some((_, t)) => unsafe {
+                hegel_grammar_builder_provide(ctx, b, index, t.as_ptr().cast(), t.len())
+            },
+            None => unsafe { hegel_grammar_builder_provide(ctx, b, index, ptr::null(), 0) },
+        };
+        if rc != HEGEL_OK {
+            assert_eq!(rc, HEGEL_E_INVALID_ARG);
+            let err = last_error(ctx);
+            unsafe { ok(hegel_grammar_builder_free(ctx, b)) };
+            return Err(err);
+        }
+    }
+    Ok(b)
+}
+
+unsafe fn grammar_from(
+    ctx: *mut HegelContext,
+    b: *const HegelGrammarBuilder,
     start: Option<&str>,
     explicit: &[&str],
 ) -> Result<*mut HegelGrammar, String> {
@@ -1843,15 +1885,13 @@ unsafe fn grammar(
     let rc = unsafe {
         hegel_grammar_new(
             ctx,
-            text.into(),
+            b,
             start.as_ref().map_or(ptr::null(), std::ptr::from_ref),
             0,
             0,
             ptr::null(),
             names.as_ptr(),
             explicit.len(),
-            None,
-            ptr::null_mut(),
             &mut g,
         )
     };
@@ -1863,6 +1903,18 @@ unsafe fn grammar(
         assert!(g.is_null());
         Err(last_error(ctx))
     }
+}
+
+unsafe fn grammar(
+    ctx: *mut HegelContext,
+    text: &str,
+    start: Option<&str>,
+    explicit: &[&str],
+) -> Result<*mut HegelGrammar, String> {
+    let b = unsafe { grammar_builder(ctx, text, &[]) }?;
+    let g = unsafe { grammar_from(ctx, b, start, explicit) };
+    unsafe { ok(hegel_grammar_builder_free(ctx, b)) };
+    g
 }
 
 unsafe fn draw_grammar(
@@ -2051,21 +2103,19 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert!(err.contains("explicit terminal 'X'"), "{err}");
 
         let mut g: *mut HegelGrammar = ptr::null_mut();
-        let text = "start: \"a\"\n";
+        let b = grammar_builder(ctx, "start: \"a\"\n", &[]).unwrap();
         let invalid = [0xffu8, 0];
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                text.into(),
+                b,
                 &test_string(&invalid[..1]),
                 0,
                 0,
                 ptr::null(),
                 ptr::null(),
                 0,
-                None,
-                ptr::null_mut(),
-                &mut g
+                &mut g,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -2077,16 +2127,14 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                text.into(),
+                b,
                 ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 null_names.as_ptr(),
                 1,
-                None,
-                ptr::null_mut(),
-                &mut g
+                &mut g,
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -2094,160 +2142,52 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 1
-                },
+                ptr::null(),
                 ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 ptr::null(),
                 0,
-                None,
-                ptr::null_mut(),
-                &mut g
+                &mut g,
             ),
-            HEGEL_E_INVALID_ARG
+            HEGEL_E_INVALID_HANDLE
         );
-        assert!(last_error(ctx).contains("text is null"));
+        assert!(last_error(ctx).contains("builder handle is null"));
+        assert!(g.is_null());
         assert_eq!(
-            hegel_grammar_new(
-                ctx,
-                text.into(),
-                ptr::null(),
-                1,
-                0,
-                digits,
-                ptr::null(),
-                0,
-                None,
-                ptr::null_mut(),
-                &mut g
-            ),
+            hegel_grammar_new(ctx, b, ptr::null(), 1, 0, digits, ptr::null(), 0, &mut g,),
             HEGEL_OK
         );
         ok(hegel_grammar_free(ctx, g));
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                text.into(),
+                b,
                 ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 ptr::null(),
                 0,
-                None,
                 ptr::null_mut(),
-                ptr::null_mut()
             ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
+        ok(hegel_grammar_builder_free(ctx, b));
         ok(hegel_string_generator_free(ctx, digits));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }
 
-struct Imports {
-    asked: Vec<(Option<String>, String)>,
-    path: CString,
-    text: CString,
-}
-
-unsafe extern "C" fn import_lib(
-    user_data: *mut c_void,
-    base_path: *const c_char,
-    grammar_path: *const c_char,
-    out_path: *mut *const c_char,
-    out_text: *mut *const c_char,
-    out_text_len: *mut usize,
-) -> bool {
-    let imports = unsafe { &mut *user_data.cast::<Imports>() };
-    let base = unsafe { base_path.as_ref() }.map(|p| {
-        unsafe { std::ffi::CStr::from_ptr(p) }
-            .to_str()
-            .unwrap()
-            .to_string()
-    });
-    let path = unsafe { std::ffi::CStr::from_ptr(grammar_path) }
-        .to_str()
-        .unwrap()
-        .to_string();
-    let found = path == "lib.lark" && base.is_none();
-    imports.asked.push((base, path));
-    if found {
-        unsafe {
-            *out_path = imports.path.as_ptr();
-            *out_text = imports.text.as_ptr();
-            *out_text_len = imports.text.as_bytes().len();
-        }
-    }
-    found
-}
-
-#[test]
-fn grammar_imports_resolve_through_the_callback() {
-    let ctx = hegel_context_new();
-    let mut imports = Imports {
-        asked: Vec::new(),
-        path: CString::new("grammars/lib.lark").unwrap(),
-        text: CString::new("rule: \"from lib\" INT\n%import .inner.INT\n").unwrap(),
-    };
+unsafe fn draw_once(ctx: *mut HegelContext, g: *const HegelGrammar) -> String {
     unsafe {
-        let text = "%import .lib.rule\nstart: rule\n";
-        let mut g: *mut HegelGrammar = ptr::null_mut();
-        assert_eq!(
-            hegel_grammar_new(
-                ctx,
-                text.into(),
-                ptr::null(),
-                0,
-                0,
-                ptr::null(),
-                ptr::null(),
-                0,
-                Some(import_lib),
-                (&raw mut imports).cast::<c_void>(),
-                &mut g
-            ),
-            HEGEL_E_INVALID_ARG
-        );
-        assert!(last_error(ctx).contains("inner"), "{}", last_error(ctx));
-        assert_eq!(
-            imports.asked,
-            vec![
-                (None, "lib.lark".to_string()),
-                (Some("grammars".to_string()), "inner.lark".to_string()),
-            ]
-        );
-
-        imports.text = CString::new("rule: \"from lib\" INT\n%import common.INT\n").unwrap();
-        imports.asked.clear();
-        assert_eq!(
-            hegel_grammar_new(
-                ctx,
-                text.into(),
-                ptr::null(),
-                0,
-                0,
-                ptr::null(),
-                ptr::null(),
-                0,
-                Some(import_lib),
-                (&raw mut imports).cast::<c_void>(),
-                &mut g
-            ),
-            HEGEL_OK
-        );
-        assert_eq!(imports.asked.len(), 2);
         let s = make_settings_no_db(ctx);
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         let run = start(ctx, s);
         let tc = next_case(ctx, run);
         let drawn = draw_grammar(ctx, tc, g);
-        assert!(drawn.starts_with("from lib"), "{drawn:?}");
         ok(hegel_mark_complete(
             ctx,
             tc,
@@ -2258,85 +2198,185 @@ fn grammar_imports_resolve_through_the_callback() {
         drain(ctx, run);
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
+        drawn
+    }
+}
+
+unsafe fn builder_path(
+    ctx: *mut HegelContext,
+    b: *const HegelGrammarBuilder,
+    index: usize,
+) -> Option<String> {
+    let mut path: *const c_char = ptr::null();
+    let mut path_len = usize::MAX;
+    match unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path, &mut path_len) } {
+        HEGEL_OK => {
+            let bytes = unsafe { std::slice::from_raw_parts(path.cast::<u8>(), path_len + 1) };
+            assert_eq!(bytes[path_len], 0);
+            Some(String::from_utf8(bytes[..path_len].to_vec()).unwrap())
+        }
+        rc => {
+            assert_eq!(rc, HEGEL_E_NOT_FOUND);
+            None
+        }
+    }
+}
+
+unsafe fn provide(
+    ctx: *mut HegelContext,
+    b: *mut HegelGrammarBuilder,
+    index: usize,
+    text: Option<&str>,
+) -> hegel_c::hegel_result_t {
+    let (p, len) = text.map_or((ptr::null(), 0), |t| (t.as_ptr().cast(), t.len()));
+    unsafe { hegel_grammar_builder_provide(ctx, b, index, p, len) }
+}
+
+#[test]
+fn grammar_builder_asks_for_each_imported_file_by_path() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let text =
+            "%import grammars.lib.rule\n%import grammars.lib.OTHER\nstart: rule\nalt: OTHER\n";
+        let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
+        ok(hegel_grammar_builder_new(
+            ctx,
+            text.as_ptr().cast(),
+            text.len(),
+            &mut b,
+        ));
+        assert_eq!(
+            builder_path(ctx, b, 0).as_deref(),
+            Some("grammars/lib.lark")
+        );
+        assert_eq!(builder_path(ctx, b, 1), None);
+        let err = grammar_from(ctx, b, None, &[]).unwrap_err();
+        assert!(
+            err.contains("`grammars/lib.lark` was never provided"),
+            "{err}"
+        );
+
+        let lib = "rule: \"from lib\" INT\nOTHER: \"o\"\n%import .inner.INT\n";
+        ok(provide(ctx, b, 0, Some(lib)));
+        assert_eq!(
+            builder_path(ctx, b, 1).as_deref(),
+            Some("grammars/inner.lark")
+        );
+        assert_eq!(provide(ctx, b, 1, None), HEGEL_E_INVALID_ARG);
+        assert!(
+            last_error(ctx).contains("Could not find grammar `grammars/inner.lark`"),
+            "{}",
+            last_error(ctx)
+        );
+        ok(provide(ctx, b, 1, Some("INT: \"7\"\n")));
+        assert_eq!(builder_path(ctx, b, 2), None);
+
+        let g = grammar_from(ctx, b, None, &[]).unwrap();
+        assert_eq!(draw_once(ctx, g), "from lib7");
+        ok(hegel_grammar_free(ctx, g));
+        let g = grammar_from(ctx, b, Some("alt"), &[]).unwrap();
+        ok(hegel_grammar_builder_free(ctx, b));
+        assert_eq!(draw_once(ctx, g), "o");
         ok(hegel_grammar_free(ctx, g));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }
 
-struct SloppyImports {
-    path: CString,
-    text: Vec<u8>,
-}
-
-unsafe extern "C" fn import_sloppy(
-    user_data: *mut c_void,
-    _base_path: *const c_char,
-    grammar_path: *const c_char,
-    out_path: *mut *const c_char,
-    out_text: *mut *const c_char,
-    out_text_len: *mut usize,
-) -> bool {
-    let imports = unsafe { &*user_data.cast::<SloppyImports>() };
-    let path = unsafe { std::ffi::CStr::from_ptr(grammar_path) }
-        .to_str()
-        .unwrap();
-    if path == "lib.lark" {
-        unsafe {
-            *out_path = imports.path.as_ptr();
-            *out_text = imports.text.as_ptr().cast::<c_char>();
-            *out_text_len = imports.text.len();
-        }
-    }
-    true
-}
-
 #[test]
-fn grammar_imports_fall_back_to_the_bundled_grammars_and_read_text_lossily() {
+fn grammar_builder_falls_back_to_the_bundled_grammars() {
     let ctx = hegel_context_new();
-    let mut imports = SloppyImports {
-        path: CString::new("lib.lark").unwrap(),
-        text: b"WORD: \"caf\xff\"\n".to_vec(),
-    };
     unsafe {
-        let text = "%import common.INT\n%import lib.WORD\nstart: INT WORD\n";
-        let mut g: *mut HegelGrammar = ptr::null_mut();
-        assert_eq!(
-            hegel_grammar_new(
-                ctx,
-                text.into(),
-                ptr::null(),
-                0,
-                0,
-                ptr::null(),
-                ptr::null(),
-                0,
-                Some(import_sloppy),
-                (&raw mut imports).cast::<c_void>(),
-                &mut g
-            ),
-            HEGEL_OK
-        );
-        let s = make_settings_no_db(ctx);
-        ok(hegel_settings_set_test_cases(ctx, s, 1));
-        let run = start(ctx, s);
-        let tc = next_case(ctx, run);
-        let drawn = draw_grammar(ctx, tc, g);
-        let digits = drawn.strip_suffix("caf\u{FFFD}").unwrap();
+        let b = grammar_builder(
+            ctx,
+            "%import common.INT\n%import lib.WORD\nstart: INT WORD\n",
+            &[("lib.lark", "WORD: \"caf\u{e9}\"\n")],
+        )
+        .unwrap();
+        let g = grammar_from(ctx, b, None, &[]).unwrap();
+        ok(hegel_grammar_builder_free(ctx, b));
+        let drawn = draw_once(ctx, g);
+        let digits = drawn.strip_suffix("caf\u{e9}").unwrap();
         assert!(
             !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()),
             "{drawn:?}"
         );
-        ok(hegel_mark_complete(
-            ctx,
-            tc,
-            hegel_status_t::HEGEL_STATUS_VALID as u32,
-            ptr::null(),
-        ));
-        ok(hegel_c::hegel_test_case_free(ctx, tc));
-        drain(ctx, run);
-        ok(hegel_run_free(ctx, run));
-        ok(hegel_settings_free(ctx, s));
         ok(hegel_grammar_free(ctx, g));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
+fn grammar_builder_validates_its_arguments() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
+        let text = "%import lib.x\nstart: x\n";
+        assert_eq!(
+            hegel_grammar_builder_new(ctx, text.as_ptr().cast(), text.len(), ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+        let invalid = [0xffu8];
+        assert_eq!(
+            hegel_grammar_builder_new(ctx, invalid.as_ptr().cast(), 1, &mut b),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("text is not valid UTF-8"));
+        assert_eq!(
+            hegel_grammar_builder_new(ctx, ptr::null(), 1, &mut b),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("text is null"));
+        assert!(b.is_null());
+        let err = grammar_builder(ctx, "start: (\n", &[]).unwrap_err();
+        assert!(err.contains("Unclosed parenthesis"), "{err}");
+
+        ok(hegel_grammar_builder_new(ctx, ptr::null(), 0, &mut b));
+        assert_eq!(builder_path(ctx, b, 0), None);
+        ok(hegel_grammar_builder_free(ctx, b));
+
+        ok(hegel_grammar_builder_new(
+            ctx,
+            text.as_ptr().cast(),
+            text.len(),
+            &mut b,
+        ));
+        let mut path: *const c_char = ptr::null();
+        let mut path_len = 0;
+        assert_eq!(
+            hegel_grammar_builder_file(ctx, ptr::null(), 0, &mut path, &mut path_len),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("builder handle is null"));
+        assert_eq!(
+            hegel_grammar_builder_file(ctx, b, 0, ptr::null_mut(), &mut path_len),
+            HEGEL_E_INVALID_ARG
+        );
+        assert_eq!(
+            hegel_grammar_builder_file(ctx, b, 0, &mut path, ptr::null_mut()),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("out parameter is null"));
+
+        assert_eq!(
+            hegel_grammar_builder_provide(ctx, ptr::null_mut(), 0, ptr::null(), 0),
+            HEGEL_E_INVALID_HANDLE
+        );
+        assert!(last_error(ctx).contains("builder handle is null"));
+        assert_eq!(
+            hegel_grammar_builder_provide(ctx, b, 0, invalid.as_ptr().cast(), 1),
+            HEGEL_E_INVALID_ARG
+        );
+        assert!(last_error(ctx).contains("text is not valid UTF-8"));
+        assert_eq!(provide(ctx, b, 1, Some("x: \"x\"\n")), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("There is no grammar file 1"));
+        assert_eq!(provide(ctx, b, 0, Some("x: (\n")), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("In grammar `lib.lark`: "));
+        ok(provide(ctx, b, 0, Some("x: \"x\"\n")));
+        assert_eq!(provide(ctx, b, 0, Some("x: \"x\"\n")), HEGEL_E_INVALID_ARG);
+        assert!(last_error(ctx).contains("was already provided"));
+        ok(hegel_grammar_builder_free(ctx, b));
+        ok(hegel_grammar_builder_free(ctx, ptr::null_mut()));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }

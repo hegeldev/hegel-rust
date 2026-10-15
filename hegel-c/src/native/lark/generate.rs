@@ -85,7 +85,9 @@
 //! own (the `max_size` of [`generate_grammar`]).
 
 use super::analysis::{Alt, Analysis, Node, NodeKind, analyze};
-use super::builder::{ImportSource, load_grammar};
+use super::builder::GrammarFiles;
+#[cfg(test)]
+use super::builder::ImportSource;
 use super::compile::{Grammar, RuleId, TermId, TerminalDef, compile, placeholder};
 use super::constraint::GrammarConstraint;
 use super::lexsim::{Lexed, Lexer, Scan, Starters};
@@ -1173,13 +1175,18 @@ enum Fit {
 }
 
 /// Load a Lark grammar and build a [`GrammarSpec`] for it.
+#[cfg(test)]
 pub fn from_lark(
     text: &str,
     source: &dyn ImportSource,
     options: GrammarOptions,
 ) -> GrammarResult<GrammarSpec> {
-    let built = load_grammar(text, None, source)?;
-    let grammar = compile(&built, &[options.start.as_str()])?;
+    from_files(&GrammarFiles::gather(text, source)?, options)
+}
+
+/// Build a [`GrammarSpec`] for a Lark grammar whose files are all supplied.
+pub fn from_files(files: &GrammarFiles, options: GrammarOptions) -> GrammarResult<GrammarSpec> {
+    let grammar = compile(&files.build()?, &[options.start.as_str()])?;
     GrammarSpec::new(grammar, options)
 }
 

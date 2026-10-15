@@ -11,7 +11,7 @@ use alloc::format;
 use alloc::vec;
 
 fn lowered(text: &str) -> (Grammar, Lowered) {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let lowered = lower(&grammar);
     (grammar, lowered)

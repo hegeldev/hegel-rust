@@ -224,15 +224,45 @@ fn ffi_grammar_construction_reports_engine_diagnostics() {
 }
 
 #[test]
-fn ffi_grammar_imports_are_read_from_import_paths_then_beside_the_importer() {
+fn ffi_grammar_imports_are_read_from_the_import_paths_layered() {
     let root = tempfile::TempDir::new().unwrap();
+    let overlay = tempfile::TempDir::new().unwrap();
     let sub = root.path().join("sub");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("lib.lark"), "%import .inner.DIGIT\nNUM: DIGIT+\n").unwrap();
-    std::fs::write(sub.join("inner.lark"), "DIGIT: /[0-9]/\n").unwrap();
+    std::fs::write(overlay.path().join("sub"), "not a directory").unwrap();
     let text = "%import sub.lib.NUM\n%import common.WS\nstart: NUM\n%ignore WS\n";
-    let paths = [root.path().to_path_buf()];
+    let err = Grammar::new(
+        text,
+        None,
+        0,
+        0,
+        None,
+        &[],
+        &[overlay.path().to_path_buf(), root.path().to_path_buf()],
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("Could not find grammar `sub/inner.lark`"),
+        "{err}"
+    );
+
+    let layer = overlay.path().join("layer");
+    std::fs::create_dir_all(layer.join("sub")).unwrap();
+    std::fs::write(layer.join("sub/inner.lark"), "DIGIT: /[0-9]/\n").unwrap();
+    let paths = [layer.clone(), root.path().to_path_buf()];
     Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap();
+
+    std::fs::write(layer.join("sub/inner.lark"), b"DIGIT: \"\xff\"\n").unwrap();
+    let err = Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap_err();
+    assert!(err.contains("Could not read grammar"), "{err}");
+
+    std::fs::write(layer.join("sub/inner.lark"), "DIGIT: (\n").unwrap();
+    let err = Grammar::new(text, None, 0, 0, None, &[], &paths).unwrap_err();
+    assert!(err.contains("In grammar `sub/inner.lark`"), "{err}");
+
+    let err = Grammar::new("start: (", None, 0, 0, None, &[], &paths).unwrap_err();
+    assert!(err.contains("Unclosed parenthesis"), "{err}");
 
     let err = Grammar::new(text, None, 0, 0, None, &[], &[]).unwrap_err();
     assert!(

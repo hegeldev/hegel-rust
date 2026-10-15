@@ -236,12 +236,9 @@ fn cps(s: &str) -> Vec<u32> {
 }
 
 fn grammar_node(text: &str, simplest: &str, value: &str) -> ChoiceNode {
-    let built = crate::native::lark::builder::load_grammar(
-        text,
-        None,
-        &crate::native::lark::builder::NoImports,
-    )
-    .unwrap();
+    let built =
+        crate::native::lark::builder::load_grammar(text, &crate::native::lark::builder::NoImports)
+            .unwrap();
     let grammar = crate::native::lark::compile::compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let constraint =

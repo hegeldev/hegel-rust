@@ -40,7 +40,7 @@ fn first_text(nodes: &[ChoiceNode]) -> Option<String> {
 }
 
 fn grammar_node(grammar_text: &str, simplest: &str, value: &str, forced: bool) -> ChoiceNode {
-    let built = load_grammar(grammar_text, None, &NoImports).unwrap();
+    let built = load_grammar(grammar_text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let constraint = GrammarConstraint::new(grammar, start, 64, u32::MAX, None).unwrap();
@@ -273,7 +273,7 @@ fn ignored_text_beside_a_placeholder_stays() {
 }
 
 fn derived(grammar_text: &str, text: &str) -> Derived {
-    let built = load_grammar(grammar_text, None, &NoImports).unwrap();
+    let built = load_grammar(grammar_text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let lower = IntervalSet::new(vec![(u32::from('a'), u32::from('z'))]).unwrap();

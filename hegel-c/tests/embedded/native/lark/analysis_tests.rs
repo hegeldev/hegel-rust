@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec;
 
 fn analyzed(text: &str) -> (Grammar, Analysis) {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let analysis = analyze(&grammar, term_min(&grammar), term_typical(&grammar)).unwrap();
     (grammar, analysis)
@@ -170,7 +170,7 @@ fn typical_sizes_count_terminals_at_their_typical_length() {
 
 #[test]
 fn unproductive_start_rule_is_an_error() {
-    let built = load_grammar("start: start \"x\" | \"y\" start\n", None, &NoImports).unwrap();
+    let built = load_grammar("start: start \"x\" | \"y\" start\n", &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let err = analyze(&grammar, term_min(&grammar), term_typical(&grammar)).unwrap_err();
     assert_eq!(

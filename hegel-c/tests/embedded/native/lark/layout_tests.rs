@@ -21,7 +21,7 @@ fn text_of(text: &[u32], range: (usize, usize)) -> String {
 }
 
 fn laid_out(grammar_text: &str, text: &str) -> (Grammar, GrammarConstraint, Layout, Vec<u32>) {
-    let built = load_grammar(grammar_text, None, &NoImports).unwrap();
+    let built = load_grammar(grammar_text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let constraint = GrammarConstraint::new(grammar.clone(), start, 64, u32::MAX, None).unwrap();

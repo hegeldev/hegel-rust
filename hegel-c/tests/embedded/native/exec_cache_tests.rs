@@ -197,7 +197,7 @@ fn the_kind_ledger_names_a_grammar_constraint_by_its_identity() {
     use crate::native::lark::builder::{NoImports, load_grammar};
     use crate::native::lark::compile::compile;
     use crate::native::lark::constraint::GrammarConstraint;
-    let built = load_grammar("start: \"a\"\n", None, &NoImports).unwrap();
+    let built = load_grammar("start: \"a\"\n", &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let constraint = GrammarConstraint::new(grammar, start, 4, u32::MAX, None).unwrap();

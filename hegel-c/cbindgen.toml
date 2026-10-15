@@ -155,6 +155,7 @@ include = [
 "HegelFailure" = "hegel_failure_t"
 "HegelStringGenerator" = "hegel_string_generator_t"
 "HegelGrammar" = "hegel_grammar_t"
+"HegelGrammarBuilder" = "hegel_grammar_builder_t"
 "HegelCollection" = "hegel_collection_t"
 "HegelPool" = "hegel_pool_t"
 "HegelStateMachine" = "hegel_state_machine_t"

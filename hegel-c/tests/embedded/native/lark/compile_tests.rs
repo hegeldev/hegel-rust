@@ -19,14 +19,12 @@ fn fixtures_dir() -> PathBuf {
 
 /// Loads `%import`ed grammars from the fixtures directory, the way Lark
 /// resolves imports relative to the importing file.
-struct FixtureImports;
+/// Imports read from the directory of the fixture grammars.
+struct FixtureImports<'a>(&'a Path);
 
-impl ImportSource for FixtureImports {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
-        let base = base_path?;
-        let path = Path::new(base).join(grammar_path);
-        let text = std::fs::read_to_string(&path).ok()?;
-        Some((path.to_str().unwrap().to_string(), text))
+impl ImportSource for FixtureImports<'_> {
+    fn read(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join(path)).ok()
     }
 }
 
@@ -74,7 +72,7 @@ fn start_rules(text: &str) -> Vec<&str> {
 fn compile_fixture(path: &Path) -> GrammarResult<Grammar> {
     let text = std::fs::read_to_string(path).unwrap();
     let starts = start_rules(&text);
-    let built = load_grammar(&text, Some(path.to_str().unwrap()), &FixtureImports)?;
+    let built = load_grammar(&text, &FixtureImports(path.parent().unwrap()))?;
     compile(&built, &starts)
 }
 
@@ -198,11 +196,11 @@ fn fixtures_match_lark() {
 }
 
 fn compiled(text: &str) -> Grammar {
-    compile(&load_grammar(text, None, &NoImports).unwrap(), &["start"]).unwrap()
+    compile(&load_grammar(text, &NoImports).unwrap(), &["start"]).unwrap()
 }
 
 fn compile_err(text: &str) -> String {
-    let built = match load_grammar(text, None, &NoImports) {
+    let built = match load_grammar(text, &NoImports) {
         Ok(built) => built,
         Err(e) => return e.message,
     };
@@ -398,7 +396,7 @@ fn grammar_lookups() {
 
 #[test]
 fn a_template_parameter_used_as_a_template_is_rejected_like_lark() {
-    let compiled = |text: &str| compile(&load_grammar(text, None, &NoImports).unwrap(), &["start"]);
+    let compiled = |text: &str| compile(&load_grammar(text, &NoImports).unwrap(), &["start"]);
     let err = compiled("start: tmpl{inner}\ntmpl{x}: x{\"a\"}\ninner{y}: y \"b\"\n").unwrap_err();
     assert_eq!(err.message, "Template 'inner' is used without arguments");
     let err = compiled("start: tmpl{A}\ntmpl{x}: x{\"a\"}\nA: \"q\"\n").unwrap_err();

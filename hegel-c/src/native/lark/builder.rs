@@ -19,19 +19,20 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-/// Where `%import`ed grammars come from: a lookup of `grammar_path`
-/// (a relative file path such as `common.lark` or `dir/sub.lark`) given
-/// the directory of the importing grammar when that is known. Returns the
-/// path the grammar was found at and its text.
+/// Where `%import`ed grammars come from: the text of the grammar file at
+/// `path` (see [`GrammarFiles`]), or `None` when there is no such file.
+#[cfg(test)]
 pub trait ImportSource {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)>;
+    fn read(&self, path: &str) -> Option<String>;
 }
 
 /// An import source with no grammars: only the bundled ones resolve.
+#[cfg(test)]
 pub struct NoImports;
 
+#[cfg(test)]
 impl ImportSource for NoImports {
-    fn load(&self, _base_path: Option<&str>, _grammar_path: &str) -> Option<(String, String)> {
+    fn read(&self, _path: &str) -> Option<String> {
         None
     }
 }
@@ -115,7 +116,7 @@ pub struct BuiltGrammar {
 }
 
 pub struct GrammarBuilder<'s> {
-    source: &'s dyn ImportSource,
+    files: &'s GrammarFiles,
     /// The paths of the grammars whose imports led to this one, the
     /// outermost first: an import of a path already here is a cycle.
     import_stack: Vec<String>,
@@ -227,7 +228,8 @@ const MAX_TERMINAL_PATTERN_LEN: usize = 1 << 16;
 
 /// How deeply imports may lead from grammar to grammar. A cycle is
 /// caught by its path, but a source may answer every path with a new
-/// grammar that imports another.
+/// grammar that imports another, and a grammar reached by several chains
+/// of imports is loaded along each of them.
 const MAX_IMPORT_NESTING: usize = 64;
 
 fn contains_template(expr: &Expr) -> bool {
@@ -348,9 +350,9 @@ pub fn terminal_pattern(name: &str, body: &Expr) -> GrammarResult<Pattern> {
 }
 
 impl<'s> GrammarBuilder<'s> {
-    pub fn new(source: &'s dyn ImportSource) -> Self {
+    pub fn new(files: &'s GrammarFiles) -> Self {
         GrammarBuilder {
-            source,
+            files,
             import_stack: Vec::new(),
             names: Vec::new(),
             definitions: HashMap::default(),
@@ -527,38 +529,28 @@ impl<'s> GrammarBuilder<'s> {
         &mut self,
         stmt: &ImportStmt,
         aliases: Vec<(String, String)>,
-        base_path: Option<&str>,
+        importer: Option<&str>,
         base_mangle: Option<&Mangle>,
     ) -> GrammarResult<()> {
         if self.import_stack.len() >= MAX_IMPORT_NESTING {
-            return Err(GrammarError::new(format!(
-                "Grammar imports nest more than {MAX_IMPORT_NESTING} levels deep"
-            )));
+            return Err(nesting_error());
         }
         let mangle = Mangle {
             prefix: stmt.path.join("__"),
             aliases,
             base: base_mangle.map(|m| Box::new(m.clone())),
         };
-        let grammar_path = format!("{}.lark", stmt.path.join("/"));
-        let loaded = self.source.load(base_path, &grammar_path).or_else(|| {
-            bundled_grammar(&grammar_path).map(|text| (grammar_path.clone(), text.to_string()))
-        });
-        let Some((joined_path, text)) = loaded else {
+        let path = import_path(stmt, importer);
+        if self.import_stack.contains(&path) {
             return Err(GrammarError::new(format!(
-                "Could not find grammar `{grammar_path}` to import"
-            )));
-        };
-        if self.import_stack.contains(&joined_path) {
-            return Err(GrammarError::new(format!(
-                "Circular grammar import: {} -> {joined_path}",
+                "Circular grammar import: {} -> {path}",
                 self.import_stack.join(" -> ")
             )));
         }
-        let mut imported = GrammarBuilder::new(self.source);
+        let mut imported = GrammarBuilder::new(self.files);
         imported.import_stack = self.import_stack.clone();
-        imported.import_stack.push(joined_path.clone());
-        imported.load_grammar(&text, Some(&joined_path), Some(&mangle))?;
+        imported.import_stack.push(path.clone());
+        imported.load_grammar(self.files.text(&path), Some(&path), Some(&mangle))?;
         let used: Vec<String> = mangle
             .aliases
             .iter()
@@ -568,7 +560,7 @@ impl<'s> GrammarBuilder<'s> {
         for name in imported.names {
             if self.definitions.contains_key(&name) {
                 return Err(GrammarError::new(format!(
-                    "Cannot import '{name}' from '{grammar_path}': Symbol already defined."
+                    "Cannot import '{name}' from '{path}': Symbol already defined."
                 )));
             }
             let definition = imported.definitions.remove(&name).unwrap();
@@ -726,20 +718,15 @@ impl<'s> GrammarBuilder<'s> {
     }
 
     /// Load one grammar's statements, importing what it imports first.
-    /// `source_path` is where the text came from, if it came from a file:
-    /// relative imports resolve against its directory. `mangle` is set
-    /// when this grammar is itself being imported.
+    /// `path` is the file the text is, `None` for the root text. `mangle`
+    /// is set when this grammar is itself being imported.
     pub fn load_grammar(
         &mut self,
         text: &str,
-        source_path: Option<&str>,
+        path: Option<&str>,
         mangle: Option<&Mangle>,
     ) -> GrammarResult<()> {
         let statements = parse_grammar(text)?;
-        let base_path = source_path.map(|p| match p.rfind(['/', '\\']) {
-            Some(i) => p[..i].to_string(),
-            None => String::new(),
-        });
         let mut imports: Vec<(&ImportStmt, Vec<(String, String)>)> = Vec::new();
         for statement in &statements {
             let Statement::Import(stmt) = statement else {
@@ -767,12 +754,7 @@ impl<'s> GrammarBuilder<'s> {
             }
         }
         for (stmt, aliases) in imports {
-            let base = if stmt.relative {
-                base_path.as_deref()
-            } else {
-                None
-            };
-            self.do_import(stmt, aliases, base, mangle)?;
+            self.do_import(stmt, aliases, path, mangle)?;
         }
         for statement in statements {
             match statement {
@@ -939,15 +921,149 @@ fn tree_mentions(tree: &Expr, name: &str, as_terminal: bool) -> bool {
     }
 }
 
-/// Parse and build a grammar from its text.
-pub fn load_grammar(
-    text: &str,
-    source_path: Option<&str>,
-    source: &dyn ImportSource,
-) -> GrammarResult<BuiltGrammar> {
-    let mut builder = GrammarBuilder::new(source);
-    builder.load_grammar(text, source_path, None)?;
-    builder.build()
+fn nesting_error() -> GrammarError {
+    GrammarError::new(format!(
+        "Grammar imports nest more than {MAX_IMPORT_NESTING} levels deep"
+    ))
+}
+
+/// The file an `%import` made by the grammar file `importer` names
+/// (`None` for the root text, which sits at the top level):
+/// `a/b.lark` for `%import a.b.X`, and for a relative import
+/// (`%import .c.X`) the importer's directory joined with `c.lark`. Every
+/// component is a Lark name, so the path never holds `.`, `..`, an
+/// empty segment, a leading `/`, a backslash or a NUL.
+pub fn import_path(stmt: &ImportStmt, importer: Option<&str>) -> String {
+    let file = format!("{}.lark", stmt.path.join("/"));
+    if stmt.relative {
+        if let Some((dir, _)) = importer.and_then(|p| p.rsplit_once('/')) {
+            return format!("{dir}/{file}");
+        }
+    }
+    file
+}
+
+struct GrammarFile {
+    path: String,
+    /// How many imports lead to it from the root text along the chain
+    /// that first named it.
+    depth: usize,
+    text: Option<String>,
+}
+
+/// A grammar's text and the files its `%import`s need, gathered one at a
+/// time: each file supplied is parsed, and the files it imports that are
+/// not on the list yet join the end of it. A path names one file however
+/// many grammars import it.
+pub struct GrammarFiles {
+    root: String,
+    files: Vec<GrammarFile>,
+}
+
+impl GrammarFiles {
+    pub fn new(root: String) -> GrammarResult<Self> {
+        let mut files = GrammarFiles {
+            root: String::new(),
+            files: Vec::new(),
+        };
+        files.add_imports(&root, None, 0)?;
+        files.root = root;
+        Ok(files)
+    }
+
+    /// Gather every file the grammar `text` needs from `source`.
+    #[cfg(test)]
+    pub fn gather(text: &str, source: &dyn ImportSource) -> GrammarResult<Self> {
+        let mut files = Self::new(text.to_string())?;
+        let mut index = 0;
+        while let Some(path) = files.path(index) {
+            let text = source.read(path);
+            files.provide(index, text)?;
+            index += 1;
+        }
+        Ok(files)
+    }
+
+    fn add_imports(&mut self, text: &str, path: Option<&str>, depth: usize) -> GrammarResult<()> {
+        let mut new = Vec::new();
+        for statement in parse_grammar(text)? {
+            let Statement::Import(stmt) = statement else {
+                continue;
+            };
+            let imported = import_path(&stmt, path);
+            if !new.contains(&imported) && !self.files.iter().any(|f| f.path == imported) {
+                new.push(imported);
+            }
+        }
+        if !new.is_empty() && depth >= MAX_IMPORT_NESTING {
+            return Err(nesting_error());
+        }
+        self.files.extend(new.into_iter().map(|path| GrammarFile {
+            path,
+            depth: depth + 1,
+            text: None,
+        }));
+        Ok(())
+    }
+
+    /// The path of the `index`th file, or `None` past the end of the list.
+    pub fn path(&self, index: usize) -> Option<&str> {
+        self.files.get(index).map(|f| f.path.as_str())
+    }
+
+    /// Supply the `index`th file: its text, or `None` when there is no
+    /// such file, for the bundled grammar with its path to stand in.
+    pub fn provide(&mut self, index: usize, text: Option<String>) -> GrammarResult<()> {
+        let Some(file) = self.files.get(index) else {
+            return Err(GrammarError::new(format!(
+                "There is no grammar file {index}: only {} are needed so far",
+                self.files.len()
+            )));
+        };
+        let path = file.path.clone();
+        if file.text.is_some() {
+            return Err(GrammarError::new(format!(
+                "Grammar file `{path}` was already provided"
+            )));
+        }
+        let text = match text {
+            Some(text) => text,
+            None => bundled_grammar(&path)
+                .ok_or_else(|| {
+                    GrammarError::new(format!("Could not find grammar `{path}` to import"))
+                })?
+                .to_string(),
+        };
+        self.add_imports(&text, Some(&path), file.depth)
+            .map_err(|e| GrammarError::new(format!("In grammar `{path}`: {}", e.message)))?;
+        self.files[index].text = Some(text);
+        Ok(())
+    }
+
+    fn text(&self, path: &str) -> &str {
+        let file = self.files.iter().find(|f| f.path == path).unwrap();
+        file.text.as_deref().unwrap()
+    }
+
+    /// Parse and build the grammar, once every file is supplied.
+    pub fn build(&self) -> GrammarResult<BuiltGrammar> {
+        if let Some(file) = self.files.iter().find(|f| f.text.is_none()) {
+            return Err(GrammarError::new(format!(
+                "Grammar file `{}` was never provided",
+                file.path
+            )));
+        }
+        let mut builder = GrammarBuilder::new(self);
+        builder.load_grammar(&self.root, None, None)?;
+        builder.build()
+    }
+}
+
+/// Parse and build a grammar from its text, reading the files it imports
+/// from `source`.
+#[cfg(test)]
+pub fn load_grammar(text: &str, source: &dyn ImportSource) -> GrammarResult<BuiltGrammar> {
+    GrammarFiles::gather(text, source)?.build()
 }
 
 #[cfg(test)]

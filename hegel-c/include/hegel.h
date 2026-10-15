@@ -195,6 +195,11 @@ typedef enum {
      start again from the root directly.
      */
     HEGEL_E_RETRY = -10,
+    /*
+     There is nothing at the index asked for:
+     `hegel_grammar_builder_file` past the end of the list of files.
+     */
+    HEGEL_E_NOT_FOUND = -11,
 } hegel_result_t;
 
 /*
@@ -469,13 +474,59 @@ typedef struct hegel_failure_t hegel_failure_t;
 /*
  A grammar to draw strings of
 
- Build one with `hegel_grammar_new` from a grammar in Lark's syntax; the
+ Build one with `hegel_grammar_new` from a `hegel_grammar_builder_t`; the
  grammar is checked and compiled at construction. A grammar is immutable
  after construction and may be shared freely across test cases and
  threads. Free it with `hegel_grammar_free` once no draws will use it
  again.
  */
 typedef struct hegel_grammar_t hegel_grammar_t;
+
+/*
+ A grammar's text and the files its `%import`s need, gathered before
+ the grammar is compiled
+
+ libhegel resolves every `%import` to a file path itself; the frontend
+ only reads files. Create the builder with `hegel_grammar_builder_new`,
+ then supply the files it asks for in a loop:
+
+ ```c
+ for (size_t i = 0;; i++) {
+     const char *path;
+     size_t path_len;
+     if (hegel_grammar_builder_file(ctx, b, i, &path, &path_len) == HEGEL_E_NOT_FOUND)
+         break;
+     // read `path`, then:
+     hegel_grammar_builder_provide(ctx, b, i, text, text_len);  // or NULL, 0
+ }
+ ```
+
+ Supplying a file adds the files it imports to the end of the list, so
+ the loop must look for the end on every iteration rather than count
+ the files up front. Then pass the builder to `hegel_grammar_new`, and
+ free it with `hegel_grammar_builder_free`.
+
+ Paths: a path is slash-separated and relative, and ends in `.lark`.
+ `%import a.b.X` needs `a/b.lark`. A relative import, `%import .c.X`,
+ needs `c.lark` in the directory of the file that makes it, so
+ `x/c.lark` from `x/y.lark`; the grammar text itself sits at the top
+ level, so its relative imports need top-level files (a frontend that
+ wants them elsewhere can map paths under a directory of its choosing).
+ Every component of a path is a Lark name (`[_a-zA-Z][_a-zA-Z0-9]*`),
+ so a path never contains `.` or `..` as a component, an empty
+ component, a leading `/`, a backslash or a NUL: joined under a root
+ directory, it always names a file inside it.
+
+ A path is a file's identity: each distinct path is asked for once
+ however many grammars import it, an import of a path already being
+ imported is reported as circular, and errors name files by path.
+
+ Unlike Lark, which searches several `import_paths` and resolves a
+ relative import beside the file it actually found, libhegel sees one
+ tree of files: a frontend with several directories to search presents
+ them as one, a path resolving to the first directory holding it.
+ */
+typedef struct hegel_grammar_builder_t hegel_grammar_builder_t;
 
 /*
  Opaque handle to an engine-managed *variable pool* for stateful testing.
@@ -733,35 +784,6 @@ typedef struct {
  even for `len == 0`.
  */
 typedef hegel_string_t hegel_owned_string_t;
-
-/*
- Import callback for `hegel_grammar_new`, asked for every `%import` that
- the grammar, or a grammar it imports, makes. `user_data` is the pointer
- supplied alongside the callback. `base_path` is the directory of the
- importing grammar (the `out_path` this callback gave for it, cut at its
- last `/` or `\`, so empty for a path with neither) for a relative
- import (`%import .common.INT`) made by a grammar this callback
- supplied, and NULL otherwise: for every absolute import
- (`%import common.INT`), and for a relative import made by the text
- passed to `hegel_grammar_new`. `grammar_path` is the file the import
- names relative to it (`common.lark` for `%import common.INT`,
- `a/b.lark` for `%import a.b.rule`). Both are NUL-terminated UTF-8
- valid only for the duration of the call. To supply the grammar, set
- `out_path` to the NUL-terminated path it was found at, `out_text` and
- `out_text_len` to its UTF-8 text (bytes that are not UTF-8 are read
- with each invalid sequence replaced by U+FFFD), all kept alive until
- `hegel_grammar_new` returns, and return true; return false when there
- is no such grammar (a true return that leaves `out_path` or `out_text`
- NULL counts as false), in which case the import, absolute or relative,
- still resolves against the grammars bundled with libhegel, as Lark's
- does: `common`, `lark`, `python` and `unicode`.
- */
-typedef bool (*hegel_grammar_import_t)(void *user_data,
-                                       const char *base_path,
-                                       const char *grammar_path,
-                                       const char **out_path,
-                                       const char **out_text,
-                                       size_t *out_text_len);
 
 /*
  A drawn proleptic Gregorian calendar date: `year` in
@@ -2348,12 +2370,88 @@ hegel_result_t hegel_generate_string(hegel_context_t *ctx,
 hegel_result_t hegel_owned_string_free(hegel_context_t *ctx, hegel_owned_string_t *result);
 
 /*
- Compile a grammar written in Lark's syntax (see
- <https://lark-parser.readthedocs.io/en/stable/grammar.html>) into a
+ Start gathering a grammar written in Lark's syntax (see
+ <https://lark-parser.readthedocs.io/en/stable/grammar.html>) and the
+ files its `%import`s need. See `hegel_grammar_builder_t`.
+
+ Parameters:
+ `text`, `text_len`: The grammar, `text_len` bytes of UTF-8.
+ `out_builder`: Receives the builder handle.
+
+ Returns `HEGEL_OK`; `HEGEL_E_INVALID_ARG` for text that is not UTF-8,
+ that does not parse, or whose imports nest too deeply.
+ */
+hegel_result_t hegel_grammar_builder_new(hegel_context_t *ctx,
+                                         const char *text,
+                                         size_t text_len,
+                                         hegel_grammar_builder_t **out_builder);
+
+/*
+ The `index`th file the grammar needs, counting from 0.
+
+ Parameters:
+ `builder`: The builder.
+ `index`: Which file.
+ `out_path`, `out_path_len`: Receive the file's path (see
+   `hegel_grammar_builder_t`): `out_path_len` bytes of ASCII, followed
+   by a NUL. The builder owns it, and it stays valid until the builder
+   is freed.
+
+ Returns `HEGEL_OK`; `HEGEL_E_NOT_FOUND` when `index` is past the end of
+ the list, which grows as files are provided; `HEGEL_E_INVALID_HANDLE`
+ for a NULL builder; `HEGEL_E_INVALID_ARG` for a NULL out parameter.
+ */
+hegel_result_t hegel_grammar_builder_file(hegel_context_t *ctx,
+                                          const hegel_grammar_builder_t *builder,
+                                          size_t index,
+                                          const char **out_path,
+                                          size_t *out_path_len);
+
+/*
+ Supply the `index`th file the grammar needs. The text is copied and
+ parsed, and the files it imports that are not on the list yet join the
+ end of it.
+
+ Parameters:
+ `builder`: The builder.
+ `index`: Which file, as numbered by `hegel_grammar_builder_file`.
+ `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
+   NULL (with `text_len` 0) when there is no such file, in which case
+   the grammar bundled with libhegel at that path stands in: Lark's
+   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`.
+
+ Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
+ `HEGEL_E_INVALID_ARG` for an `index` past the end of the list or of a
+ file already provided, text that is not UTF-8 or does not parse,
+ imports that nest too deeply, or a NULL `text` for a path with no
+ bundled grammar. On error the file stays unprovided.
+ */
+hegel_result_t hegel_grammar_builder_provide(hegel_context_t *ctx,
+                                             hegel_grammar_builder_t *builder,
+                                             size_t index,
+                                             const char *text,
+                                             size_t text_len);
+
+/*
+ Parameters:
+ `builder`: The builder to release. Safe to call with NULL.
+
+ Returns `HEGEL_OK`.
+
+ Each builder must be freed exactly once. The paths
+ `hegel_grammar_builder_file` gave are invalid afterwards; grammars
+ built from it are not affected.
+ */
+hegel_result_t hegel_grammar_builder_free(hegel_context_t *ctx, hegel_grammar_builder_t *builder);
+
+/*
+ Compile a grammar gathered by a `hegel_grammar_builder_t` into a
  generator of the strings it accepts, drawn with `hegel_generate_grammar`.
 
  Parameters:
- `text`: The grammar, as a UTF-8 string.
+ `builder`: The grammar and its files, every one of them provided. The
+   builder is only read: it stays the caller's to free, and may build
+   further grammars (with another `start`, say).
  `start`: The rule whose strings to generate, or NULL for `start`.
  `max_size`: The most characters a string may have, or 0 for the default
    of 8192. Must not be below the shortest string the start rule can
@@ -2371,27 +2469,22 @@ hegel_result_t hegel_owned_string_free(hegel_context_t *ctx, hegel_owned_string_
    named; a terminal with a pattern may be named to override it. Each
    occurrence of such a terminal in a drawn string is a placeholder
    marker (see `hegel_grammar_placeholder`) for the caller to replace.
- `import_callback`, `import_data`: How `%import`s are resolved (see
-   `hegel_grammar_import_t`); NULL to resolve only against the bundled
-   grammars.
  `out_grammar`: Receives the grammar handle.
 
- Returns `HEGEL_OK`; `HEGEL_E_INVALID_ARG` with a message describing
- what is wrong with the grammar or the options: a syntax error, an
- undefined or unused symbol, a rule that can never produce a finite
- string, a `%declare`d terminal not named in `explicit_names`, or a
- cap below the smallest string.
+ Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
+ `HEGEL_E_INVALID_ARG` with a message describing what is wrong with the
+ grammar or the options: a file not yet provided, an undefined symbol, a
+ rule that can never produce a finite string, a `%declare`d terminal not
+ named in `explicit_names`, or a cap below the smallest string.
  */
 hegel_result_t hegel_grammar_new(hegel_context_t *ctx,
-                                 hegel_string_t text,
+                                 const hegel_grammar_builder_t *builder,
                                  const hegel_string_t *start,
                                  uint64_t max_size,
                                  uint32_t max_depth,
                                  const hegel_string_generator_t *alphabet,
                                  const hegel_string_t *explicit_names,
                                  size_t explicit_len,
-                                 hegel_grammar_import_t import_callback,
-                                 void *import_data,
                                  hegel_grammar_t **out_grammar);
 
 /*

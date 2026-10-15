@@ -12,7 +12,7 @@ use crate::native::re::parser::parse_pattern;
 use alloc::vec;
 
 fn compiled(text: &str) -> Grammar {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     compile(&built, &["start"]).unwrap()
 }
 

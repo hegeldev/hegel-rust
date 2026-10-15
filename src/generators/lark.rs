@@ -141,10 +141,15 @@ impl LarkGenerator {
     }
 
     /// Add a directory to search for `%import`ed grammars, as Lark's
-    /// `import_paths` does. Directories are searched in the order added, and
-    /// an import a grammar file makes relative to itself (`%import .lib.X`)
-    /// is also looked for next to that file. Lark's bundled `common`,
-    /// `python`, `unicode` and `lark` grammars are always available.
+    /// `import_paths` does. `%import a.b.X` reads `a/b.lark` from the first
+    /// directory, in the order added, that has it. An import a grammar file
+    /// makes relative to itself (`%import .lib.X` in `a/b.lark`) reads the
+    /// file beside it (`a/lib.lark`), again from the first directory that
+    /// has it; one the grammar text itself makes reads a top-level file.
+    /// Together the directories act as one layered directory, so unlike
+    /// Lark a relative import is not tied to the directory its importer was
+    /// found in. Lark's bundled `common`, `python`, `unicode` and `lark`
+    /// grammars are used when no directory has the file.
     pub fn import_path(mut self, dir: impl Into<PathBuf>) -> Self {
         self.handle = OnceLock::new();
         self.import_paths.push(dir.into());

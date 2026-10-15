@@ -9,7 +9,7 @@ use crate::native::core::{ChoiceKind, ChoiceValue, GenerationParameters, NativeT
 use crate::native::draws::source::{RngDraws, SimplestDraws};
 use crate::native::intervalsets::IntervalSet;
 use crate::native::lark::analysis::Bound;
-use crate::native::lark::builder::{ImportSource, NoImports};
+use crate::native::lark::builder::{ImportSource, NoImports, load_grammar};
 use crate::native::lark::parse::Parser;
 use crate::native::rng::EngineRng;
 use alloc::format;
@@ -1198,14 +1198,12 @@ fn strings_that_do_not_lex_back_whole_are_regenerated() {
     assert_eq!(status, None);
 }
 
-struct FixtureImports;
+/// Imports read from the directory of the fixture grammars.
+struct FixtureImports<'a>(&'a Path);
 
-impl ImportSource for FixtureImports {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
-        let base = base_path?;
-        let path = Path::new(base).join(grammar_path);
-        let text = std::fs::read_to_string(&path).ok()?;
-        Some((path.to_str().unwrap().to_string(), text))
+impl ImportSource for FixtureImports<'_> {
+    fn read(&self, path: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join(path)).ok()
     }
 }
 
@@ -1214,7 +1212,7 @@ fn fixture_grammar(name: &str, start: &str) -> Grammar {
         .join("tests/fixtures/lark")
         .join(format!("{name}.lark"));
     let text = std::fs::read_to_string(&path).unwrap();
-    let built = load_grammar(&text, Some(path.to_str().unwrap()), &FixtureImports).unwrap();
+    let built = load_grammar(&text, &FixtureImports(path.parent().unwrap())).unwrap();
     compile(&built, &[start]).unwrap()
 }
 
@@ -2128,7 +2126,7 @@ fn simplest_string(grammar: Grammar, options: GrammarOptions) -> (String, u64) {
 }
 
 fn simple_grammar(text: &str) -> Grammar {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     compile(&built, &["start"]).unwrap()
 }
 

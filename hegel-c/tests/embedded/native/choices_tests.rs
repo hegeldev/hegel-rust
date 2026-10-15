@@ -1294,7 +1294,7 @@ fn nodes_that_own_no_heap_are_booleans_floats_and_inline_integers() {
 }
 
 fn grammar_constraint(text: &str, max_size: usize, simplest: &str) -> Arc<GrammarConstraint> {
-    let built = load_grammar(text, None, &NoImports).unwrap();
+    let built = load_grammar(text, &NoImports).unwrap();
     let grammar = compile(&built, &["start"]).unwrap();
     let start = grammar.start[0];
     let constraint = GrammarConstraint::new(grammar, start, max_size, u32::MAX, None).unwrap();

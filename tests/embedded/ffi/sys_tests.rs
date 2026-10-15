@@ -114,7 +114,7 @@ mod loading {
 mod drift {
     use crate::ffi::sys::types as mirror;
     use hegel_c::*;
-    use std::ffi::c_void;
+    use std::ffi::{c_char, c_void};
     use std::mem::offset_of;
 
     macro_rules! assert_fn_signatures_match {
@@ -149,6 +149,7 @@ mod drift {
             HEGEL_E_INTERNAL,
             HEGEL_E_CONCURRENT_USE,
             HEGEL_E_RETRY,
+            HEGEL_E_NOT_FOUND,
         }
         hegel_status_t {
             HEGEL_STATUS_VALID,

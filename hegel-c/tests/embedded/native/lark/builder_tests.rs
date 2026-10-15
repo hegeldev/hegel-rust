@@ -9,66 +9,193 @@ use alloc::vec;
 struct Sources(Vec<(&'static str, &'static str)>);
 
 impl ImportSource for Sources {
-    fn load(&self, base_path: Option<&str>, grammar_path: &str) -> Option<(String, String)> {
-        let full = match base_path {
-            Some(base) if !base.is_empty() => format!("{base}/{grammar_path}"),
-            _ => grammar_path.to_string(),
-        };
+    fn read(&self, path: &str) -> Option<String> {
         self.0
             .iter()
-            .find(|(p, _)| *p == full)
-            .map(|(p, text)| (p.to_string(), text.to_string()))
+            .find(|(p, _)| *p == path)
+            .map(|(_, text)| text.to_string())
     }
 }
 
 fn build(text: &str) -> BuiltGrammar {
-    load_grammar(text, None, &NoImports).unwrap()
+    load_grammar(text, &NoImports).unwrap()
 }
 
 fn build_with(text: &str, sources: &Sources) -> GrammarResult<BuiltGrammar> {
-    load_grammar(text, Some("main.lark"), sources)
+    load_grammar(text, sources)
+}
+
+/// Every path a [`GrammarFiles`] lists, in order.
+fn paths(files: &GrammarFiles) -> Vec<&str> {
+    (0..).map_while(|i| files.path(i)).collect()
 }
 
 #[test]
 fn circular_imports_report_the_cycle() {
-    struct Circular {
-        calls: core::cell::Cell<usize>,
-    }
-
-    impl ImportSource for Circular {
-        fn load(&self, _: Option<&str>, path: &str) -> Option<(String, String)> {
-            self.calls.set(self.calls.get() + 1);
-            assert!(self.calls.get() < 10);
-            let next = if path == "a.lark" { "b" } else { "a" };
-            Some((path.to_string(), format!("%import {next}.value\n")))
-        }
-    }
-
-    let source = Circular {
-        calls: core::cell::Cell::new(0),
-    };
-    let error = load_grammar("%import a.value\nstart: value", None, &source).unwrap_err();
-    assert!(error.message.contains("Circular grammar import"));
-    assert!(error.message.contains("a.lark -> b.lark -> a.lark"));
-    assert_eq!(source.calls.get(), 3);
+    let sources = Sources(vec![
+        (
+            "a.lark",
+            "%import b.value
+",
+        ),
+        (
+            "b.lark",
+            "%import a.value
+",
+        ),
+    ]);
+    let error = build_with(
+        "%import a.value
+start: value",
+        &sources,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "Circular grammar import: a.lark -> b.lark -> a.lark"
+    );
 }
 
 #[test]
-fn import_depth_is_bounded_even_when_paths_never_repeat() {
-    struct Chain(core::cell::Cell<usize>);
+fn import_depth_is_bounded_while_gathering_files() {
+    struct Chain;
 
     impl ImportSource for Chain {
-        fn load(&self, _: Option<&str>, _: &str) -> Option<(String, String)> {
-            let i = self.0.get();
-            self.0.set(i + 1);
+        fn read(&self, path: &str) -> Option<String> {
+            let i: usize = path[1..path.len() - 5].parse().unwrap();
             assert!(i < 100);
-            Some((format!("{i}.lark"), String::from("%import next.value\n")))
+            Some(format!("%import n{}.value\n", i + 1))
         }
     }
 
-    let source = Chain(core::cell::Cell::new(0));
-    let error = load_grammar("%import next.value\nstart: value", None, &source).unwrap_err();
-    assert!(error.message.contains("Grammar imports nest more than"));
+    let error = load_grammar("%import n0.value\nstart: value", &Chain).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("Grammar imports nest more than 64 levels deep"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn import_depth_is_bounded_while_building() {
+    let root: String = (0..71)
+        .map(|i| format!("%import n{i}.value -> v{i}\n"))
+        .collect();
+    let mut files = GrammarFiles::new(format!("{root}start: v0\n")).unwrap();
+    assert_eq!(paths(&files).len(), 71);
+    for i in 0..70 {
+        let text = format!("%import n{}.value\nvalue: \"a\"\n", i + 1);
+        files.provide(i, Some(text)).unwrap();
+    }
+    files
+        .provide(70, Some(String::from("value: \"a\"\n")))
+        .unwrap();
+    let error = files.build().unwrap_err();
+    assert_eq!(
+        error.message,
+        "Grammar imports nest more than 64 levels deep"
+    );
+}
+
+#[test]
+fn import_paths_join_the_dotted_path_and_relative_imports_the_importers_directory() {
+    let mut files = GrammarFiles::new(String::from(
+        "%import a.b.x\n%import .c.y\n%import a.b (z)\nstart: x y z\n",
+    ))
+    .unwrap();
+    assert_eq!(paths(&files), vec!["a/b.lark", "c.lark"]);
+    files
+        .provide(
+            0,
+            Some(String::from("%import .d.x\n%import e.y\n%import .d (w)\n")),
+        )
+        .unwrap();
+    assert_eq!(
+        paths(&files),
+        vec!["a/b.lark", "c.lark", "a/d.lark", "e.lark"]
+    );
+    files
+        .provide(1, Some(String::from("%import .f.x\n")))
+        .unwrap();
+    assert_eq!(paths(&files)[4], "f.lark");
+    files
+        .provide(2, Some(String::from("%import .g.x\n")))
+        .unwrap();
+    assert_eq!(paths(&files)[5], "a/g.lark");
+}
+
+#[test]
+fn each_path_is_listed_once() {
+    let mut files =
+        GrammarFiles::new(String::from("%import a.x\n%import b.y\nstart: x y\n")).unwrap();
+    files
+        .provide(0, Some(String::from("%import b.z\n")))
+        .unwrap();
+    assert_eq!(paths(&files), vec!["a.lark", "b.lark"]);
+}
+
+#[test]
+fn a_missing_file_falls_back_to_the_bundled_grammar_with_its_path() {
+    let mut files = GrammarFiles::new(String::from("%import lark.RULE\nstart: RULE\n")).unwrap();
+    files.provide(0, None).unwrap();
+    assert_eq!(paths(&files), vec!["lark.lark", "common.lark"]);
+    files.provide(1, None).unwrap();
+    assert_eq!(term_names(&files.build().unwrap()), vec!["RULE"]);
+}
+
+#[test]
+fn the_frontends_file_takes_precedence_over_the_bundled_one() {
+    let sources = Sources(vec![("common.lark", "INT: \"7\"\n")]);
+    let built = build_with("%import common.INT\nstart: INT", &sources).unwrap();
+    assert_eq!(
+        term_body(&built, "INT"),
+        &Expr::Alternatives(vec![alt(vec![Expr::Literal(Pattern::str("7"))])])
+    );
+}
+
+#[test]
+fn a_bundled_grammar_stands_in_only_at_its_own_path() {
+    let mut files = GrammarFiles::new(String::from("%import a.b.x\nstart: x\n")).unwrap();
+    files
+        .provide(0, Some(String::from("%import .common.INT\nx: INT\n")))
+        .unwrap();
+    assert_eq!(
+        files.provide(1, None).unwrap_err().message,
+        "Could not find grammar `a/common.lark` to import"
+    );
+}
+
+#[test]
+fn providing_reports_bad_indices_and_bad_text() {
+    let mut files = GrammarFiles::new(String::from("%import a.x\nstart: x\n")).unwrap();
+    assert_eq!(
+        files.provide(1, None).unwrap_err().message,
+        "There is no grammar file 1: only 1 are needed so far"
+    );
+    assert!(
+        files
+            .provide(0, Some(String::from("x: (")))
+            .unwrap_err()
+            .message
+            .starts_with("In grammar `a.lark`: ")
+    );
+    assert_eq!(
+        files.build().unwrap_err().message,
+        "Grammar file `a.lark` was never provided"
+    );
+    files.provide(0, Some(String::from("x: \"x\"\n"))).unwrap();
+    assert_eq!(
+        files.provide(0, None).unwrap_err().message,
+        "Grammar file `a.lark` was already provided"
+    );
+    assert_eq!(rule_names(&files.build().unwrap()), vec!["x", "start"]);
+}
+
+#[test]
+fn a_root_text_that_does_not_parse_is_an_error() {
+    assert!(GrammarFiles::new(String::from("start: (")).is_err());
 }
 
 #[test]
@@ -83,7 +210,7 @@ fn independent_imports_can_share_a_dependency() {
 }
 
 fn err(text: &str) -> String {
-    load_grammar(text, None, &NoImports).unwrap_err().message
+    load_grammar(text, &NoImports).unwrap_err().message
 }
 
 fn rule_names(built: &BuiltGrammar) -> Vec<&str> {
@@ -388,14 +515,13 @@ fn import_forms() {
 #[test]
 fn relative_imports_resolve_against_the_importing_file() {
     let sources = Sources(vec![
-        ("sub/main.lark", "%import .lib.a\nstart: a\n"),
+        ("sub/main.lark", "%import .lib.a\nb: a\n"),
         ("sub/lib.lark", "a: \"a\"\n"),
     ]);
-    let built = load_grammar("%import .lib.a\nstart: a", Some("sub/main.lark"), &sources).unwrap();
-    assert_eq!(rule_names(&built), vec!["a", "start"]);
-    let built = load_grammar(
+    let built = build_with("%import sub.main.b\nstart: b", &sources).unwrap();
+    assert_eq!(rule_names(&built), vec!["sub__main__a", "b", "start"]);
+    let built = build_with(
         "%import .lib.a\nstart: a",
-        Some("main.lark"),
         &Sources(vec![("lib.lark", "a: \"a\"\n")]),
     )
     .unwrap();
@@ -403,35 +529,14 @@ fn relative_imports_resolve_against_the_importing_file() {
 }
 
 #[test]
-fn relative_imports_resolve_against_a_backslash_separated_importing_file() {
-    let sources = Sources(vec![("C:\\sub/lib.lark", "a: \"a\"\n")]);
-    let built = load_grammar(
-        "%import .lib.a\nstart: a",
-        Some("C:\\sub\\main.lark"),
-        &sources,
-    )
-    .unwrap();
-    assert_eq!(rule_names(&built), vec!["a", "start"]);
-}
-
-#[test]
 fn bundled_grammars_are_the_last_resort_for_relative_imports_too() {
-    let built = load_grammar(
-        "%import .common.INT\nstart: INT",
-        Some("main.lark"),
-        &NoImports,
-    )
-    .unwrap();
+    let built = load_grammar("%import .common.INT\nstart: INT", &NoImports).unwrap();
     assert_eq!(term_names(&built), vec!["INT"]);
     assert!(
-        load_grammar(
-            "%import .missing.INT\nstart: INT",
-            Some("main.lark"),
-            &NoImports
-        )
-        .unwrap_err()
-        .message
-        .contains("Could not find grammar `missing.lark`")
+        load_grammar("%import .missing.INT\nstart: INT", &NoImports)
+            .unwrap_err()
+            .message
+            .contains("Could not find grammar `missing.lark`")
     );
 }
 
