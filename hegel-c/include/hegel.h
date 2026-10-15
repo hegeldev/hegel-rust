@@ -79,6 +79,7 @@
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
  *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_grammar_builder_new  ->  hegel_grammar_builder_free
  *     hegel_grammar_new          ->  hegel_grammar_free
  *     hegel_new_collection       ->  hegel_collection_free
  *     hegel_new_pool             ->  hegel_pool_free
@@ -2418,7 +2419,10 @@ hegel_result_t hegel_grammar_builder_file(hegel_context_t *ctx,
  `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
    NULL (with `text_len` 0) when there is no such file, in which case
    the grammar bundled with libhegel at that path stands in: Lark's
-   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`.
+   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`. Unlike
+   other strings, a NULL `text` here is not the empty string: pass any
+   non-NULL pointer with `text_len` 0 for a file that exists but is
+   empty.
 
  Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
  `HEGEL_E_INVALID_ARG` for an `index` past the end of the list or of a

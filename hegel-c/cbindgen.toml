@@ -81,6 +81,7 @@ header = """
  *     hegel_run_result           ->  hegel_run_result_free
  *     hegel_run_result_failure   ->  hegel_failure_free
  *     hegel_string_generator_*   ->  hegel_string_generator_free
+ *     hegel_grammar_builder_new  ->  hegel_grammar_builder_free
  *     hegel_grammar_new          ->  hegel_grammar_free
  *     hegel_new_collection       ->  hegel_collection_free
  *     hegel_new_pool             ->  hegel_pool_free

@@ -5172,7 +5172,10 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
 /// `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
 ///   NULL (with `text_len` 0) when there is no such file, in which case
 ///   the grammar bundled with libhegel at that path stands in: Lark's
-///   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`.
+///   `common.lark`, `lark.lark`, `python.lark` and `unicode.lark`. Unlike
+///   other strings, a NULL `text` here is not the empty string: pass any
+///   non-NULL pointer with `text_len` 0 for a file that exists but is
+///   empty.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
 /// `HEGEL_E_INVALID_ARG` for an `index` past the end of the list or of a
