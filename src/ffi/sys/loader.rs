@@ -19,7 +19,7 @@
 //! incompatible library fails immediately rather than mid-run. The library
 //! is never unloaded.
 
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -104,15 +104,14 @@ pub(super) fn engine_version(lib: &Library) -> String {
     let hegel_version = unsafe {
         std::mem::transmute::<
             *mut c_void,
-            unsafe extern "C" fn(*mut HegelContext, *mut *const c_char) -> hegel_result_t,
+            unsafe extern "C" fn(*mut HegelContext, *mut hegel_string_t) -> hegel_result_t,
         >(sym)
     };
-    let mut version: *const c_char = std::ptr::null();
+    let mut version = hegel_string_t::default();
     let result = unsafe { hegel_version(std::ptr::null_mut(), &mut version) };
     hegel_internal_assert!(result == hegel_result_t::HEGEL_OK);
-    hegel_internal_assert!(!version.is_null());
-    unsafe { CStr::from_ptr(version) }
-        .to_string_lossy()
+    hegel_internal_assert!(!version.data.is_null());
+    String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(version.data.cast(), version.len) })
         .into_owned()
 }
 

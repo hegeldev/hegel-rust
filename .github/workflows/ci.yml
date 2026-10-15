@@ -102,8 +102,9 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         run: |
-          rustup toolchain install stable --profile minimal -c llvm-tools-preview
-          rustup default stable
+          wasm_rust="$(cat hegel-c/wasm-toolchain)"
+          rustup toolchain install "$wasm_rust" --profile minimal -c llvm-tools-preview
+          rustup default "$wasm_rust"
           rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
@@ -123,32 +124,8 @@ jobs:
           grep -q 'hegel_host_monotonic_nanos' <<<"$symbols"
           if grep -Eq '_RN.*host_entropy_fill' <<<"$symbols"; then exit 1; fi
           if grep -Eq '_RN.*host_monotonic_nanos' <<<"$symbols"; then exit 1; fi
-      - name: Smoke-test the WebAssembly host boundary
-        shell: bash
-        run: |
-          node --input-type=module - <<'NODE'
-          import { readFile } from "node:fs/promises";
-          import { randomFillSync } from "node:crypto";
-
-          const bytes = await readFile("target/wasm32-unknown-unknown/release/hegel_c.wasm");
-          let memory;
-          const { instance } = await WebAssembly.instantiate(bytes, {
-            hegel_host: {
-              entropy_fill(ptr, len) {
-                randomFillSync(new Uint8Array(memory.buffer, ptr, len));
-                return 1;
-              },
-              monotonic_nanos() {
-                return process.hrtime.bigint();
-              },
-            },
-          });
-          memory = instance.exports.memory;
-          const pointer = instance.exports.hegel_alloc(16, 8);
-          if (!pointer) throw new Error("hegel_alloc returned NULL");
-          new Uint8Array(memory.buffer, pointer, 16).fill(7);
-          instance.exports.hegel_dealloc(pointer, 16, 8);
-          NODE
+      - name: Smoke-test the WebAssembly host and string ABI
+        run: node scripts/test-wasm-abi.mjs
 
   test-all-features:
     name: test-all-features (${{ matrix.rust }}${{ matrix.os == 'windows-latest' && ', windows' || '' }})
@@ -794,8 +771,9 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          wasm_rust="$(cat hegel-c/wasm-toolchain)"
+          rustup toolchain install "$wasm_rust" --profile minimal
+          rustup default "$wasm_rust"
           rustup target add wasm32-unknown-unknown
       - name: Build WebAssembly artifact
         run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown

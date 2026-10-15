@@ -55,7 +55,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 10);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, ""); /* disable database */
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, STRING_LITERAL("")); /* disable database */
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 42, true);
     HEGEL_CHECK(hegel_settings_set_verbosity, ctx, s, HEGEL_VERBOSITY_DEBUG);
 
@@ -71,7 +71,7 @@ int main(void) {
         hegel_result_t rc = hegel_generate_integer(ctx, tc, 0, 100, &n);
         hegel_status_t status =
             rc == HEGEL_OK ? HEGEL_STATUS_VALID : HEGEL_STATUS_OVERRUN;
-        HEGEL_CHECK(hegel_mark_complete, ctx, tc, status, NULL);
+        HEGEL_CHECK(hegel_mark_complete, ctx, tc, status, string_view(NULL, 0));
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
 

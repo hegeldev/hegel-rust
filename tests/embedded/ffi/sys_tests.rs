@@ -114,7 +114,7 @@ mod loading {
 mod drift {
     use crate::ffi::sys::types as mirror;
     use hegel_c::*;
-    use std::ffi::{c_char, c_void};
+    use std::ffi::c_void;
     use std::mem::offset_of;
 
     macro_rules! assert_fn_signatures_match {
@@ -209,6 +209,7 @@ mod drift {
     }
 
     assert_struct_mirrors! {
+        hegel_string_t { data, len }
         hegel_date_t { year, month, day }
         hegel_time_t { hour, minute, second, nanosecond }
         hegel_datetime_t { date, time }

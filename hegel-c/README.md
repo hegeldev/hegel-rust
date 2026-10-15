@@ -29,9 +29,18 @@ published; build the crate yourself if you need it. Releases also include the
 The raw C ABI can also be built for `wasm32-unknown-unknown`:
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup toolchain install "$(cat hegel-c/wasm-toolchain)" --profile minimal --target wasm32-unknown-unknown
 just c-build-wasm
 ```
+
+`hegel-c/wasm-toolchain` pins Rust 1.97.1 for local builds, CI, and release
+artifacts. Wasm consumers must use its C-compatible aggregate ABI: a
+by-value `hegel_string_t` input is passed as an address of an eight-byte
+`{data, len}` descriptor in linear memory; a returned view uses a hidden
+output address before the explicit parameters. Rust 1.86 used a different
+aggregate ABI and is unsupported for Wasm builds. The native MSRV remains
+1.86. Rust callers linking the Wasm static archive must also use the pinned
+toolchain.
 
 `just c-build-wasm` also builds the static archive with the `wasm-static`
 feature. The resulting module uses `hegel_host.entropy_fill` and

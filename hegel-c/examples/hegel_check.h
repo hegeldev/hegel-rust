@@ -21,17 +21,26 @@
 
 #include "hegel.h"
 
-#define HEGEL_CHECK(fn, ctx, ...)                                             \
-    do {                                                                      \
-        hegel_result_t hegel_check_rc_ = fn((ctx), ##__VA_ARGS__);            \
-        if (hegel_check_rc_ != HEGEL_OK) {                                    \
-            const char *hegel_check_msg_ = hegel_context_last_error((ctx));   \
-            fprintf(stderr, "%s:%d: %s failed: rc=%d%s%s\n",                  \
-                    __FILE__, __LINE__, #fn, (int)hegel_check_rc_,            \
-                    (hegel_check_msg_ && hegel_check_msg_[0]) ? ": " : "",    \
-                    hegel_check_msg_ ? hegel_check_msg_ : "");                \
-            abort();                                                          \
-        }                                                                     \
+static inline hegel_string_t string_view(const char *data, size_t len) {
+    hegel_string_t result = {data, len};
+    return result;
+}
+
+#define STRING_LITERAL(value) string_view((value), sizeof(value) - 1)
+
+#define HEGEL_CHECK(fn, ctx, ...) \
+    do { \
+        hegel_result_t hegel_check_rc_ = fn((ctx), ##__VA_ARGS__); \
+        if (hegel_check_rc_ != HEGEL_OK) { \
+            hegel_string_t hegel_check_msg_ = hegel_context_last_error((ctx)); \
+            fprintf(stderr, "%s:%d: %s failed: rc=%d", __FILE__, __LINE__, #fn, (int)hegel_check_rc_); \
+            if (hegel_check_msg_.len) { \
+                fputs(": ", stderr); \
+                fwrite(hegel_check_msg_.data, 1, hegel_check_msg_.len, stderr); \
+            } \
+            fputc('\n', stderr); \
+            abort(); \
+        } \
     } while (0)
 
-#endif /* HEGEL_CHECK_H */
+#endif

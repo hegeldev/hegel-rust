@@ -23,7 +23,7 @@ unsafe fn start_run_and_first_case() -> (
     let mut s: *mut HegelSettings = ptr::null_mut();
     assert_eq!(unsafe { hegel_settings_new(ctx, &mut s) }, HEGEL_OK);
     let empty = CString::new("").unwrap();
-    ok(unsafe { hegel_settings_set_database(ctx, s, empty.as_ptr()) });
+    ok(unsafe { hegel_settings_set_database(ctx, s, test_view(empty.as_ptr())) });
     ok(unsafe { hegel_settings_set_seed(ctx, s, 1, true) });
     let mut run: *mut HegelRun = ptr::null_mut();
     assert_eq!(
@@ -48,7 +48,7 @@ unsafe fn finish(
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            ptr::null(),
+            test_view(ptr::null()),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -104,7 +104,7 @@ fn mark_complete_waits_for_an_in_flight_operation() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                ptr::null(),
+                test_view(ptr::null()),
             ));
         });
 
@@ -128,7 +128,7 @@ fn completion_is_reported_before_concurrent_use() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                ptr::null()
+                test_view(ptr::null())
             ),
             HEGEL_OK
         );
@@ -167,7 +167,7 @@ fn concurrent_use_of_one_collection_is_rejected() {
             HEGEL_E_CONCURRENT_USE
         );
         assert_eq!(
-            hegel_collection_reject(ctx, clone, collection, ptr::null()),
+            hegel_collection_reject(ctx, clone, collection, test_view(ptr::null())),
             HEGEL_E_CONCURRENT_USE
         );
         drop(held);
@@ -229,9 +229,9 @@ fn engine_suspending_without_an_offer_becomes_a_run_error() {
         let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         ok(hegel_run_result_status(ctx, result, &mut status));
         assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
-        let mut message: *const c_char = ptr::null();
+        let mut message = crate::hegel_string_t::default();
         ok(hegel_run_result_error(ctx, result, &mut message));
-        let message = CStr::from_ptr(message).to_str().unwrap();
+        let message = std::str::from_utf8(test_bytes(message)).unwrap();
         assert!(
             message.contains("suspended without offering a test case"),
             "{message}"
@@ -335,9 +335,12 @@ fn every_run_error_maps_to_its_kind_through_the_abi() {
                 (expected_kind, expected_check),
                 "{expected_message}"
             );
-            let mut message: *const c_char = ptr::null();
+            let mut message = crate::hegel_string_t::default();
             ok(hegel_run_result_error(ctx, result, &mut message));
-            assert_eq!(CStr::from_ptr(message).to_str().unwrap(), expected_message);
+            assert_eq!(
+                std::str::from_utf8(test_bytes(message)).unwrap(),
+                expected_message
+            );
             ok(hegel_run_result_free(ctx, result));
             ok(hegel_run_free(ctx, run));
             ok(hegel_context_free(ctx));
@@ -352,9 +355,7 @@ fn translate_ds_error_maps_internal_to_hegel_e_internal_with_diagnostic() {
     let rc = translate_ds_error(ctx, DataSourceError::Internal(e));
     assert_eq!(rc, HEGEL_E_INTERNAL);
     unsafe {
-        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
-            .to_str()
-            .unwrap();
+        let msg = std::str::from_utf8(test_bytes(hegel_context_last_error(ctx))).unwrap();
         assert!(msg.contains("draw invariant violated"), "{msg}");
         assert!(msg.contains("bug in hegel"), "{msg}");
         ok(hegel_context_free(ctx));
@@ -368,9 +369,7 @@ fn translate_construct_error_distinguishes_internal_from_invalid_argument() {
     let rc = translate_construct_error(ctx, crate::native::core::EngineError::Internal(e));
     assert_eq!(rc, HEGEL_E_INTERNAL);
     unsafe {
-        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
-            .to_str()
-            .unwrap();
+        let msg = std::str::from_utf8(test_bytes(hegel_context_last_error(ctx))).unwrap();
         assert!(msg.contains("constructor invariant"), "{msg}");
     }
     let rc = translate_construct_error(
@@ -379,9 +378,7 @@ fn translate_construct_error_distinguishes_internal_from_invalid_argument() {
     );
     assert_eq!(rc, HEGEL_E_INVALID_ARG);
     unsafe {
-        let msg = CStr::from_ptr(hegel_context_last_error(ctx))
-            .to_str()
-            .unwrap();
+        let msg = std::str::from_utf8(test_bytes(hegel_context_last_error(ctx))).unwrap();
         assert!(msg.contains("bad bound"), "{msg}");
         ok(hegel_context_free(ctx));
     }
@@ -417,9 +414,9 @@ fn internal_run_error_surfaces_through_run_result_error() {
         let mut status = hegel_run_status_t::HEGEL_RUN_STATUS_PASSED;
         ok(hegel_run_result_status(ctx, result, &mut status));
         assert!(matches!(status, hegel_run_status_t::HEGEL_RUN_STATUS_ERROR));
-        let mut message: *const c_char = ptr::null();
+        let mut message = crate::hegel_string_t::default();
         ok(hegel_run_result_error(ctx, result, &mut message));
-        let message = CStr::from_ptr(message).to_str().unwrap();
+        let message = std::str::from_utf8(test_bytes(message)).unwrap();
         assert!(
             message.contains("exploration invariant violated"),
             "{message}"
@@ -445,13 +442,58 @@ fn concurrent_use_of_one_printer_handle_is_rejected() {
 
         (*p).busy.store(true, Ordering::Release);
         assert_eq!(
-            hegel_printer_text(ctx, p, "a".as_ptr(), 1),
+            hegel_printer_text(
+                ctx,
+                p,
+                crate::hegel_string_t {
+                    data: ("a".as_ptr()).cast(),
+                    len: 1
+                }
+            ),
             HEGEL_E_CONCURRENT_USE
         );
         (*p).busy.store(false, Ordering::Release);
 
-        ok(hegel_printer_text(ctx, p, "a".as_ptr(), 1));
+        ok(hegel_printer_text(
+            ctx,
+            p,
+            crate::hegel_string_t {
+                data: ("a".as_ptr()).cast(),
+                len: 1,
+            },
+        ));
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
     }
+}
+
+unsafe fn test_view(data: *const std::ffi::c_char) -> crate::hegel_string_t {
+    crate::hegel_string_t {
+        data,
+        len: if data.is_null() {
+            0
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
+        },
+    }
+}
+
+unsafe fn test_bytes(value: crate::hegel_string_t) -> &'static [u8] {
+    if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.data.cast(), value.len) }
+    }
+}
+
+#[test]
+fn last_error_view_preserves_interior_nuls() {
+    let ctx = hegel_context_new();
+    set_last_error(ctx, "before\0after");
+    let message = unsafe { hegel_context_last_error(ctx) };
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(message.data.cast::<u8>(), message.len) },
+        b"before\0after"
+    );
+    unsafe { ok(hegel_context_free(ctx)) };
 }

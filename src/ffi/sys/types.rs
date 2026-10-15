@@ -44,6 +44,22 @@ opaque_handles!(
 );
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct hegel_string_t {
+    pub data: *const c_char,
+    pub len: usize,
+}
+
+impl Default for hegel_string_t {
+    fn default() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[must_use]
 pub(crate) enum hegel_result_t {

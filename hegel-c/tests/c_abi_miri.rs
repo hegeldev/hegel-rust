@@ -51,7 +51,11 @@ unsafe fn one_case_run() -> (
         let mut s: *mut HegelSettings = ptr::null_mut();
         assert_eq!(hegel_settings_new(ctx, &mut s), HEGEL_OK);
         let empty = CString::new("").unwrap();
-        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_settings_set_database(
+            ctx,
+            s,
+            test_view(empty.as_ptr()),
+        ));
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         ok(hegel_settings_set_seed(ctx, s, 1, true));
         let mut run: *mut HegelRun = ptr::null_mut();
@@ -109,7 +113,7 @@ fn clones_and_root_free_independently_in_any_order() {
                 ctx,
                 c2,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                ptr::null()
+                test_view(ptr::null())
             ),
             HEGEL_OK
         );
@@ -163,7 +167,7 @@ fn two_clones_used_concurrently_then_freed() {
             ctx,
             root,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            ptr::null(),
+            test_view(ptr::null()),
         ));
         ok(hegel_test_case_free(ctx, c1));
         ok(hegel_test_case_free(ctx, c2));
@@ -204,7 +208,7 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
                         tctx,
                         cp.0,
                         hegel_status_t::HEGEL_STATUS_VALID as u32,
-                        ptr::null(),
+                        test_view(ptr::null()),
                     );
                     ok(hegel_context_free(tctx));
                     rc
@@ -248,11 +252,15 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
         ok(hegel_new_state_machine(
             ctx,
             tc,
-            rules.as_ptr(),
+            test_views(rules.as_ptr(), 1)
+                .as_ref()
+                .map_or(std::ptr::null(), |views| views.as_ptr()),
             rule_groups.as_ptr(),
             ptr::null(),
             1,
-            ptr::null(),
+            test_views(ptr::null(), 0)
+                .as_ref()
+                .map_or(std::ptr::null(), |views| views.as_ptr()),
             ptr::null(),
             0,
             1,
@@ -271,7 +279,7 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            ptr::null(),
+            test_view(ptr::null()),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -307,7 +315,11 @@ fn full_run_generates_fails_and_shrinks() {
         let mut s: *mut HegelSettings = ptr::null_mut();
         ok(hegel_settings_new(ctx, &mut s));
         let empty = CString::new("").unwrap();
-        ok(hegel_settings_set_database(ctx, s, empty.as_ptr()));
+        ok(hegel_settings_set_database(
+            ctx,
+            s,
+            test_view(empty.as_ptr()),
+        ));
         ok(hegel_settings_set_test_cases(ctx, s, 5));
         ok(hegel_settings_set_seed(ctx, s, 1, true));
         ok(hegel_settings_set_verbosity(
@@ -338,7 +350,7 @@ fn full_run_generates_fails_and_shrinks() {
             } else {
                 hegel_status_t::HEGEL_STATUS_OVERRUN as u32
             };
-            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
+            ok(hegel_mark_complete(ctx, tc, status, test_view(ptr::null())));
             ok(hegel_test_case_free(ctx, tc));
         }
 
@@ -359,15 +371,18 @@ fn full_run_generates_fails_and_shrinks() {
             count >= 1,
             "an always-interesting property records a failure"
         );
-        let mut blob: *const std::os::raw::c_char = ptr::null();
+        let mut blob = hegel_c::hegel_string_t::default();
         ok(hegel_failure_reproduction_blob(ctx, f, &mut blob));
         assert!(
-            !blob.is_null(),
+            !blob.data.is_null(),
             "a shrunk failure carries a reproduction blob"
         );
-        let mut caveat: *const std::os::raw::c_char = ptr::null();
+        let mut caveat = hegel_c::hegel_string_t::default();
         ok(hegel_failure_caveat(ctx, f, &mut caveat));
-        assert!(caveat.is_null(), "a deterministic failure has no caveat");
+        assert!(
+            caveat.data.is_null(),
+            "a deterministic failure has no caveat"
+        );
         ok(hegel_failure_free(ctx, f));
         ok(hegel_run_result_free(ctx, res));
         ok(hegel_context_free(ctx));
@@ -390,4 +405,30 @@ unsafe extern "C" fn count_output_line(
     assert_eq!(text.to_bytes().len(), len);
     let count = unsafe { &*user_data.cast::<AtomicUsize>() };
     count.fetch_add(1, Ordering::Relaxed);
+}
+
+unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
+    hegel_c::hegel_string_t {
+        data,
+        len: if data.is_null() {
+            0
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
+        },
+    }
+}
+
+unsafe fn test_views(
+    data: *const *const std::ffi::c_char,
+    len: usize,
+) -> Option<Vec<hegel_c::hegel_string_t>> {
+    if data.is_null() {
+        return None;
+    }
+    Some(
+        unsafe { std::slice::from_raw_parts(data, len) }
+            .iter()
+            .map(|&p| unsafe { test_view(p) })
+            .collect(),
+    )
 }

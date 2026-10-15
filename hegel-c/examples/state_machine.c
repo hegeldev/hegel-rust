@@ -31,10 +31,10 @@
 #include "hegel.h"
 #include "hegel_check.h"
 
-static const char *RULES[] = { "increment", "decrement", "reset" };
+static const hegel_string_t RULES[] = { {"increment", sizeof("increment") - 1}, {"decrement", sizeof("decrement") - 1}, {"reset", sizeof("reset") - 1} };
 #define NUM_RULES (int64_t) (sizeof(RULES) / sizeof(RULES[0]))
 static const int64_t RULE_GROUPS[] = { 0, 0, 0 };
-static const char *INVARIANTS[] = { "non_negative" };
+static const hegel_string_t INVARIANTS[] = { {"non_negative", sizeof("non_negative") - 1} };
 #define NUM_INVARIANTS (sizeof(INVARIANTS) / sizeof(INVARIANTS[0]))
 
 int main(void) {
@@ -43,7 +43,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 100);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, STRING_LITERAL(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0x5ca1ab1e, true);
 
@@ -61,11 +61,8 @@ int main(void) {
 
         hegel_state_machine_t *machine;
         int64_t concurrency;
-        if (hegel_new_state_machine(ctx, tc,
-                                    RULES, RULE_GROUPS, NULL, NUM_RULES,
-                                    INVARIANTS, NULL, NUM_INVARIANTS,
-                                    1, 1, 50, &machine, &concurrency) != HEGEL_OK) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+        if (hegel_new_state_machine(ctx, tc, RULES, RULE_GROUPS, NULL, NUM_RULES, INVARIANTS, NULL, NUM_INVARIANTS, 1, 1, 50, &machine, &concurrency) != HEGEL_OK) {
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, string_view(NULL, 0));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
@@ -106,19 +103,18 @@ int main(void) {
         HEGEL_CHECK(hegel_state_machine_free, ctx, machine);
 
         if (bad) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING,
-                        "invariant violated");
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, STRING_LITERAL("invariant violated"));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             ok = false;
             continue;
         }
         if (overran) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, string_view(NULL, 0));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         total++;
-        HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+        HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, string_view(NULL, 0));
         /* The caller owns every handle from hegel_next_test_case and must free it. */
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
     }
@@ -134,7 +130,7 @@ int main(void) {
      * swarm testing restricts the mix per test case, not globally. */
     for (size_t i = 0; i < NUM_RULES; i++) {
         if (rule_counts[i] == 0) {
-            fprintf(stderr, "rule %s was never selected\n", RULES[i]);
+            fprintf(stderr, "rule %.*s was never selected\n", (int)RULES[i].len, RULES[i].data);
             ok = false;
         }
     }

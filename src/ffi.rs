@@ -54,10 +54,11 @@ impl Context {
     fn last_error(&self) -> String {
         // SAFETY: self.raw is a live, non-null context handle.
         let p = unsafe { hegel_c::hegel_context_last_error(self.raw) };
-        if p.is_null() {
+        if p.data.is_null() {
             return String::new(); // nocov
         }
-        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(p.data.cast::<u8>(), p.len) })
+            .into_owned()
     }
 }
 
@@ -109,6 +110,13 @@ fn free_on_drop(f: impl FnOnce(*mut hegel_c::HegelContext) -> hegel_c::hegel_res
 /// overwrite it.
 pub(crate) fn last_error_string() -> String {
     CONTEXT.with(|c| c.last_error())
+}
+
+fn view(bytes: &[u8]) -> hegel_c::hegel_string_t {
+    hegel_c::hegel_string_t {
+        data: bytes.as_ptr().cast(),
+        len: bytes.len(),
+    }
 }
 
 /// Build a NUL-terminated C string, replacing any interior NUL (which a
@@ -169,13 +177,12 @@ impl SettingsHandle {
     ) -> Self {
         with_context(|ctx| {
             let mut raw: *mut hegel_c::HegelSettings = ptr::null_mut();
-            let base_profile = CString::new("base").unwrap();
             // SAFETY: ctx is this thread's live context; &mut raw is a valid
             // out-parameter.
             unsafe {
                 require_ok(hegel_c::hegel_settings_new_for_profile(
                     ctx,
-                    base_profile.as_ptr(),
+                    view(b"base"),
                     &mut raw,
                 ));
                 require_ok(hegel_c::hegel_settings_set_test_cases(
@@ -214,19 +221,21 @@ impl SettingsHandle {
                 ));
                 match &settings.database {
                     Database::Disabled => {
-                        let empty = CString::new("").unwrap();
+                        require_ok(hegel_c::hegel_settings_set_database(ctx, raw, view(b"")));
+                    }
+                    Database::Path(path) => {
                         require_ok(hegel_c::hegel_settings_set_database(
                             ctx,
                             raw,
-                            empty.as_ptr(),
+                            view(path.as_bytes()),
                         ));
                     }
-                    Database::Path(path) => {
-                        let c = cstring_lossy(path);
-                        require_ok(hegel_c::hegel_settings_set_database(ctx, raw, c.as_ptr()));
-                    }
                     Database::Unset => {
-                        require_ok(hegel_c::hegel_settings_set_database(ctx, raw, ptr::null()));
+                        require_ok(hegel_c::hegel_settings_set_database(
+                            ctx,
+                            raw,
+                            hegel_c::hegel_string_t::default(),
+                        ));
                     }
                 }
                 require_ok(hegel_c::hegel_settings_set_print_blob(
@@ -235,24 +244,20 @@ impl SettingsHandle {
                     settings.print_blob,
                 ));
                 if let Some(key) = database_key {
-                    let c = cstring_lossy(key);
                     require_ok(hegel_c::hegel_settings_set_database_key(
                         ctx,
                         raw,
-                        c.as_ptr(),
+                        view(key.as_bytes()),
                     ));
                 }
                 if let Some(location) = test_location {
-                    let file = cstring_lossy(&location.file);
-                    let class = cstring_lossy(&location.class);
-                    let function = cstring_lossy(&location.function);
                     require_ok(hegel_c::hegel_settings_set_test_location(
                         ctx,
                         raw,
-                        file.as_ptr(),
+                        view(location.file.as_bytes()),
                         location.begin_line,
-                        class.as_ptr(),
-                        function.as_ptr(),
+                        view(location.class.as_bytes()),
+                        view(location.function.as_bytes()),
                     ));
                 }
                 require_ok(hegel_c::hegel_settings_set_phases(
@@ -301,8 +306,7 @@ pub(crate) fn settings_from_profile(name: Option<&str>) -> Result<Settings, Stri
         let rc = unsafe {
             match name {
                 Some(name) => {
-                    let c = cstring_lossy(name);
-                    hegel_c::hegel_settings_new_for_profile(ctx, c.as_ptr(), &mut raw)
+                    hegel_c::hegel_settings_new_for_profile(ctx, view(name.as_bytes()), &mut raw)
                 }
                 None => hegel_c::hegel_settings_new(ctx, &mut raw),
             }
@@ -324,7 +328,7 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
     let mut seed = 0u64;
     let mut has_seed = false;
     let mut derandomize = false;
-    let mut database: *const c_char = ptr::null();
+    let mut database = hegel_c::hegel_string_t::default();
     let mut phases = 0u32;
     let mut suppress_health_check = 0u32;
     let mut report_multiple_failures = false;
@@ -389,7 +393,7 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
             &mut strictness,
         ));
     }
-    let database = match cstr_opt(database) {
+    let database = match string_opt(database) {
         None => Database::Unset,
         Some(path) if path.is_empty() => Database::Disabled,
         Some(path) => Database::Path(path),
@@ -415,11 +419,10 @@ fn read_settings(ctx: *mut hegel_c::HegelContext, raw: *const hegel_c::HegelSett
 /// reserved name).
 pub(crate) fn set_default_profile(name: Option<&str>) -> Result<(), String> {
     with_context(|ctx| {
-        let c = name.map(cstring_lossy);
-        let ptr = c.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+        let name = name.map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes()));
         // SAFETY: ctx is this thread's live context, and the name pointer,
         // when non-null, outlives the call.
-        let rc = unsafe { hegel_c::hegel_set_default_profile(ctx, ptr) };
+        let rc = unsafe { hegel_c::hegel_set_default_profile(ctx, name) };
         if rc == hegel_result_t::HEGEL_E_INVALID_ARG {
             return Err(last_error_string());
         }
@@ -434,11 +437,11 @@ pub(crate) fn set_default_profile(name: Option<&str>) -> Result<(), String> {
 pub(crate) fn register_profile(name: &str, settings: &Settings) -> Result<(), String> {
     let handle = SettingsHandle::build(settings, None, None);
     with_context(|ctx| {
-        let c = cstring_lossy(name);
         // SAFETY: ctx is this thread's live context, and both pointers
         // outlive the call.
-        let rc =
-            unsafe { hegel_c::hegel_settings_register_profile(ctx, c.as_ptr(), handle.as_ptr()) };
+        let rc = unsafe {
+            hegel_c::hegel_settings_register_profile(ctx, view(name.as_bytes()), handle.as_ptr())
+        };
         if rc == hegel_result_t::HEGEL_E_INVALID_ARG {
             return Err(last_error_string());
         }
@@ -523,17 +526,16 @@ impl RunHandle {
         blob: &str,
         sink: Option<&OutputSink>,
     ) -> Self {
-        let blob = cstring_lossy(blob);
         let output = sink.map(|s| Box::into_raw(Box::new(s.clone())));
         let (callback, user_data) = output_args(output.map(|p| p.cast_const()));
         let mut raw: *mut hegel_c::HegelRun = ptr::null_mut();
-        // SAFETY: as in `start`; blob is a live NUL-terminated string for the
+        // SAFETY: as in `start`; blob bytes remain alive for the
         // duration of the call (libhegel copies it).
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_run_start_blob(
                 ctx,
                 settings.as_ptr(),
-                blob.as_ptr(),
+                view(blob.as_bytes()),
                 callback,
                 user_data,
                 &mut raw,
@@ -935,8 +937,7 @@ impl CTestCase {
         collection: &CollectionHandle,
         why: Option<&str>,
     ) -> Result<(), hegel_result_t> {
-        let c_why = why.map(cstring_lossy);
-        let why_ptr = c_why.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+        let why_ptr = why.map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes()));
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_collection_reject(ctx, self.raw, collection.raw, why_ptr)
         }))
@@ -1058,12 +1059,14 @@ impl CTestCase {
         max_concurrency: i64,
         step_count: i64,
     ) -> Result<(StateMachineHandle, i64), hegel_result_t> {
-        let rule_cstrings: Vec<CString> = rule_names.iter().map(|s| cstring_lossy(s)).collect();
-        let invariant_cstrings: Vec<CString> =
-            invariant_names.iter().map(|s| cstring_lossy(s)).collect();
-        let rule_ptrs: Vec<*const c_char> = rule_cstrings.iter().map(|c| c.as_ptr()).collect();
-        let invariant_ptrs: Vec<*const c_char> =
-            invariant_cstrings.iter().map(|c| c.as_ptr()).collect();
+        let rule_ptrs: Vec<hegel_c::hegel_string_t> = rule_names
+            .iter()
+            .map(|name| view(name.as_bytes()))
+            .collect();
+        let invariant_ptrs: Vec<hegel_c::hegel_string_t> = invariant_names
+            .iter()
+            .map(|name| view(name.as_bytes()))
+            .collect();
         let mut raw: *mut hegel_c::HegelStateMachine = ptr::null_mut();
         let mut concurrency: i64 = 0;
         let rc = with_context(|ctx| unsafe {
@@ -1179,23 +1182,20 @@ impl CTestCase {
     }
 
     pub(crate) fn target(&self, score: f64, label: &str) -> Result<(), hegel_result_t> {
-        let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_target(ctx, self.raw, score, c_label.as_ptr())
+            hegel_c::hegel_target(ctx, self.raw, score, view(label.as_bytes()))
         }))
     }
 
     pub(crate) fn event(&self, label: &str) -> Result<(), hegel_result_t> {
-        let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_event(ctx, self.raw, c_label.as_ptr())
+            hegel_c::hegel_event(ctx, self.raw, view(label.as_bytes()))
         }))
     }
 
     pub(crate) fn event_value(&self, label: &str, value: f64) -> Result<(), hegel_result_t> {
-        let c_label = cstring_lossy(label);
         rc_to_unit(with_context(|ctx| unsafe {
-            hegel_c::hegel_event_value(ctx, self.raw, value, c_label.as_ptr())
+            hegel_c::hegel_event_value(ctx, self.raw, value, view(label.as_bytes()))
         }))
     }
 
@@ -1224,7 +1224,7 @@ impl CTestCase {
     /// region.
     pub(crate) fn note(&self, text: &str) -> Result<(), PrinterCallError> {
         PrinterHandle::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_note(ctx, self.raw, text.as_ptr(), text.len())
+            hegel_c::hegel_note(ctx, self.raw, view(text.as_bytes()))
         }))
     }
 
@@ -1235,8 +1235,7 @@ impl CTestCase {
         status: hegel_c::hegel_status_t,
         origin: Option<&str>,
     ) -> Result<(), hegel_result_t> {
-        let c_origin = origin.map(cstring_lossy);
-        let origin_ptr = c_origin.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+        let origin_ptr = origin.map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes()));
         rc_to_unit(with_context(|ctx| unsafe {
             hegel_c::hegel_mark_complete(ctx, self.raw, status as u32, origin_ptr)
         }))
@@ -1393,18 +1392,10 @@ impl StringGenerator {
         include_characters: Option<&str>,
         exclude_characters: Option<&str>,
     ) -> Result<Self, String> {
-        let c_codec = codec.map(cstring_lossy);
-        let c_categories: Option<Vec<CString>> =
-            categories.map(|cats| cats.iter().map(|c| cstring_lossy(c)).collect());
-        let c_exclude_categories: Option<Vec<CString>> =
-            exclude_categories.map(|cats| cats.iter().map(|c| cstring_lossy(c)).collect());
-
-        let category_ptrs: Option<Vec<*const c_char>> = c_categories
-            .as_ref()
-            .map(|cats| cats.iter().map(|c| c.as_ptr()).collect());
-        let exclude_category_ptrs: Option<Vec<*const c_char>> = c_exclude_categories
-            .as_ref()
-            .map(|cats| cats.iter().map(|c| c.as_ptr()).collect());
+        let category_ptrs: Option<Vec<hegel_c::hegel_string_t>> =
+            categories.map(|cats| cats.iter().map(|c| view(c.as_bytes())).collect());
+        let exclude_category_ptrs: Option<Vec<hegel_c::hegel_string_t>> =
+            exclude_categories.map(|cats| cats.iter().map(|c| view(c.as_bytes())).collect());
 
         let mut raw: *mut hegel_c::HegelStringGenerator = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
@@ -1412,7 +1403,7 @@ impl StringGenerator {
                 ctx,
                 min_size,
                 max_size,
-                c_codec.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                codec.map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes())),
                 min_codepoint,
                 max_codepoint.unwrap_or(u32::MAX),
                 category_ptrs.as_ref().map_or(ptr::null(), |p| p.as_ptr()),
@@ -1421,10 +1412,10 @@ impl StringGenerator {
                     .as_ref()
                     .map_or(ptr::null(), |p| p.as_ptr()),
                 exclude_category_ptrs.as_ref().map_or(0, |p| p.len()),
-                include_characters.map_or(ptr::null(), |s| s.as_ptr()),
-                include_characters.map_or(0, |s| s.len()),
-                exclude_characters.map_or(ptr::null(), |s| s.as_ptr()),
-                exclude_characters.map_or(0, |s| s.len()),
+                include_characters
+                    .map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes())),
+                exclude_characters
+                    .map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes())),
                 &mut raw,
             )
         });
@@ -1441,8 +1432,7 @@ impl StringGenerator {
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_string_generator_regex(
                 ctx,
-                pattern.as_ptr(),
-                pattern.len(),
+                view(pattern.as_bytes()),
                 fullmatch,
                 alphabet.map_or(ptr::null(), |a| a.raw),
                 &mut raw,
@@ -1579,10 +1569,8 @@ impl Grammar {
         explicit: &[String],
         import_paths: &[PathBuf],
     ) -> Result<Self, String> {
-        let c_text = cstring_lossy(text);
-        let c_start = start.map(cstring_lossy);
-        let names: Vec<CString> = explicit.iter().map(|name| cstring_lossy(name)).collect();
-        let name_ptrs: Vec<*const c_char> = names.iter().map(|n| n.as_ptr()).collect();
+        let name_ptrs: Vec<hegel_c::hegel_string_t> =
+            explicit.iter().map(|name| view(name.as_bytes())).collect();
         let mut imports = GrammarImports {
             dirs: import_paths,
             loaded: Vec::new(),
@@ -1591,8 +1579,8 @@ impl Grammar {
         let rc = with_context(|ctx| unsafe {
             hegel_c::hegel_grammar_new(
                 ctx,
-                c_text.as_ptr(),
-                c_start.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                view(text.as_bytes()),
+                start.map_or(hegel_c::hegel_string_t::default(), |s| view(s.as_bytes())),
                 max_size,
                 max_depth,
                 alphabet.map_or(ptr::null(), |a| a.raw.cast_const()),
@@ -1612,19 +1600,16 @@ impl Grammar {
     /// The marker standing for each value of the explicit terminal `name`
     /// in the strings drawn from the grammar.
     pub(crate) fn placeholder(&self, name: &str) -> Result<String, String> {
-        let c_name = cstring_lossy(name);
-        let mut marker: *const c_char = ptr::null();
+        let mut marker = hegel_c::hegel_string_t::default();
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_grammar_placeholder(ctx, self.raw, c_name.as_ptr(), &mut marker)
+            hegel_c::hegel_grammar_placeholder(ctx, self.raw, view(name.as_bytes()), &mut marker)
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string());
         }
-        // SAFETY: on success the engine set `marker` to a NUL-terminated
-        // string the grammar owns, alive for as long as `self` is.
-        Ok(unsafe { CStr::from_ptr(marker) }
-            .to_string_lossy()
-            .into_owned())
+        // SAFETY: on success the engine set `marker` to a borrowed view
+        // of bytes the grammar owns, alive for as long as `self` is.
+        Ok(string_opt(marker).unwrap_or_default())
     }
 }
 
@@ -1723,14 +1708,14 @@ impl PrinterHandle {
     /// Emit literal text. Must not contain newlines.
     pub(crate) fn text(&self, s: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_text(ctx, self.raw, s.as_ptr(), s.len())
+            hegel_c::hegel_printer_text(ctx, self.raw, view(s.as_bytes()))
         }))
     }
 
     /// Emit a break point rendering as `sep` when the enclosing group fits.
     pub(crate) fn breakable(&self, sep: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_breakable(ctx, self.raw, sep.as_ptr(), sep.len())
+            hegel_c::hegel_printer_breakable(ctx, self.raw, view(sep.as_bytes()))
         }))
     }
 
@@ -1746,7 +1731,7 @@ impl PrinterHandle {
     /// open group to break, and is excluded from width accounting.
     pub(crate) fn comment(&self, text: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_comment(ctx, self.raw, text.as_ptr(), text.len())
+            hegel_c::hegel_printer_comment(ctx, self.raw, view(text.as_bytes()))
         }))
     }
 
@@ -1754,7 +1739,7 @@ impl PrinterHandle {
     /// `indent`.
     pub(crate) fn begin_group(&self, indent: u64, open: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_begin_group(ctx, self.raw, indent, open.as_ptr(), open.len())
+            hegel_c::hegel_printer_begin_group(ctx, self.raw, indent, view(open.as_bytes()))
         }))
     }
 
@@ -1762,7 +1747,7 @@ impl PrinterHandle {
     /// emit `close`.
     pub(crate) fn end_group(&self, close: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_end_group(ctx, self.raw, close.as_ptr(), close.len())
+            hegel_c::hegel_printer_end_group(ctx, self.raw, view(close.as_bytes()))
         }))
     }
 
@@ -1771,7 +1756,7 @@ impl PrinterHandle {
     /// as hard breaks.
     pub(crate) fn reflow(&self, repr: &str) -> Result<(), PrinterCallError> {
         Self::check(with_context(|ctx| unsafe {
-            hegel_c::hegel_printer_reflow(ctx, self.raw, ptr::null(), repr.as_ptr(), repr.len())
+            hegel_c::hegel_printer_reflow(ctx, self.raw, ptr::null(), view(repr.as_bytes()))
         }))
     }
 
@@ -1872,12 +1857,12 @@ impl RunResult {
     /// Run-level error message (failed health check, nondeterminism, engine
     /// panic), or `None` for a normal run.
     pub(crate) fn error(&self) -> Option<String> {
-        let mut p: *const c_char = ptr::null();
+        let mut p = hegel_c::hegel_string_t::default();
         // SAFETY: self.raw is this snapshot's live pointer; &mut p is valid.
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_error(ctx, self.raw, &mut p)
         }));
-        cstr_opt(p)
+        string_opt(p)
     }
 
     pub(crate) fn failure_count(&self) -> usize {
@@ -1899,20 +1884,20 @@ impl RunResult {
         require_ok(with_context(|ctx| unsafe {
             hegel_c::hegel_run_result_failure(ctx, self.raw, index, &mut f)
         }));
-        let mut origin: *const c_char = ptr::null();
-        let mut blob: *const c_char = ptr::null();
-        let mut caveat: *const c_char = ptr::null();
+        let mut origin = hegel_c::hegel_string_t::default();
+        let mut blob = hegel_c::hegel_string_t::default();
+        let mut caveat = hegel_c::hegel_string_t::default();
         // SAFETY: f is the failure snapshot allocated above; it is freed
-        // exactly once, after the strings have been copied out by cstr_opt.
+        // exactly once, after the strings have been copied out by string_opt.
         with_context(|ctx| unsafe {
             require_ok(hegel_c::hegel_failure_origin(ctx, f, &mut origin));
             require_ok(hegel_c::hegel_failure_reproduction_blob(ctx, f, &mut blob));
             require_ok(hegel_c::hegel_failure_caveat(ctx, f, &mut caveat));
             let failure = Failure {
-                origin: cstr_opt(origin)
+                origin: string_opt(origin)
                     .unwrap_or_else(|| hegel_internal_error!("failure {index} has no origin")),
-                reproduce_blob: cstr_opt(blob),
-                caveat: cstr_opt(caveat),
+                reproduce_blob: string_opt(blob),
+                caveat: string_opt(caveat),
             };
             require_ok(hegel_c::hegel_failure_free(ctx, f));
             failure
@@ -1965,13 +1950,17 @@ fn rc_to_value<T>(rc: hegel_result_t, value: T) -> Result<T, hegel_result_t> {
     }
 }
 
-/// Copy a (possibly null) borrowed C string into an owned `String`, or `None`
-/// if the pointer is null.
-fn cstr_opt(p: *const c_char) -> Option<String> {
-    if p.is_null() {
+/// Copy a borrowed string view into an owned `String`, or `None` if absent.
+fn string_opt(p: hegel_c::hegel_string_t) -> Option<String> {
+    if p.data.is_null() {
         None
     } else {
-        Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
+        Some(
+            String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(p.data.cast::<u8>(), p.len)
+            })
+            .into_owned(),
+        )
     }
 }
 

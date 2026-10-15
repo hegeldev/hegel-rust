@@ -28,7 +28,7 @@ int main(void) {
     hegel_settings_t *s;
     HEGEL_CHECK(hegel_settings_new, ctx, &s);
     HEGEL_CHECK(hegel_settings_set_test_cases, ctx, s, 200);
-    HEGEL_CHECK(hegel_settings_set_database, ctx, s, "");
+    HEGEL_CHECK(hegel_settings_set_database, ctx, s, STRING_LITERAL(""));
     HEGEL_CHECK(hegel_settings_set_derandomize, ctx, s, true);
     HEGEL_CHECK(hegel_settings_set_seed, ctx, s, 0xc0ffee, true);
 
@@ -43,22 +43,22 @@ int main(void) {
         int64_t n;
         hegel_result_t rc = hegel_generate_integer(ctx, tc, 0, 100, &n);
         if (rc == HEGEL_E_STOP_TEST) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_OVERRUN, string_view(NULL, 0));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
         if (rc != HEGEL_OK) {
-            const char *err = hegel_context_last_error(ctx);
-            fprintf(stderr, "hegel_generate_integer: rc=%d %s\n", rc, err);
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            hegel_string_t err = hegel_context_last_error(ctx);
+            fprintf(stderr, "hegel_generate_integer: rc=%d %.*s\n", rc, (int)err.len, err.data);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, string_view(NULL, 0));
             HEGEL_CHECK(hegel_test_case_free, ctx, tc);
             continue;
         }
 
         if (n < 5) {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, NULL);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_VALID, string_view(NULL, 0));
         } else {
-            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, ORIGIN);
+            HEGEL_CHECK(hegel_mark_complete, ctx, tc, HEGEL_STATUS_INTERESTING, STRING_LITERAL(ORIGIN));
         }
         /* The caller owns every handle from hegel_next_test_case and must free it. */
         HEGEL_CHECK(hegel_test_case_free, ctx, tc);
@@ -82,21 +82,21 @@ int main(void) {
 
     hegel_failure_t *f;
     HEGEL_CHECK(hegel_run_result_failure, ctx, result, 0, &f);
-    const char *origin;
+    hegel_string_t origin;
     HEGEL_CHECK(hegel_failure_origin, ctx, f, &origin);
-    if (strstr(origin, ORIGIN) == NULL) {
-        fprintf(stderr, "FAIL: expected origin to contain %s, got: %s\n", ORIGIN, origin);
+    if (origin.len != sizeof(ORIGIN) - 1 || memcmp(origin.data, ORIGIN, origin.len) != 0) {
+        fprintf(stderr, "FAIL: expected origin to contain %s, got: %.*s\n", ORIGIN, (int)origin.len, origin.data);
         return 1;
     }
 
-    const char *caveat;
+    hegel_string_t caveat;
     HEGEL_CHECK(hegel_failure_caveat, ctx, f, &caveat);
-    if (caveat != NULL) {
-        fprintf(stderr, "FAIL: expected no caveat for a deterministic failure, got: %s\n", caveat);
+    if (caveat.data != NULL) {
+        fprintf(stderr, "FAIL: expected no caveat for a deterministic failure, got: %.*s\n", (int)caveat.len, caveat.data);
         return 1;
     }
 
-    printf("got expected failure: origin=%s\n", origin);
+    printf("got expected failure: origin=%.*s\n", (int)origin.len, origin.data);
 
     /* Result and failure are caller-owned snapshots, freed independently. */
     HEGEL_CHECK(hegel_failure_free, ctx, f);
