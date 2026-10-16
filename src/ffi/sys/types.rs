@@ -195,11 +195,7 @@ pub(crate) struct hegel_generate_bytes_result_t {
     pub len: usize,
 }
 
-#[repr(C)]
-pub(crate) struct hegel_generate_string_result_t {
-    pub data: *mut c_char,
-    pub len: usize,
-}
+pub(crate) type hegel_owned_string_t = hegel_string_t;
 
 #[repr(C)]
 pub(crate) struct hegel_printer_value_result_t {

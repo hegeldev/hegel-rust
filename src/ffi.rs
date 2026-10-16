@@ -140,11 +140,11 @@ fn string_from_engine_bytes(bytes: Vec<u8>) -> String {
 }
 
 /// Copy the string a `hegel_generate_*` call that fills a
-/// `hegel_generate_string_result_t` produced, freeing the engine's buffer, or
+/// `hegel_owned_string_t` produced, freeing the engine's buffer, or
 /// pass the call's failure code through.
 fn take_string_result(
     rc: hegel_result_t,
-    mut result: hegel_c::hegel_generate_string_result_t,
+    mut result: hegel_c::hegel_owned_string_t,
 ) -> Result<String, hegel_result_t> {
     if rc != hegel_result_t::HEGEL_OK {
         return Err(rc);
@@ -155,7 +155,7 @@ fn take_string_result(
     let bytes =
         unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec();
     require_ok(with_context(|ctx| unsafe {
-        hegel_c::hegel_generate_string_result_free(ctx, &mut result)
+        hegel_c::hegel_owned_string_free(ctx, &mut result)
     }));
     Ok(string_from_engine_bytes(bytes))
 }
@@ -787,8 +787,8 @@ impl CTestCase {
         &self,
         generator: &StringGenerator,
     ) -> Result<String, hegel_result_t> {
-        let mut result = hegel_c::hegel_generate_string_result_t {
-            data: ptr::null_mut(),
+        let mut result = hegel_c::hegel_owned_string_t {
+            data: ptr::null(),
             len: 0,
         };
         let rc = with_context(|ctx| unsafe {
@@ -805,8 +805,8 @@ impl CTestCase {
         grammar: &Grammar,
         max_size: u64,
     ) -> Result<String, hegel_result_t> {
-        let mut result = hegel_c::hegel_generate_string_result_t {
-            data: ptr::null_mut(),
+        let mut result = hegel_c::hegel_owned_string_t {
+            data: ptr::null(),
             len: 0,
         };
         let rc = with_context(|ctx| unsafe {

@@ -214,7 +214,7 @@ mod drift {
         hegel_time_t { hour, minute, second, nanosecond }
         hegel_datetime_t { date, time }
         hegel_generate_bytes_result_t { data, len }
-        hegel_generate_string_result_t { data, len }
+        hegel_owned_string_t { data, len }
         hegel_printer_value_result_t { data, len }
     }
 

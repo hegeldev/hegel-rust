@@ -531,7 +531,8 @@ pub enum hegel_health_check_t {
 pub type hegel_output_callback_t =
     Option<unsafe extern "C" fn(user_data: *mut c_void, line: *const c_char, len: usize)>;
 
-/// A borrowed UTF-8 string. `len` counts bytes. Inputs need no NUL
+/// A UTF-8 string view. Ownership is documented by each function.
+/// `len` counts bytes. Inputs need no NUL
 /// terminator; zero length accepts any pointer, including NULL. Output
 /// strings have non-NULL data and a trailing NUL, including empty strings.
 /// `len` excludes the terminator. Interior NUL bytes are preserved; use
@@ -539,7 +540,7 @@ pub type hegel_output_callback_t =
 /// Optional strings use a nullable pointer to this type: NULL means absent,
 /// and a pointer to an empty string means present and empty. The caller
 /// keeps input bytes alive for the call. Output bytes borrow their
-/// documented owner.
+/// documented owner, unless the function explicitly transfers ownership.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct hegel_string_t {
@@ -4900,29 +4901,26 @@ pub unsafe extern "C" fn hegel_string_generator_free(
     HEGEL_OK
 }
 
-/// An engine-allocated string buffer returned by `hegel_generate_string`.
+/// An owned UTF-8 string allocated by libhegel. Only strings explicitly
+/// returned with ownership may be released with `hegel_owned_string_free`.
 ///
 /// `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
 /// Interior NUL bytes are preserved (the drawn alphabet can include
 /// U+0000), so use `len` to read the complete string. The caller owns the
 /// buffer and must release it with
-/// `hegel_generate_string_result_free` (freeing through any other allocator
+/// `hegel_owned_string_free` (freeing through any other allocator
 /// is undefined behaviour). `data` is never NULL after a successful draw,
 /// even for `len == 0`.
-#[repr(C)]
 #[allow(non_camel_case_types)]
-pub struct hegel_generate_string_result_t {
-    pub data: *mut c_char,
-    pub len: usize,
-}
+pub type hegel_owned_string_t = hegel_string_t;
 
 /// Parameters:
 /// `generator`: A generator built by one of the constructors above.
 /// `out_result`: Receives a libhegel-allocated
-///   `{char *data; size_t len;}` the caller owns. A NUL terminator follows
+///   `hegel_owned_string_t` the caller owns. A NUL terminator follows
 ///   the `len` bytes. The drawn alphabet can include U+0000, so use `len`
 ///   to read the complete string. Release with
-///   `hegel_generate_string_result_free`.
+///   `hegel_owned_string_free`.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` when the
 /// draw rejected itself (for example an email exceeding the RFC length
@@ -4932,7 +4930,7 @@ pub unsafe extern "C" fn hegel_generate_string(
     ctx: *mut HegelContext,
     tc: *mut HegelTestCase,
     generator: *const HegelStringGenerator,
-    out_result: *mut hegel_generate_string_result_t,
+    out_result: *mut hegel_owned_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_generate_string", tc) } {
@@ -4954,28 +4952,29 @@ pub unsafe extern "C" fn hegel_generate_string(
 }
 
 /// Hand `s` to the caller through `out_result` as a libhegel-allocated
-/// buffer, to be released with `hegel_generate_string_result_free`.
+/// buffer, to be released with `hegel_owned_string_free`.
 unsafe fn write_string_result(
-    out_result: *mut hegel_generate_string_result_t,
+    out_result: *mut hegel_owned_string_t,
     mut s: String,
 ) -> hegel_result_t {
     let len = s.len();
     s.push('\0');
     let boxed = s.into_bytes().into_boxed_slice();
     let data = Box::into_raw(boxed).cast::<c_char>();
-    unsafe { *out_result = hegel_generate_string_result_t { data, len } };
+    unsafe { *out_result = hegel_owned_string_t { data, len } };
     HEGEL_OK
 }
 
 /// Parameters:
-/// `result`: Released and reset to `{NULL, 0}`. Safe to call with NULL or
-///   an already-freed (zeroed) struct.
+/// `result`: An owned string returned by libhegel, released and reset to
+///   `{NULL, 0}`. Safe to call with NULL or an already-freed (zeroed) struct.
+///   Borrowed strings must not be passed to this function.
 ///
 /// Returns `HEGEL_OK`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hegel_generate_string_result_free(
+pub unsafe extern "C" fn hegel_owned_string_free(
     ctx: *mut HegelContext,
-    result: *mut hegel_generate_string_result_t,
+    result: *mut hegel_owned_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let Some(result) = (unsafe { result.as_mut() }) else {
@@ -4985,9 +4984,9 @@ pub unsafe extern "C" fn hegel_generate_string_result_free(
         // SAFETY: write_string_result allocates len + 1 bytes, including the
         // terminator. The caller returns that allocation exactly once;
         // resetting the struct makes a second call a no-op.
-        unsafe { free_engine_buffer(result.data.cast::<u8>(), result.len + 1) };
+        unsafe { free_engine_buffer(result.data.cast_mut().cast::<u8>(), result.len + 1) };
     }
-    result.data = ptr::null_mut();
+    result.data = ptr::null();
     result.len = 0;
     HEGEL_OK
 }
@@ -5286,7 +5285,7 @@ pub unsafe extern "C" fn hegel_grammar_placeholder(
 ///   the cap it has in mind.
 /// `out_result`: Receives a libhegel-allocated UTF-8 buffer with a trailing
 ///   NUL outside its reported length. Release with
-///   `hegel_generate_string_result_free`.
+///   `hegel_owned_string_free`.
 ///
 /// Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME`, which
 /// rejects the test case, when the draw could not produce a string that
@@ -5303,7 +5302,7 @@ pub unsafe extern "C" fn hegel_generate_grammar(
     tc: *mut HegelTestCase,
     grammar: *const HegelGrammar,
     max_size: u64,
-    out_result: *mut hegel_generate_string_result_t,
+    out_result: *mut hegel_owned_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let (tc, _guard) = match unsafe { tc_guard(ctx, "hegel_generate_grammar", tc) } {

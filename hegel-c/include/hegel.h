@@ -84,8 +84,8 @@
  *     hegel_new_pool             ->  hegel_pool_free
  *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
- *     hegel_generate_string      ->  hegel_generate_string_result_free
- *     hegel_generate_grammar     ->  hegel_generate_string_result_free
+ *     hegel_generate_string      ->  hegel_owned_string_free
+ *     hegel_generate_grammar     ->  hegel_owned_string_free
  *     hegel_printer_options_new  ->  hegel_printer_options_free
  *     hegel_reflow_options_new   ->  hegel_reflow_options_free
  *     hegel_printer_new          ->  hegel_printer_free
@@ -681,7 +681,8 @@ typedef struct hegel_string_generator_t hegel_string_generator_t;
 typedef struct hegel_test_case_t hegel_test_case_t;
 
 /*
- A borrowed UTF-8 string. `len` counts bytes. Inputs need no NUL
+ A UTF-8 string view. Ownership is documented by each function.
+ `len` counts bytes. Inputs need no NUL
  terminator; zero length accepts any pointer, including NULL. Output
  strings have non-NULL data and a trailing NUL, including empty strings.
  `len` excludes the terminator. Interior NUL bytes are preserved; use
@@ -689,7 +690,7 @@ typedef struct hegel_test_case_t hegel_test_case_t;
  Optional strings use a nullable pointer to this type: NULL means absent,
  and a pointer to an empty string means present and empty. The caller
  keeps input bytes alive for the call. Output bytes borrow their
- documented owner.
+ documented owner, unless the function explicitly transfers ownership.
  */
 typedef struct {
     const char *data;
@@ -720,20 +721,18 @@ typedef struct {
 } hegel_generate_bytes_result_t;
 
 /*
- An engine-allocated string buffer returned by `hegel_generate_string`.
+ An owned UTF-8 string allocated by libhegel. Only strings explicitly
+ returned with ownership may be released with `hegel_owned_string_free`.
 
  `data` points to `len` bytes of UTF-8 followed by a NUL terminator.
  Interior NUL bytes are preserved (the drawn alphabet can include
  U+0000), so use `len` to read the complete string. The caller owns the
  buffer and must release it with
- `hegel_generate_string_result_free` (freeing through any other allocator
+ `hegel_owned_string_free` (freeing through any other allocator
  is undefined behaviour). `data` is never NULL after a successful draw,
  even for `len == 0`.
  */
-typedef struct {
-    char *data;
-    size_t len;
-} hegel_generate_string_result_t;
+typedef hegel_string_t hegel_owned_string_t;
 
 /*
  Import callback for `hegel_grammar_new`, asked for every `%import` that
@@ -2324,10 +2323,10 @@ hegel_result_t hegel_string_generator_free(hegel_context_t *ctx,
  Parameters:
  `generator`: A generator built by one of the constructors above.
  `out_result`: Receives a libhegel-allocated
-   `{char *data; size_t len;}` the caller owns. A NUL terminator follows
+   `hegel_owned_string_t` the caller owns. A NUL terminator follows
    the `len` bytes. The drawn alphabet can include U+0000, so use `len`
    to read the complete string. Release with
-   `hegel_generate_string_result_free`.
+   `hegel_owned_string_free`.
 
  Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME` when the
  draw rejected itself (for example an email exceeding the RFC length
@@ -2336,17 +2335,17 @@ hegel_result_t hegel_string_generator_free(hegel_context_t *ctx,
 hegel_result_t hegel_generate_string(hegel_context_t *ctx,
                                      hegel_test_case_t *tc,
                                      const hegel_string_generator_t *generator,
-                                     hegel_generate_string_result_t *out_result);
+                                     hegel_owned_string_t *out_result);
 
 /*
  Parameters:
- `result`: Released and reset to `{NULL, 0}`. Safe to call with NULL or
-   an already-freed (zeroed) struct.
+ `result`: An owned string returned by libhegel, released and reset to
+   `{NULL, 0}`. Safe to call with NULL or an already-freed (zeroed) struct.
+   Borrowed strings must not be passed to this function.
 
  Returns `HEGEL_OK`.
  */
-hegel_result_t hegel_generate_string_result_free(hegel_context_t *ctx,
-                                                 hegel_generate_string_result_t *result);
+hegel_result_t hegel_owned_string_free(hegel_context_t *ctx, hegel_owned_string_t *result);
 
 /*
  Compile a grammar written in Lark's syntax (see
@@ -2448,7 +2447,7 @@ hegel_result_t hegel_grammar_placeholder(hegel_context_t *ctx,
    the cap it has in mind.
  `out_result`: Receives a libhegel-allocated UTF-8 buffer with a trailing
    NUL outside its reported length. Release with
-   `hegel_generate_string_result_free`.
+   `hegel_owned_string_free`.
 
  Returns `HEGEL_OK`, `HEGEL_E_STOP_TEST`, or `HEGEL_E_ASSUME`, which
  rejects the test case, when the draw could not produce a string that
@@ -2464,7 +2463,7 @@ hegel_result_t hegel_generate_grammar(hegel_context_t *ctx,
                                       hegel_test_case_t *tc,
                                       const hegel_grammar_t *grammar,
                                       uint64_t max_size,
-                                      hegel_generate_string_result_t *out_result);
+                                      hegel_owned_string_t *out_result);
 
 /*
  Parameters:

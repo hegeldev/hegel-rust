@@ -86,8 +86,8 @@ header = """
  *     hegel_new_pool             ->  hegel_pool_free
  *     hegel_new_state_machine    ->  hegel_state_machine_free
  *     hegel_generate_bytes       ->  hegel_generate_bytes_result_free
- *     hegel_generate_string      ->  hegel_generate_string_result_free
- *     hegel_generate_grammar     ->  hegel_generate_string_result_free
+ *     hegel_generate_string      ->  hegel_owned_string_free
+ *     hegel_generate_grammar     ->  hegel_owned_string_free
  *     hegel_printer_options_new  ->  hegel_printer_options_free
  *     hegel_reflow_options_new   ->  hegel_reflow_options_free
  *     hegel_printer_new          ->  hegel_printer_free

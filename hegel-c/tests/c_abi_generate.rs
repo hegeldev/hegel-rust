@@ -15,12 +15,11 @@ use hegel_c::{
     hegel_generate_bytes_result_free, hegel_generate_bytes_result_t, hegel_generate_date,
     hegel_generate_datetime, hegel_generate_float, hegel_generate_grammar, hegel_generate_integer,
     hegel_generate_integer_big, hegel_generate_ipv4, hegel_generate_ipv6, hegel_generate_string,
-    hegel_generate_string_result_free, hegel_generate_string_result_t, hegel_generate_time,
-    hegel_generate_uuid, hegel_grammar_free, hegel_grammar_new, hegel_grammar_placeholder,
-    hegel_mark_complete, hegel_run_free, hegel_settings_free, hegel_settings_set_test_cases,
-    hegel_status_t, hegel_string_generator_domain, hegel_string_generator_email,
-    hegel_string_generator_free, hegel_string_generator_regex, hegel_string_generator_text,
-    hegel_string_generator_url,
+    hegel_generate_time, hegel_generate_uuid, hegel_grammar_free, hegel_grammar_new,
+    hegel_grammar_placeholder, hegel_mark_complete, hegel_owned_string_free, hegel_owned_string_t,
+    hegel_run_free, hegel_settings_free, hegel_settings_set_test_cases, hegel_status_t,
+    hegel_string_generator_domain, hegel_string_generator_email, hegel_string_generator_free,
+    hegel_string_generator_regex, hegel_string_generator_text, hegel_string_generator_url,
 };
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
@@ -792,8 +791,8 @@ unsafe fn draw_string(
     tc: *mut HegelTestCase,
     g: *const HegelStringGenerator,
 ) -> String {
-    let mut result = hegel_generate_string_result_t {
-        data: ptr::null_mut(),
+    let mut result = hegel_owned_string_t {
+        data: ptr::null(),
         len: 0,
     };
     assert_eq!(
@@ -806,7 +805,7 @@ unsafe fn draw_string(
         unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec(),
     )
     .unwrap();
-    unsafe { ok(hegel_generate_string_result_free(ctx, &mut result)) };
+    unsafe { ok(hegel_owned_string_free(ctx, &mut result)) };
     assert!(result.data.is_null());
     s
 }
@@ -1382,8 +1381,8 @@ fn regex_email_url_domain_generators_draw_valid_values() {
             let domain = draw_string(ctx, tc, domain_g);
             assert!(domain.contains('.'));
 
-            let mut result = hegel_generate_string_result_t {
-                data: ptr::null_mut(),
+            let mut result = hegel_owned_string_t {
+                data: ptr::null(),
                 len: 0,
             };
             match hegel_generate_string(ctx, tc, email_g, &mut result) {
@@ -1393,7 +1392,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
                     )
                     .unwrap();
                     assert!(email.contains('@'), "no @ in {email:?}");
-                    ok(hegel_generate_string_result_free(ctx, &mut result));
+                    ok(hegel_owned_string_free(ctx, &mut result));
                     ok(hegel_mark_complete(
                         ctx,
                         tc,
@@ -1473,8 +1472,8 @@ fn generate_string_validates_handles_and_reports_stop_test() {
     let ctx = hegel_context_new();
     unsafe {
         let g = text_generator(ctx, 0, 10);
-        let mut result = hegel_generate_string_result_t {
-            data: ptr::null_mut(),
+        let mut result = hegel_owned_string_t {
+            data: ptr::null(),
             len: 0,
         };
         assert_eq!(
@@ -1521,8 +1520,8 @@ fn generate_string_validates_handles_and_reports_stop_test() {
         ok(hegel_settings_free(ctx, s));
         ok(hegel_string_generator_free(ctx, g));
 
-        ok(hegel_generate_string_result_free(ctx, ptr::null_mut()));
-        ok(hegel_generate_string_result_free(ctx, &mut result));
+        ok(hegel_owned_string_free(ctx, ptr::null_mut()));
+        ok(hegel_owned_string_free(ctx, &mut result));
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }
@@ -2047,8 +2046,8 @@ unsafe fn draw_grammar_capped(
     g: *const HegelGrammar,
     max_size: u64,
 ) -> String {
-    let mut result = hegel_generate_string_result_t {
-        data: ptr::null_mut(),
+    let mut result = hegel_owned_string_t {
+        data: ptr::null(),
         len: 0,
     };
     assert_eq!(
@@ -2059,7 +2058,7 @@ unsafe fn draw_grammar_capped(
         unsafe { std::slice::from_raw_parts(result.data.cast::<u8>(), result.len) }.to_vec(),
     )
     .unwrap();
-    unsafe { ok(hegel_generate_string_result_free(ctx, &mut result)) };
+    unsafe { ok(hegel_owned_string_free(ctx, &mut result)) };
     s
 }
 
@@ -2533,8 +2532,8 @@ fn generate_grammar_validates_handles_and_reports_stop_test() {
     let ctx = hegel_context_new();
     unsafe {
         let g = grammar(ctx, "start: \"a\" | \"b\"\n", None, &[]).unwrap();
-        let mut result = hegel_generate_string_result_t {
-            data: ptr::null_mut(),
+        let mut result = hegel_owned_string_t {
+            data: ptr::null(),
             len: 0,
         };
         assert_eq!(
