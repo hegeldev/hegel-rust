@@ -9,14 +9,13 @@ hegel_grammar_new(ctx, text, start, max_size, max_depth, alphabet,
 
 /* after */
 hegel_grammar_builder_t *b;
-hegel_grammar_builder_new(ctx, text, text_len, &b);
+hegel_grammar_builder_new(ctx, text, &b);
 for (size_t i = 0;; i++) {
-    const char *path;
-    size_t path_len;
-    if (hegel_grammar_builder_file(ctx, b, i, &path, &path_len) == HEGEL_E_NOT_FOUND)
+    hegel_string_t path;
+    if (hegel_grammar_builder_file(ctx, b, i, &path) == HEGEL_E_NOT_FOUND)
         break;
-    /* read `path`; pass NULL, 0 if there is no such file */
-    hegel_grammar_builder_provide(ctx, b, i, file_text, file_text_len);
+    /* read `path`; pass NULL if there is no such file */
+    hegel_grammar_builder_provide(ctx, b, i, &file_text);
 }
 hegel_grammar_new(ctx, b, start, max_size, max_depth, alphabet,
                   explicit_names, explicit_len, &grammar);

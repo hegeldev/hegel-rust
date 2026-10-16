@@ -493,12 +493,11 @@ typedef struct hegel_grammar_t hegel_grammar_t;
 
  ```c
  for (size_t i = 0;; i++) {
-     const char *path;
-     size_t path_len;
-     if (hegel_grammar_builder_file(ctx, b, i, &path, &path_len) == HEGEL_E_NOT_FOUND)
+     hegel_string_t path;
+     if (hegel_grammar_builder_file(ctx, b, i, &path) == HEGEL_E_NOT_FOUND)
          break;
      // read `path`, then:
-     hegel_grammar_builder_provide(ctx, b, i, text, text_len);  // or NULL, 0
+     hegel_grammar_builder_provide(ctx, b, i, &text);  // or NULL
  }
  ```
 
@@ -2378,15 +2377,14 @@ hegel_result_t hegel_owned_string_free(hegel_context_t *ctx, hegel_owned_string_
  files its `%import`s need. See `hegel_grammar_builder_t`.
 
  Parameters:
- `text`, `text_len`: The grammar, `text_len` bytes of UTF-8.
+ `text`: The grammar, as a UTF-8 string.
  `out_builder`: Receives the builder handle.
 
  Returns `HEGEL_OK`; `HEGEL_E_INVALID_ARG` for text that is not UTF-8,
  that does not parse, or whose imports nest too deeply.
  */
 hegel_result_t hegel_grammar_builder_new(hegel_context_t *ctx,
-                                         const char *text,
-                                         size_t text_len,
+                                         hegel_string_t text,
                                          hegel_grammar_builder_t **out_builder);
 
 /*
@@ -2395,10 +2393,9 @@ hegel_result_t hegel_grammar_builder_new(hegel_context_t *ctx,
  Parameters:
  `builder`: The builder.
  `index`: Which file.
- `out_path`, `out_path_len`: Receive the file's path (see
-   `hegel_grammar_builder_t`): `out_path_len` bytes of ASCII, followed
-   by a NUL. The builder owns it, and it stays valid until the builder
-   is freed.
+ `out_path`: Receives the file's path (see `hegel_grammar_builder_t`)
+   as a borrowed string. The builder owns it, and it stays valid until
+   the builder is freed.
 
  Returns `HEGEL_OK`; `HEGEL_E_NOT_FOUND` when `index` is past the end of
  the list, which grows as files are provided; `HEGEL_E_INVALID_HANDLE`
@@ -2407,8 +2404,7 @@ hegel_result_t hegel_grammar_builder_new(hegel_context_t *ctx,
 hegel_result_t hegel_grammar_builder_file(hegel_context_t *ctx,
                                           const hegel_grammar_builder_t *builder,
                                           size_t index,
-                                          const char **out_path,
-                                          size_t *out_path_len);
+                                          hegel_string_t *out_path);
 
 /*
  Supply the `index`th file the grammar needs. The text is copied and
@@ -2418,11 +2414,10 @@ hegel_result_t hegel_grammar_builder_file(hegel_context_t *ctx,
  Parameters:
  `builder`: The builder.
  `index`: Which file, as numbered by `hegel_grammar_builder_file`.
- `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
-   NULL (with `text_len` 0) when there is no such file, in which case
+ `text`: The file's contents as a UTF-8 string; or NULL when there is
+   no such file, in which case
    the grammar bundled with libhegel at that path stands in, unless a
-   relative import names it. Unlike other strings, a NULL `text` here
-   is not the empty string: pass any non-NULL pointer with `text_len` 0
+   relative import names it. Pass a pointer to an empty `hegel_string_t`
    for a file that exists but is empty.
 
  Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
@@ -2436,8 +2431,7 @@ hegel_result_t hegel_grammar_builder_file(hegel_context_t *ctx,
 hegel_result_t hegel_grammar_builder_provide(hegel_context_t *ctx,
                                              hegel_grammar_builder_t *builder,
                                              size_t index,
-                                             const char *text,
-                                             size_t text_len);
+                                             const hegel_string_t *text);
 
 /*
  Parameters:

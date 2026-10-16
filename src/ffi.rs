@@ -1514,12 +1514,7 @@ impl GrammarBuilder {
     fn new(text: &str, dir: Option<&Path>) -> Result<Self, String> {
         let mut raw: *mut hegel_c::HegelGrammarBuilder = ptr::null_mut();
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_grammar_builder_new(
-                ctx,
-                text.as_ptr().cast::<c_char>(),
-                text.len(),
-                &mut raw,
-            )
+            hegel_c::hegel_grammar_builder_new(ctx, view(text.as_bytes()), &mut raw)
         });
         if rc != hegel_result_t::HEGEL_OK {
             return Err(last_error_string());
@@ -1531,11 +1526,14 @@ impl GrammarBuilder {
                 Some(dir) => read_grammar_file(&dir.join(&path))?,
                 None => None,
             };
-            let (ptr, len) = text
-                .as_ref()
-                .map_or((ptr::null(), 0), |t| (t.as_ptr().cast::<c_char>(), t.len()));
+            let text = text.as_ref().map(|t| view(t.as_bytes()));
             let rc = with_context(|ctx| unsafe {
-                hegel_c::hegel_grammar_builder_provide(ctx, builder.raw, index, ptr, len)
+                hegel_c::hegel_grammar_builder_provide(
+                    ctx,
+                    builder.raw,
+                    index,
+                    text.as_ref().map_or(ptr::null(), std::ptr::from_ref),
+                )
             });
             if rc != hegel_result_t::HEGEL_OK {
                 return Err(last_error_string());
@@ -1548,19 +1546,15 @@ impl GrammarBuilder {
     /// The path of the `index`th file the grammar needs, or `None` past
     /// the end of the list.
     fn file(&self, index: usize) -> Option<String> {
-        let mut path: *const c_char = ptr::null();
-        let mut path_len = 0;
+        let mut path = hegel_c::hegel_string_t::default();
         let rc = with_context(|ctx| unsafe {
-            hegel_c::hegel_grammar_builder_file(ctx, self.raw, index, &mut path, &mut path_len)
+            hegel_c::hegel_grammar_builder_file(ctx, self.raw, index, &mut path)
         });
         if rc == hegel_result_t::HEGEL_E_NOT_FOUND {
             return None;
         }
         require_ok(rc);
-        // SAFETY: on success the engine set `path` to `path_len` bytes the
-        // builder owns, alive for as long as `self` is.
-        let bytes = unsafe { std::slice::from_raw_parts(path.cast::<u8>(), path_len) };
-        Some(string_from_engine_bytes(bytes.to_vec()))
+        Some(string_opt(path).unwrap_or_default())
     }
 }
 

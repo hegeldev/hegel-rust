@@ -4671,30 +4671,6 @@ unsafe fn required_utf8_arg(
     }
 }
 
-unsafe fn optional_utf8_buffer_arg(
-    ctx: *mut HegelContext,
-    fn_name: &str,
-    arg_name: &str,
-    p: *const u8,
-    len: usize,
-) -> Result<Option<String>, hegel_result_t> {
-    if p.is_null() {
-        if len > 0 {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name} is null"));
-            return Err(HEGEL_E_INVALID_ARG);
-        }
-        return Ok(None);
-    }
-    let bytes = unsafe { core::slice::from_raw_parts(p, len) };
-    match core::str::from_utf8(bytes) {
-        Ok(s) => Ok(Some(s.to_string())),
-        Err(_) => {
-            set_last_error(ctx, &format!("{fn_name}: {arg_name} is not valid UTF-8"));
-            Err(HEGEL_E_INVALID_ARG)
-        }
-    }
-}
-
 unsafe fn optional_utf8_array_arg(
     ctx: *mut HegelContext,
     fn_name: &str,
@@ -5028,12 +5004,11 @@ pub unsafe extern "C" fn hegel_owned_string_free(
 ///
 /// ```c
 /// for (size_t i = 0;; i++) {
-///     const char *path;
-///     size_t path_len;
-///     if (hegel_grammar_builder_file(ctx, b, i, &path, &path_len) == HEGEL_E_NOT_FOUND)
+///     hegel_string_t path;
+///     if (hegel_grammar_builder_file(ctx, b, i, &path) == HEGEL_E_NOT_FOUND)
 ///         break;
 ///     // read `path`, then:
-///     hegel_grammar_builder_provide(ctx, b, i, text, text_len);  // or NULL, 0
+///     hegel_grammar_builder_provide(ctx, b, i, &text);  // or NULL
 /// }
 /// ```
 ///
@@ -5065,15 +5040,15 @@ pub unsafe extern "C" fn hegel_owned_string_free(
 /// serves one tree of files.
 pub struct HegelGrammarBuilder {
     files: crate::native::lark::builder::GrammarFiles,
-    /// The path of each file, NUL-terminated for
+    /// The path of each file, borrowed by
     /// `hegel_grammar_builder_file`.
-    paths: Vec<CString>,
+    paths: Vec<StoredString>,
 }
 
 impl HegelGrammarBuilder {
     fn sync_paths(&mut self) {
         while let Some(path) = self.files.path(self.paths.len()) {
-            self.paths.push(cstring_lossy(path));
+            self.paths.push(path.to_string().into());
         }
     }
 }
@@ -5083,7 +5058,7 @@ impl HegelGrammarBuilder {
 /// files its `%import`s need. See `hegel_grammar_builder_t`.
 ///
 /// Parameters:
-/// `text`, `text_len`: The grammar, `text_len` bytes of UTF-8.
+/// `text`: The grammar, as a UTF-8 string.
 /// `out_builder`: Receives the builder handle.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_ARG` for text that is not UTF-8,
@@ -5091,8 +5066,7 @@ impl HegelGrammarBuilder {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hegel_grammar_builder_new(
     ctx: *mut HegelContext,
-    text: *const c_char,
-    text_len: usize,
+    text: hegel_string_t,
     out_builder: *mut *mut HegelGrammarBuilder,
 ) -> hegel_result_t {
     const FN: &str = "hegel_grammar_builder_new";
@@ -5102,11 +5076,10 @@ pub unsafe extern "C" fn hegel_grammar_builder_new(
         return HEGEL_E_INVALID_ARG;
     }
     unsafe { *out_builder = ptr::null_mut() };
-    let text =
-        match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text.cast::<u8>(), text_len) } {
-            Ok(text) => text.unwrap_or_default(),
-            Err(rc) => return rc,
-        };
+    let text = match unsafe { required_utf8_arg(ctx, FN, "text", text) } {
+        Ok(text) => text,
+        Err(rc) => return rc,
+    };
     match crate::native::lark::builder::GrammarFiles::new(text) {
         Ok(files) => {
             let mut builder = HegelGrammarBuilder {
@@ -5129,10 +5102,9 @@ pub unsafe extern "C" fn hegel_grammar_builder_new(
 /// Parameters:
 /// `builder`: The builder.
 /// `index`: Which file.
-/// `out_path`, `out_path_len`: Receive the file's path (see
-///   `hegel_grammar_builder_t`): `out_path_len` bytes of ASCII, followed
-///   by a NUL. The builder owns it, and it stays valid until the builder
-///   is freed.
+/// `out_path`: Receives the file's path (see `hegel_grammar_builder_t`)
+///   as a borrowed string. The builder owns it, and it stays valid until
+///   the builder is freed.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_NOT_FOUND` when `index` is past the end of
 /// the list, which grows as files are provided; `HEGEL_E_INVALID_HANDLE`
@@ -5142,15 +5114,14 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
     ctx: *mut HegelContext,
     builder: *const HegelGrammarBuilder,
     index: usize,
-    out_path: *mut *const c_char,
-    out_path_len: *mut usize,
+    out_path: *mut hegel_string_t,
 ) -> hegel_result_t {
     clear_last_error(ctx);
     let Some(builder) = (unsafe { builder.as_ref() }) else {
         set_last_error(ctx, "hegel_grammar_builder_file: builder handle is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    if out_path.is_null() || out_path_len.is_null() {
+    if out_path.is_null() {
         set_last_error(ctx, "hegel_grammar_builder_file: out parameter is null");
         return HEGEL_E_INVALID_ARG;
     }
@@ -5158,8 +5129,7 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
         return HEGEL_E_NOT_FOUND;
     };
     unsafe {
-        *out_path = path.as_ptr();
-        *out_path_len = path.as_bytes().len();
+        *out_path = path.string;
     }
     HEGEL_OK
 }
@@ -5171,11 +5141,10 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
 /// Parameters:
 /// `builder`: The builder.
 /// `index`: Which file, as numbered by `hegel_grammar_builder_file`.
-/// `text`, `text_len`: The file's contents, `text_len` bytes of UTF-8; or
-///   NULL (with `text_len` 0) when there is no such file, in which case
+/// `text`: The file's contents as a UTF-8 string; or NULL when there is
+///   no such file, in which case
 ///   the grammar bundled with libhegel at that path stands in, unless a
-///   relative import names it. Unlike other strings, a NULL `text` here
-///   is not the empty string: pass any non-NULL pointer with `text_len` 0
+///   relative import names it. Pass a pointer to an empty `hegel_string_t`
 ///   for a file that exists but is empty.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
@@ -5190,8 +5159,7 @@ pub unsafe extern "C" fn hegel_grammar_builder_provide(
     ctx: *mut HegelContext,
     builder: *mut HegelGrammarBuilder,
     index: usize,
-    text: *const c_char,
-    text_len: usize,
+    text: *const hegel_string_t,
 ) -> hegel_result_t {
     const FN: &str = "hegel_grammar_builder_provide";
     clear_last_error(ctx);
@@ -5199,11 +5167,10 @@ pub unsafe extern "C" fn hegel_grammar_builder_provide(
         set_last_error(ctx, "hegel_grammar_builder_provide: builder handle is null");
         return HEGEL_E_INVALID_HANDLE;
     };
-    let text =
-        match unsafe { optional_utf8_buffer_arg(ctx, FN, "text", text.cast::<u8>(), text_len) } {
-            Ok(text) => text,
-            Err(rc) => return rc,
-        };
+    let text = match unsafe { optional_utf8_arg(ctx, FN, "text", text) } {
+        Ok(text) => text,
+        Err(rc) => return rc,
+    };
     match builder.files.provide(index, text) {
         Ok(()) => {
             builder.sync_paths();

@@ -19,7 +19,7 @@
 //! incompatible library fails immediately rather than mid-run. The library
 //! is never unloaded.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 

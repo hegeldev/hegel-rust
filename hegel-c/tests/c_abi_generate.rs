@@ -28,8 +28,6 @@ use hegel_c::{
     hegel_string_generator_email, hegel_string_generator_free, hegel_string_generator_regex,
     hegel_string_generator_text, hegel_string_generator_url,
 };
-use std::ffi::CStr;
-use std::os::raw::c_char;
 use std::ptr;
 
 const FULL_MIN_DATE: hegel_c::hegel_date_t = hegel_c::hegel_date_t {
@@ -1841,27 +1839,23 @@ unsafe fn grammar_builder(
     files: &[(&str, &str)],
 ) -> Result<*mut HegelGrammarBuilder, String> {
     let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
-    let rc = unsafe { hegel_grammar_builder_new(ctx, text.as_ptr().cast(), text.len(), &mut b) };
+    let rc = unsafe { hegel_grammar_builder_new(ctx, text.into(), &mut b) };
     if rc != HEGEL_OK {
         assert_eq!(rc, HEGEL_E_INVALID_ARG);
         assert!(b.is_null());
         return Err(last_error(ctx));
     }
     for index in 0.. {
-        let mut path: *const c_char = ptr::null();
-        let mut path_len = 0;
-        if unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path, &mut path_len) }
-            == HEGEL_E_NOT_FOUND
-        {
+        let mut path = hegel_string_t::default();
+        if unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path) } == HEGEL_E_NOT_FOUND {
             break;
         }
-        let path = unsafe { CStr::from_ptr(path) }.to_str().unwrap();
-        assert_eq!(path.len(), path_len);
+        let path = std::str::from_utf8(unsafe { test_bytes(path) }).unwrap();
         let rc = match files.iter().find(|(p, _)| *p == path) {
             Some((_, t)) => unsafe {
-                hegel_grammar_builder_provide(ctx, b, index, t.as_ptr().cast(), t.len())
+                hegel_grammar_builder_provide(ctx, b, index, &hegel_string_t::from(*t))
             },
-            None => unsafe { hegel_grammar_builder_provide(ctx, b, index, ptr::null(), 0) },
+            None => unsafe { hegel_grammar_builder_provide(ctx, b, index, ptr::null()) },
         };
         if rc != HEGEL_OK {
             assert_eq!(rc, HEGEL_E_INVALID_ARG);
@@ -2207,14 +2201,9 @@ unsafe fn builder_path(
     b: *const HegelGrammarBuilder,
     index: usize,
 ) -> Option<String> {
-    let mut path: *const c_char = ptr::null();
-    let mut path_len = usize::MAX;
-    match unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path, &mut path_len) } {
-        HEGEL_OK => {
-            let bytes = unsafe { std::slice::from_raw_parts(path.cast::<u8>(), path_len + 1) };
-            assert_eq!(bytes[path_len], 0);
-            Some(String::from_utf8(bytes[..path_len].to_vec()).unwrap())
-        }
+    let mut path = hegel_string_t::default();
+    match unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path) } {
+        HEGEL_OK => Some(String::from_utf8(unsafe { test_bytes(path) }.to_vec()).unwrap()),
         rc => {
             assert_eq!(rc, HEGEL_E_NOT_FOUND);
             None
@@ -2228,8 +2217,15 @@ unsafe fn provide(
     index: usize,
     text: Option<&str>,
 ) -> hegel_c::hegel_result_t {
-    let (p, len) = text.map_or((ptr::null(), 0), |t| (t.as_ptr().cast(), t.len()));
-    unsafe { hegel_grammar_builder_provide(ctx, b, index, p, len) }
+    let text = text.map(hegel_string_t::from);
+    unsafe {
+        hegel_grammar_builder_provide(
+            ctx,
+            b,
+            index,
+            text.as_ref().map_or(ptr::null(), std::ptr::from_ref),
+        )
+    }
 }
 
 #[test]
@@ -2239,12 +2235,7 @@ fn grammar_builder_asks_for_each_imported_file_by_path() {
         let text =
             "%import grammars.lib.rule\n%import grammars.lib.OTHER\nstart: rule\nalt: OTHER\n";
         let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
-        ok(hegel_grammar_builder_new(
-            ctx,
-            text.as_ptr().cast(),
-            text.len(),
-            &mut b,
-        ));
+        ok(hegel_grammar_builder_new(ctx, text.into(), &mut b));
         assert_eq!(
             builder_path(ctx, b, 0).as_deref(),
             Some("grammars/lib.lark")
@@ -2306,24 +2297,69 @@ fn grammar_builder_falls_back_to_the_bundled_grammars() {
 }
 
 #[test]
+fn grammar_builder_preserves_interior_nuls_and_distinguishes_empty_files() {
+    let ctx = hegel_context_new();
+    unsafe {
+        let g = grammar(ctx, "start: \"a\0b\"\n", None, &[]).unwrap();
+        assert_eq!(draw_once(ctx, g), "a\0b");
+        ok(hegel_grammar_free(ctx, g));
+
+        let b = grammar_builder(
+            ctx,
+            "%import lib.X\nstart: X\n",
+            &[("lib.lark", "X: \"a\0b\"\n")],
+        )
+        .unwrap();
+        let g = grammar_from(ctx, b, None, &[]).unwrap();
+        ok(hegel_grammar_builder_free(ctx, b));
+        assert_eq!(draw_once(ctx, g), "a\0b");
+        ok(hegel_grammar_free(ctx, g));
+
+        let mut b = ptr::null_mut();
+        ok(hegel_grammar_builder_new(
+            ctx,
+            "%import common.INT\nstart: INT\n".into(),
+            &mut b,
+        ));
+        ok(hegel_grammar_builder_provide(
+            ctx,
+            b,
+            0,
+            &hegel_string_t::default(),
+        ));
+        let err = grammar_from(ctx, b, None, &[]).unwrap_err();
+        assert!(err.contains("INT"), "{err}");
+        ok(hegel_grammar_builder_free(ctx, b));
+    }
+    unsafe { ok(hegel_context_free(ctx)) };
+}
+
+#[test]
 fn grammar_builder_validates_its_arguments() {
     let ctx = hegel_context_new();
     unsafe {
         let mut b: *mut HegelGrammarBuilder = ptr::null_mut();
         let text = "%import lib.x\nstart: x\n";
         assert_eq!(
-            hegel_grammar_builder_new(ctx, text.as_ptr().cast(), text.len(), ptr::null_mut()),
+            hegel_grammar_builder_new(ctx, text.into(), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
         let invalid = [0xffu8];
         assert_eq!(
-            hegel_grammar_builder_new(ctx, invalid.as_ptr().cast(), 1, &mut b),
+            hegel_grammar_builder_new(ctx, test_string(&invalid), &mut b),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("text is not valid UTF-8"));
         assert_eq!(
-            hegel_grammar_builder_new(ctx, ptr::null(), 1, &mut b),
+            hegel_grammar_builder_new(
+                ctx,
+                hegel_string_t {
+                    data: ptr::null(),
+                    len: 1
+                },
+                &mut b
+            ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("text is null"));
@@ -2331,40 +2367,34 @@ fn grammar_builder_validates_its_arguments() {
         let err = grammar_builder(ctx, "start: (\n", &[]).unwrap_err();
         assert!(err.contains("Unclosed parenthesis"), "{err}");
 
-        ok(hegel_grammar_builder_new(ctx, ptr::null(), 0, &mut b));
+        ok(hegel_grammar_builder_new(
+            ctx,
+            hegel_string_t::default(),
+            &mut b,
+        ));
         assert_eq!(builder_path(ctx, b, 0), None);
         ok(hegel_grammar_builder_free(ctx, b));
 
-        ok(hegel_grammar_builder_new(
-            ctx,
-            text.as_ptr().cast(),
-            text.len(),
-            &mut b,
-        ));
-        let mut path: *const c_char = ptr::null();
-        let mut path_len = 0;
+        ok(hegel_grammar_builder_new(ctx, text.into(), &mut b));
+        let mut path = hegel_string_t::default();
         assert_eq!(
-            hegel_grammar_builder_file(ctx, ptr::null(), 0, &mut path, &mut path_len),
+            hegel_grammar_builder_file(ctx, ptr::null(), 0, &mut path),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("builder handle is null"));
         assert_eq!(
-            hegel_grammar_builder_file(ctx, b, 0, ptr::null_mut(), &mut path_len),
-            HEGEL_E_INVALID_ARG
-        );
-        assert_eq!(
-            hegel_grammar_builder_file(ctx, b, 0, &mut path, ptr::null_mut()),
+            hegel_grammar_builder_file(ctx, b, 0, ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
 
         assert_eq!(
-            hegel_grammar_builder_provide(ctx, ptr::null_mut(), 0, ptr::null(), 0),
+            hegel_grammar_builder_provide(ctx, ptr::null_mut(), 0, ptr::null()),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("builder handle is null"));
         assert_eq!(
-            hegel_grammar_builder_provide(ctx, b, 0, invalid.as_ptr().cast(), 1),
+            hegel_grammar_builder_provide(ctx, b, 0, &test_string(&invalid)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("text is not valid UTF-8"));
