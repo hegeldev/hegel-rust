@@ -1,3 +1,7 @@
+mod string_helpers;
+
+use string_helpers::test_string;
+
 use hegel_c::hegel_string_t;
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::path::PathBuf;
@@ -312,7 +316,7 @@ impl Api<'_> {
             let msg = if p.data.is_null() {
                 String::new()
             } else {
-                unsafe { test_string(p) }.to_string_lossy().into_owned()
+                unsafe { read_string(p) }.to_string_lossy().into_owned()
             };
             panic!("{what} failed: rc={rc} {msg}");
         }
@@ -382,8 +386,9 @@ impl Api<'_> {
         status: CStatus,
         origin: *const c_char,
     ) {
-        let rc =
-            unsafe { (self.mark_complete)(ctx, tc, status, test_optional(&test_view(origin))) };
+        let rc = unsafe {
+            (self.mark_complete)(ctx, tc, status, test_optional(&c_string_from_ptr(origin)))
+        };
         unsafe { self.expect_ok(ctx, rc, "hegel_mark_complete") };
     }
     unsafe fn test_case_free(&self, ctx: *mut u8, tc: *mut u8) {
@@ -464,7 +469,7 @@ impl Api<'_> {
             (self.test_case_from_blob)(
                 ctx,
                 s,
-                test_view(blob),
+                c_string_from_ptr(blob),
                 ptr::null(),
                 ptr::null_mut(),
                 &mut tc,
@@ -485,7 +490,7 @@ fn libhegel_runs_passing_property() {
         assert!(!s.is_null());
         a.settings_test_cases(ctx, s, 25);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 1, true);
 
@@ -496,7 +501,7 @@ fn libhegel_runs_passing_property() {
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -546,7 +551,7 @@ fn libhegel_runs_with_urandom_backend() {
         assert!(!s.is_null());
         a.settings_test_cases(ctx, s, 10);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_backend(ctx, s, CBackend::Urandom);
 
         let run = a.run_start(ctx, s);
@@ -556,7 +561,7 @@ fn libhegel_runs_with_urandom_backend() {
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -593,7 +598,7 @@ fn invalid_arguments_return_error_not_abort() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 1, true);
 
@@ -609,7 +614,7 @@ fn invalid_arguments_return_error_not_abort() {
             rc, HEGEL_E_INVALID_ARG,
             "min > max should return HEGEL_E_INVALID_ARG, got rc={rc}"
         );
-        let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+        let err = read_string(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             !err.is_empty(),
             "expected a diagnostic message for the inverted bounds"
@@ -621,7 +626,7 @@ fn invalid_arguments_return_error_not_abort() {
             ctx,
             0,
             10,
-            test_optional(&test_view(bad_codec.as_ptr())),
+            &test_string(&bad_codec),
             0,
             u32::MAX,
             ptr::null(),
@@ -637,7 +642,7 @@ fn invalid_arguments_return_error_not_abort() {
             "unknown codec should return HEGEL_E_INVALID_ARG, got rc={rc}"
         );
         assert!(g.is_null());
-        let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+        let err = read_string(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             !err.is_empty(),
             "expected a diagnostic message for the unknown codec"
@@ -660,7 +665,7 @@ fn caller_usage_errors_return_error_not_abort() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 1, true);
 
@@ -673,13 +678,13 @@ fn caller_usage_errors_return_error_not_abort() {
         let dup = CString::new("dup").unwrap();
 
         assert_eq!(
-            (a.target)(ctx, tc, f64::NAN, test_view(label.as_ptr())),
+            (a.target)(ctx, tc, f64::NAN, test_string(&label)),
             HEGEL_E_INVALID_ARG
         );
-        assert!(!test_string(a.context_last_error(ctx)).to_bytes().is_empty());
-        assert_eq!((a.target)(ctx, tc, 1.0, test_view(dup.as_ptr())), HEGEL_OK);
+        assert!(!read_string(a.context_last_error(ctx)).to_bytes().is_empty());
+        assert_eq!((a.target)(ctx, tc, 1.0, test_string(&dup)), HEGEL_OK);
         assert_eq!(
-            (a.target)(ctx, tc, 2.0, test_view(dup.as_ptr())),
+            (a.target)(ctx, tc, 2.0, test_string(&dup)),
             HEGEL_E_INVALID_ARG
         );
 
@@ -744,7 +749,7 @@ fn libhegel_reports_shrunk_failure() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 0xc0ffee, true);
 
@@ -754,7 +759,7 @@ fn libhegel_reports_shrunk_failure() {
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "got error mid-loop: {}", err);
                 break;
             }
@@ -792,7 +797,7 @@ fn libhegel_reports_shrunk_failure() {
 
         let f = a.run_result_failure(ctx, result, 0);
         assert!(!f.is_null());
-        let origin_back = test_string(a.failure_origin(ctx, f)).to_string_lossy();
+        let origin_back = read_string(a.failure_origin(ctx, f)).to_string_lossy();
         assert!(
             origin_back.contains("n >= 5 failed"),
             "expected failure origin to contain 'n >= 5 failed', got: {}",
@@ -838,7 +843,7 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 0xc0ffee, true);
 
@@ -858,7 +863,7 @@ unsafe fn discover_failure_blob(a: &Api, ctx: *mut u8) -> CString {
             !blob_ptr.is_null(),
             "expected a reproduce blob on the failure"
         );
-        let blob = test_string(*blob_ptr).to_owned();
+        let blob = read_string(*blob_ptr).to_owned();
         a.failure_free(ctx, f);
         a.run_result_free(ctx, result);
         a.run_free(ctx, run);
@@ -876,7 +881,7 @@ unsafe fn replay_blob_once(a: &Api, ctx: *mut u8, s: *const u8, blob: &CStr) -> 
         assert!(
             !tc.is_null(),
             "hegel_test_case_from_blob failed: {}",
-            test_string(a.context_last_error(ctx)).to_string_lossy()
+            read_string(a.context_last_error(ctx)).to_string_lossy()
         );
 
         let mut n: i64 = 0;
@@ -926,7 +931,7 @@ fn libhegel_frees_run_owned_test_cases() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         let run = a.run_start(ctx, s);
 
         let tc = a.next_test_case(ctx, run);
@@ -936,7 +941,7 @@ fn libhegel_frees_run_owned_test_cases() {
         // reference, so freeing the handle here (without completing the case)
         // does not disturb the run, which winds it down on `run_free`.
         a.test_case_free(ctx, tc);
-        let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+        let err = read_string(a.context_last_error(ctx)).to_string_lossy();
         assert!(
             err.is_empty(),
             "freeing a run-owned handle should succeed: {err}"
@@ -958,7 +963,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 25);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 3, true);
 
@@ -970,7 +975,7 @@ fn libhegel_pool_primitives_draw_added_variables() {
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -1071,27 +1076,22 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 50);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 3, true);
 
         let run = a.run_start(ctx, s);
         assert!(!run.is_null());
 
-        let rule_names: Vec<CString> = ["push", "pop", "clear"]
-            .iter()
-            .map(|n| CString::new(*n).unwrap())
-            .collect();
-        let rule_ptrs: Vec<*const c_char> = rule_names.iter().map(|n| n.as_ptr()).collect();
-        let invariant_name = CString::new("sorted").unwrap();
-        let invariant_ptrs = [invariant_name.as_ptr()];
+        let rule_ptrs: Vec<hegel_string_t> = ["push", "pop", "clear"].map(Into::into).to_vec();
+        let invariant_ptrs = ["sorted".into()];
 
         let mut saw_rule_draw = false;
         let mut longest_single_rule_run = 0usize;
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -1107,9 +1107,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
                 rule_groups.as_ptr(),
                 ptr::null(),
                 0,
-                test_views(invariant_ptrs.as_ptr(), invariant_ptrs.len())
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                invariant_ptrs.as_ptr(),
                 ptr::null(),
                 invariant_ptrs.len(),
                 1,
@@ -1128,15 +1126,11 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
-                test_views(rule_ptrs.as_ptr(), rule_ptrs.len())
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
                 ptr::null(),
                 rule_ptrs.len(),
-                test_views(invariant_ptrs.as_ptr(), invariant_ptrs.len())
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                invariant_ptrs.as_ptr(),
                 ptr::null(),
                 invariant_ptrs.len(),
                 1,
@@ -1227,7 +1221,7 @@ fn libhegel_generate_boolean_draws_and_forces() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 50);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 11, true);
 
@@ -1239,7 +1233,7 @@ fn libhegel_generate_boolean_draws_and_forces() {
         loop {
             let tc = a.next_test_case(ctx, run);
             if tc.is_null() {
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert_eq!(err, "", "next_test_case returned NULL with error: {}", err);
                 break;
             }
@@ -1302,7 +1296,7 @@ fn libhegel_generate_boolean_rejects_invalid_arguments() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 1);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
 
         let run = a.run_start(ctx, s);
         assert!(!run.is_null());
@@ -1337,7 +1331,7 @@ fn libhegel_generate_boolean_rejects_invalid_arguments() {
                     "expected HEGEL_E_INVALID_ARG for p={}, forced={}, has_forced={}",
                     p, forced, has_forced
                 );
-                let err = test_string(a.context_last_error(ctx)).to_string_lossy();
+                let err = read_string(a.context_last_error(ctx)).to_string_lossy();
                 assert!(!err.is_empty(), "expected a diagnostic message");
             }
 
@@ -1383,7 +1377,7 @@ fn next_test_case_without_mark_complete_errors() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 5);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 7, true);
 
@@ -1394,7 +1388,7 @@ fn next_test_case_without_mark_complete_errors() {
         let rc = (a.next_test_case)(ctx, run, &mut tc2);
         assert_eq!(rc, HEGEL_E_NOT_COMPLETE, "expected NOT_COMPLETE");
         assert!(tc2.is_null(), "expected NULL on second next_test_case");
-        let err = test_string(a.context_last_error(ctx))
+        let err = read_string(a.context_last_error(ctx))
             .to_string_lossy()
             .into_owned();
         assert!(err.contains("not marked complete"), "got: {}", err);
@@ -1424,7 +1418,7 @@ fn run_free_after_early_exit_does_not_hang() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 100);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 99, true);
 
@@ -1454,8 +1448,8 @@ unsafe fn run_replay_predicate_suite(
         let ctx = (a.context_new)();
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 200);
-        (a.settings_database)(ctx, s, test_optional(&test_view(db_path.as_ptr())));
-        (a.settings_database_key)(ctx, s, test_optional(&test_view(key.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&db_path));
+        (a.settings_database_key)(ctx, s, &test_string(&key));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 1, true);
 
@@ -1559,7 +1553,7 @@ fn health_check_surfaces_as_run_error() {
         let s = a.settings_new(ctx);
         a.settings_test_cases(ctx, s, 200);
         let empty = CString::new("").unwrap();
-        (a.settings_database)(ctx, s, test_optional(&test_view(empty.as_ptr())));
+        (a.settings_database)(ctx, s, &test_string(&empty));
         a.settings_derandomize(ctx, s, true);
         a.settings_seed(ctx, s, 1, true);
 
@@ -1579,7 +1573,7 @@ fn health_check_surfaces_as_run_error() {
             }
         }
 
-        let last_err = test_string(a.context_last_error(ctx))
+        let last_err = read_string(a.context_last_error(ctx))
             .to_string_lossy()
             .into_owned();
         assert_eq!(
@@ -1593,7 +1587,7 @@ fn health_check_surfaces_as_run_error() {
             !result.is_null(),
             "hegel_run_result returned NULL after the health check fired; \
              last_error = {}",
-            test_string(a.context_last_error(ctx)).to_string_lossy()
+            read_string(a.context_last_error(ctx)).to_string_lossy()
         );
 
         assert_eq!(
@@ -1611,7 +1605,7 @@ fn health_check_surfaces_as_run_error() {
             !err_ptr.is_null(),
             "expected hegel_run_result_error to carry the health-check message"
         );
-        let msg = test_string(*err_ptr).to_string_lossy();
+        let msg = read_string(*err_ptr).to_string_lossy();
         assert!(
             msg.contains("FilterTooMuch"),
             "expected the run error to reference FilterTooMuch, got: {}",
@@ -1630,7 +1624,7 @@ fn health_check_surfaces_as_run_error() {
     }
 }
 
-unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
+unsafe fn c_string_from_ptr(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
     hegel_c::hegel_string_t {
         data,
         len: if data.is_null() {
@@ -1639,27 +1633,6 @@ unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
             unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
         },
     }
-}
-
-unsafe fn test_views(
-    data: *const *const std::ffi::c_char,
-    len: usize,
-) -> Option<Vec<hegel_c::hegel_string_t>> {
-    if data.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { std::slice::from_raw_parts(data, len) }
-            .iter()
-            .map(|&p| {
-                if p.is_null() {
-                    hegel_c::hegel_string_t { data: p, len: 1 }
-                } else {
-                    unsafe { test_view(p) }
-                }
-            })
-            .collect(),
-    )
 }
 
 #[derive(Clone, Copy)]
@@ -1675,7 +1648,7 @@ impl<'a> TestString<'a> {
         CString::new(self.0).unwrap()
     }
 }
-unsafe fn test_string(value: hegel_string_t) -> TestString<'static> {
+unsafe fn read_string(value: hegel_string_t) -> TestString<'static> {
     TestString(if value.len == 0 {
         &[]
     } else {

@@ -5,6 +5,10 @@
 //! `c_abi_inprocess.rs`: calling the exported functions directly as Rust
 //! items so the branches are measured by coverage.
 
+mod string_helpers;
+
+use string_helpers::test_string;
+
 mod common;
 
 use common::{last_error, make_settings_no_db, next_case, ok, start};
@@ -2388,13 +2392,6 @@ fn generate_grammar_validates_handles_and_reports_stop_test() {
         ok(hegel_grammar_free(ctx, g));
     }
     unsafe { ok(hegel_context_free(ctx)) };
-}
-fn test_string(value: &(impl AsRef<[u8]> + ?Sized)) -> hegel_string_t {
-    let bytes = value.as_ref();
-    hegel_string_t {
-        data: bytes.as_ptr().cast(),
-        len: bytes.len(),
-    }
 }
 
 unsafe fn test_bytes(value: hegel_c::hegel_string_t) -> &'static [u8] {

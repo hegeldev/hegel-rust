@@ -8,6 +8,10 @@
 //! they hit are measured. The happy path is covered by hegeltest driving the
 //! engine over this same ABI.
 
+mod string_helpers;
+
+use string_helpers::test_string;
+
 mod common;
 
 use common::{
@@ -138,7 +142,7 @@ unsafe fn drive_to_error(
             break;
         }
         let (status, origin) = conclude(tc);
-        let origin = (!origin.is_null()).then(|| unsafe { c_view(origin) });
+        let origin = (!origin.is_null()).then(|| unsafe { c_string_from_ptr(origin) });
         unsafe {
             ok(hegel_mark_complete(
                 ctx,
@@ -797,14 +801,14 @@ fn settings_string_setters_handle_bad_input() {
             HEGEL_OK
         );
 
-        let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
+        let bad = [0xffu8];
         assert_eq!(
-            hegel_settings_set_database(ctx, s, &c_view(bad.as_ptr())),
+            hegel_settings_set_database(ctx, s, &test_string(&bad)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         assert_eq!(
-            hegel_settings_set_database_key(ctx, s, &c_view(bad.as_ptr())),
+            hegel_settings_set_database_key(ctx, s, &test_string(&bad)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
@@ -841,10 +845,10 @@ fn settings_string_setters_handle_bad_input() {
             hegel_settings_set_test_location(
                 ctx,
                 s,
-                c_view(good),
+                c_string_from_ptr(good),
                 1,
-                c_view(bad.as_ptr()),
-                c_view(good)
+                test_string(&bad),
+                c_string_from_ptr(good)
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -855,10 +859,10 @@ fn settings_string_setters_handle_bad_input() {
         ok(hegel_settings_set_test_location(
             ctx,
             s,
-            c_view(good),
+            c_string_from_ptr(good),
             1,
-            c_view(good),
-            c_view(good),
+            c_string_from_ptr(good),
+            c_string_from_ptr(good),
         ));
 
         ok(hegel_settings_free(ctx, s));
@@ -887,9 +891,9 @@ fn from_blob_rejects_bad_input() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
-        let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
+        let bad = [0xffu8];
         assert_eq!(
-            hegel_test_case_from_blob(ctx, s, c_view(bad.as_ptr()), None, ptr::null_mut(), &mut tc),
+            hegel_test_case_from_blob(ctx, s, test_string(&bad), None, ptr::null_mut(), &mut tc),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("UTF-8"));
@@ -898,7 +902,7 @@ fn from_blob_rejects_bad_input() {
             hegel_test_case_from_blob(
                 ctx,
                 s,
-                c_view(garbage.as_ptr()),
+                test_string(&garbage),
                 None,
                 ptr::null_mut(),
                 &mut tc
@@ -927,7 +931,7 @@ fn run_start_blob_replays_and_reports_the_failure() {
             hegel_run_start_blob(
                 ctx,
                 s,
-                c_view(blob.as_ptr()),
+                test_string(&blob),
                 None,
                 ptr::null_mut(),
                 ptr::null_mut()
@@ -938,7 +942,7 @@ fn run_start_blob_replays_and_reports_the_failure() {
             hegel_run_start_blob(
                 ctx,
                 ptr::null(),
-                c_view(blob.as_ptr()),
+                test_string(&blob),
                 None,
                 ptr::null_mut(),
                 &mut run
@@ -946,26 +950,26 @@ fn run_start_blob_replays_and_reports_the_failure() {
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_run_start_blob(ctx, s, c_view(ptr::null()), None, ptr::null_mut(), &mut run),
-            HEGEL_E_INVALID_ARG
-        );
-        let bad: [c_char; 2] = [0xFFu8 as c_char, 0];
-        assert_eq!(
             hegel_run_start_blob(
                 ctx,
                 s,
-                c_view(bad.as_ptr()),
+                hegel_string_t::default(),
                 None,
                 ptr::null_mut(),
                 &mut run
             ),
             HEGEL_E_INVALID_ARG
         );
+        let bad = [0xffu8];
+        assert_eq!(
+            hegel_run_start_blob(ctx, s, test_string(&bad), None, ptr::null_mut(), &mut run),
+            HEGEL_E_INVALID_ARG
+        );
 
         ok(hegel_run_start_blob(
             ctx,
             s,
-            c_view(blob.as_ptr()),
+            test_string(&blob),
             None,
             ptr::null_mut(),
             &mut run,
@@ -984,12 +988,7 @@ fn run_start_blob_replays_and_reports_the_failure() {
             if hegel_generate_integer(ctx, tc, 0, 100, &mut value) != HEGEL_OK {
                 status = hegel_status_t::HEGEL_STATUS_OVERRUN as u32;
             }
-            ok(hegel_mark_complete(
-                ctx,
-                tc,
-                status,
-                &c_view(origin.as_ptr()),
-            ));
+            ok(hegel_mark_complete(ctx, tc, status, &test_string(&origin)));
             ok(hegel_test_case_free(ctx, tc));
         }
         let res = result(ctx, run);
@@ -1014,7 +1013,7 @@ fn run_start_blob_replays_and_reports_the_failure() {
             hegel_run_start_blob(
                 ctx,
                 s,
-                c_view(garbage.as_ptr()),
+                test_string(&garbage),
                 None,
                 ptr::null_mut(),
                 &mut bad_run
@@ -1296,7 +1295,7 @@ fn out_of_range_enum_values_are_invalid_arguments() {
 /// we then read back through the result getters.
 #[test]
 fn live_test_case_argument_validation() {
-    let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+    let bad_utf8 = [0xffu8];
     let ctx = hegel_context_new();
     unsafe {
         let s = make_settings(ctx);
@@ -1373,7 +1372,7 @@ fn live_test_case_argument_validation() {
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_collection_reject(ctx, tc, collection, &c_view(bad_utf8.as_ptr())),
+            hegel_collection_reject(ctx, tc, collection, &test_string(&bad_utf8)),
             HEGEL_E_INVALID_ARG
         );
         let mut more = false;
@@ -1455,7 +1454,7 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         assert_eq!(
-            hegel_target(ctx, tc, 0.0, c_view(bad_utf8.as_ptr())),
+            hegel_target(ctx, tc, 0.0, test_string(&bad_utf8)),
             HEGEL_E_INVALID_ARG
         );
 
@@ -1484,7 +1483,7 @@ fn live_test_case_argument_validation() {
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         assert_eq!(
-            hegel_event(ctx, tc, c_view(bad_utf8.as_ptr())),
+            hegel_event(ctx, tc, test_string(&bad_utf8)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
@@ -1502,7 +1501,7 @@ fn live_test_case_argument_validation() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_INTERESTING as u32,
-                &c_view(bad_utf8.as_ptr())
+                &test_string(&bad_utf8)
             ),
             HEGEL_E_INVALID_ARG
         );
@@ -1751,7 +1750,7 @@ fn concurrent_run_failure_has_blob_and_caveat() {
             let mut should_capture = false;
             ok(hegel_test_case_should_capture(ctx, tc, &mut should_capture));
             stamped += usize::from(should_capture);
-            let rules = [c_view(rule.as_ptr())];
+            let rules = [test_string(&rule)];
             let rule_groups: [i64; 1] = [0];
             let mut machine: *mut HegelStateMachine = ptr::null_mut();
             let mut out_concurrency = 0i64;
@@ -1793,7 +1792,8 @@ fn concurrent_run_failure_has_blob_and_caveat() {
                 } else {
                     (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
                 };
-            let complete_origin = (!complete_origin.is_null()).then(|| c_view(complete_origin));
+            let complete_origin =
+                (!complete_origin.is_null()).then(|| c_string_from_ptr(complete_origin));
             ok(hegel_mark_complete(
                 ctx,
                 tc,
@@ -1845,7 +1845,7 @@ unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, orig
         if tc.is_null() {
             break;
         }
-        let rules = [unsafe { c_view(rule.as_ptr()) }];
+        let rules = [test_string(&rule)];
         let rule_groups: [i64; 1] = [0];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_concurrency = 0i64;
@@ -1892,7 +1892,7 @@ unsafe fn drive_concurrent_body(ctx: *mut HegelContext, run: *mut HegelRun, orig
                 (hegel_status_t::HEGEL_STATUS_INTERESTING, origin.as_ptr())
             };
         let complete_origin =
-            (!complete_origin.is_null()).then(|| unsafe { c_view(complete_origin) });
+            (!complete_origin.is_null()).then(|| unsafe { c_string_from_ptr(complete_origin) });
         ok(unsafe {
             hegel_mark_complete(
                 ctx,
@@ -1931,7 +1931,7 @@ fn run_start_blob_replays_a_nondeterministic_blob() {
         ok(hegel_run_start_blob(
             ctx,
             s,
-            c_view(blob.as_ptr()),
+            test_string(&blob),
             None,
             ptr::null_mut(),
             &mut replay,
@@ -1988,7 +1988,7 @@ fn primitives_after_overrun_all_report_stop_test() {
         let mut pool: *mut HegelPool = ptr::null_mut();
         ok(hegel_new_pool(ctx, tc, &mut pool));
         let rule = CString::new("only").unwrap();
-        let rules = [c_view(rule.as_ptr())];
+        let rules = [test_string(&rule)];
         let rule_groups: [i64; 1] = [0];
         let rule_weights: [f64; 1] = [2.5];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
@@ -2121,12 +2121,12 @@ fn primitives_after_overrun_all_report_stop_test() {
 /// measured here.
 #[test]
 fn state_machine_and_primitive_boolean_paths() {
-    let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+    let bad_utf8 = [0xffu8];
     let ctx = hegel_context_new();
     unsafe {
         let null_tc: *mut HegelTestCase = ptr::null_mut();
         let rule_a = CString::new("a").unwrap();
-        let rules = [c_view(rule_a.as_ptr())];
+        let rules = [test_string(&rule_a)];
         let rule_groups: [i64; 1] = [0];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_id = 0i64;
@@ -2306,7 +2306,7 @@ fn state_machine_and_primitive_boolean_paths() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("rule_names[0] is null"));
-        let bad_entry = [c_view(bad_utf8.as_ptr())];
+        let bad_entry = [test_string(&bad_utf8)];
         assert_eq!(
             hegel_new_state_machine(
                 ctx,
@@ -2545,7 +2545,7 @@ fn state_machine_and_primitive_boolean_paths() {
         assert_eq!(hegel_state_machine_free(ctx, machine), HEGEL_OK);
 
         let inv_a = CString::new("inv").unwrap();
-        let invariants = [c_view(inv_a.as_ptr())];
+        let invariants = [test_string(&inv_a)];
         let mut checked: *mut HegelStateMachine = ptr::null_mut();
         assert_eq!(
             hegel_new_state_machine(
@@ -2930,14 +2930,7 @@ fn standalone_handles_are_freed_independently() {
 
         let mut root: *mut HegelTestCase = ptr::null_mut();
         assert_eq!(
-            hegel_test_case_from_blob(
-                ctx,
-                s,
-                c_view(blob.as_ptr()),
-                None,
-                ptr::null_mut(),
-                &mut root
-            ),
+            hegel_test_case_from_blob(ctx, s, test_string(&blob), None, ptr::null_mut(), &mut root),
             HEGEL_OK
         );
         assert!(!root.is_null());
@@ -3206,7 +3199,7 @@ fn from_blob_replay_trace_goes_to_the_output_callback() {
         ok(hegel_test_case_from_blob(
             ctx,
             s,
-            c_view(blob.as_ptr()),
+            test_string(&blob),
             Some(capture_output),
             (&raw const lines).cast_mut().cast(),
             &mut tc,
@@ -3250,7 +3243,7 @@ fn object_handles_are_freed_safely_after_the_run() {
         let mut var_id = 0i64;
         ok(hegel_pool_add(ctx, tc, pool, &mut var_id));
         let rule = CString::new("only").unwrap();
-        let rules = [c_view(rule.as_ptr())];
+        let rules = [test_string(&rule)];
         let rule_groups: [i64; 1] = [0];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_concurrency = 0i64;
@@ -3759,7 +3752,7 @@ unsafe fn read_settings(ctx: *mut HegelContext, s: *const hegel_c::HegelSettings
 unsafe fn settings_for_profile(ctx: *mut HegelContext, name: &str) -> *mut hegel_c::HegelSettings {
     let name = CString::new(name).unwrap();
     let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
-    ok(unsafe { hegel_c::hegel_settings_new_for_profile(ctx, c_view(name.as_ptr()), &mut s) });
+    ok(unsafe { hegel_c::hegel_settings_new_for_profile(ctx, test_string(&name), &mut s) });
     assert!(!s.is_null());
     s
 }
@@ -3778,7 +3771,7 @@ fn settings_getters_read_back_every_setter() {
         ok(hegel_c::hegel_settings_set_seed(ctx, s, 11, true));
         ok(hegel_c::hegel_settings_set_derandomize(ctx, s, true));
         let db = CString::new("some/db").unwrap();
-        ok(hegel_settings_set_database(ctx, s, &c_view(db.as_ptr())));
+        ok(hegel_settings_set_database(ctx, s, &test_string(&db)));
         ok(hegel_settings_set_phases(
             ctx,
             s,
@@ -3946,7 +3939,7 @@ fn unknown_profiles_are_invalid_arguments() {
         let name = CString::new("no_such_profile").unwrap();
         let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
         assert_eq!(
-            hegel_c::hegel_settings_new_for_profile(ctx, c_view(name.as_ptr()), &mut s),
+            hegel_c::hegel_settings_new_for_profile(ctx, test_string(&name), &mut s),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("unknown settings profile \"no_such_profile\""));
@@ -3973,13 +3966,13 @@ fn new_for_profile_validates_its_arguments() {
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
         assert_eq!(
-            hegel_c::hegel_settings_new_for_profile(ctx, c_view(bad.as_ptr()), &mut s),
+            hegel_c::hegel_settings_new_for_profile(ctx, test_string(&bad), &mut s),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let name = CString::new("base").unwrap();
         assert_eq!(
-            hegel_c::hegel_settings_new_for_profile(ctx, c_view(name.as_ptr()), ptr::null_mut()),
+            hegel_c::hegel_settings_new_for_profile(ctx, test_string(&name), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
@@ -3997,7 +3990,7 @@ fn registered_profiles_round_trip() {
         let name = CString::new("c_abi_registered_roundtrip").unwrap();
         ok(hegel_c::hegel_settings_register_profile(
             ctx,
-            c_view(name.as_ptr()),
+            test_string(&name),
             s,
         ));
         ok(hegel_settings_free(ctx, s));
@@ -4030,27 +4023,27 @@ fn register_profile_validates_its_arguments() {
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad_utf8 = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
         assert_eq!(
-            hegel_c::hegel_settings_register_profile(ctx, c_view(bad_utf8.as_ptr()), s),
+            hegel_c::hegel_settings_register_profile(ctx, test_string(&bad_utf8), s),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad_name = CString::new("bad name").unwrap();
         assert_eq!(
-            hegel_c::hegel_settings_register_profile(ctx, c_view(bad_name.as_ptr()), s),
+            hegel_c::hegel_settings_register_profile(ctx, test_string(&bad_name), s),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid profile name"));
         for reserved in ["base", "default"] {
             let name = CString::new(reserved).unwrap();
             assert_eq!(
-                hegel_c::hegel_settings_register_profile(ctx, c_view(name.as_ptr()), s),
+                hegel_c::hegel_settings_register_profile(ctx, test_string(&name), s),
                 HEGEL_E_INVALID_ARG
             );
             assert!(last_error(ctx).contains("reserved profile name"));
         }
         let name = CString::new("c_abi_register_null_settings").unwrap();
         assert_eq!(
-            hegel_c::hegel_settings_register_profile(ctx, c_view(name.as_ptr()), ptr::null()),
+            hegel_c::hegel_settings_register_profile(ctx, test_string(&name), ptr::null()),
             HEGEL_E_INVALID_HANDLE
         );
         ok(hegel_settings_free(ctx, s));
@@ -4064,19 +4057,19 @@ fn set_default_profile_validates_its_arguments() {
     unsafe {
         let bad_utf8 = CString::new([0xffu8, 0xfe].to_vec()).unwrap();
         assert_eq!(
-            hegel_c::hegel_set_default_profile(ctx, c_view(bad_utf8.as_ptr())),
+            hegel_c::hegel_set_default_profile(ctx, test_string(&bad_utf8)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         let bad_name = CString::new("bad name").unwrap();
         assert_eq!(
-            hegel_c::hegel_set_default_profile(ctx, c_view(bad_name.as_ptr())),
+            hegel_c::hegel_set_default_profile(ctx, test_string(&bad_name)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("invalid profile name"));
         let alias = CString::new("default").unwrap();
         assert_eq!(
-            hegel_c::hegel_set_default_profile(ctx, c_view(alias.as_ptr())),
+            hegel_c::hegel_set_default_profile(ctx, test_string(&alias)),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("cannot name the \"default\" alias"));
@@ -4093,17 +4086,17 @@ fn set_default_profile_overrides_the_default_profile() {
     let ctx = hegel_context_new();
     unsafe {
         let name = CString::new("base").unwrap();
-        ok(hegel_c::hegel_set_default_profile(
-            ctx,
-            c_view(name.as_ptr()),
-        ));
+        ok(hegel_c::hegel_set_default_profile(ctx, test_string(&name)));
         let mut s: *mut hegel_c::HegelSettings = ptr::null_mut();
         ok(hegel_settings_new(ctx, &mut s));
         let view = read_settings(ctx, s);
         assert!(!view.derandomize, "the override displaces CI detection");
         assert!(view.print_blob);
         ok(hegel_settings_free(ctx, s));
-        ok(hegel_c::hegel_set_default_profile(ctx, c_view(ptr::null())));
+        ok(hegel_c::hegel_set_default_profile(
+            ctx,
+            hegel_string_t::default(),
+        ));
         ok(hegel_context_free(ctx));
     }
 }
@@ -4253,7 +4246,7 @@ fn settings_getters_reject_null_handles_and_null_outs() {
     }
 }
 
-unsafe fn c_view(data: *const std::ffi::c_char) -> hegel_string_t {
+unsafe fn c_string_from_ptr(data: *const std::ffi::c_char) -> hegel_string_t {
     hegel_string_t {
         data,
         len: if data.is_null() {

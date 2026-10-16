@@ -11,6 +11,10 @@
 //! result/failure/blob readers are all exercised through the raw C ABI under
 //! Miri, not just the handle pointers.
 
+mod string_helpers;
+
+use string_helpers::test_string;
+
 mod common;
 
 use common::ok;
@@ -51,11 +55,7 @@ unsafe fn one_case_run() -> (
         let mut s: *mut HegelSettings = ptr::null_mut();
         assert_eq!(hegel_settings_new(ctx, &mut s), HEGEL_OK);
         let empty = CString::new("").unwrap();
-        ok(hegel_settings_set_database(
-            ctx,
-            s,
-            test_optional(&test_view(empty.as_ptr())),
-        ));
+        ok(hegel_settings_set_database(ctx, s, &test_string(&empty)));
         ok(hegel_settings_set_test_cases(ctx, s, 1));
         ok(hegel_settings_set_seed(ctx, s, 1, true));
         let mut run: *mut HegelRun = ptr::null_mut();
@@ -245,16 +245,14 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
         let mut pool: *mut HegelPool = ptr::null_mut();
         ok(hegel_new_pool(ctx, tc, &mut pool));
         let rule = CString::new("only").unwrap();
-        let rules = [rule.as_ptr()];
+        let rules = [test_string(&rule)];
         let rule_groups: [i64; 1] = [0];
         let mut machine: *mut HegelStateMachine = ptr::null_mut();
         let mut out_concurrency = 0i64;
         ok(hegel_new_state_machine(
             ctx,
             tc,
-            test_views(rules.as_ptr(), 1)
-                .as_ref()
-                .map_or(std::ptr::null(), |views| views.as_ptr()),
+            rules.as_ptr(),
             rule_groups.as_ptr(),
             ptr::null(),
             1,
@@ -313,11 +311,7 @@ fn full_run_generates_fails_and_shrinks() {
         let mut s: *mut HegelSettings = ptr::null_mut();
         ok(hegel_settings_new(ctx, &mut s));
         let empty = CString::new("").unwrap();
-        ok(hegel_settings_set_database(
-            ctx,
-            s,
-            test_optional(&test_view(empty.as_ptr())),
-        ));
+        ok(hegel_settings_set_database(ctx, s, &test_string(&empty)));
         ok(hegel_settings_set_test_cases(ctx, s, 5));
         ok(hegel_settings_set_seed(ctx, s, 1, true));
         ok(hegel_settings_set_verbosity(
@@ -400,44 +394,4 @@ unsafe extern "C" fn count_output_line(
     assert_eq!(text.to_bytes().len(), len);
     let count = unsafe { &*user_data.cast::<AtomicUsize>() };
     count.fetch_add(1, Ordering::Relaxed);
-}
-
-unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
-    hegel_c::hegel_string_t {
-        data,
-        len: if data.is_null() {
-            0
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
-        },
-    }
-}
-
-unsafe fn test_views(
-    data: *const *const std::ffi::c_char,
-    len: usize,
-) -> Option<Vec<hegel_c::hegel_string_t>> {
-    if data.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { std::slice::from_raw_parts(data, len) }
-            .iter()
-            .map(|&p| {
-                if p.is_null() {
-                    hegel_c::hegel_string_t { data: p, len: 1 }
-                } else {
-                    unsafe { test_view(p) }
-                }
-            })
-            .collect(),
-    )
-}
-
-fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
-    if value.data.is_null() && value.len == 0 {
-        std::ptr::null()
-    } else {
-        value
-    }
 }
