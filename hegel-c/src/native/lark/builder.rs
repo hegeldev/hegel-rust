@@ -931,17 +931,8 @@ fn nesting_error() -> GrammarError {
     ))
 }
 
-/// The frontend file an `%import` made by the grammar file `importer`
-/// names (`None` for the root text, which sits at the top level):
-/// `a/b.lark` for `%import a.b.X`, and for a relative import
-/// (`%import .c.X`) the importer's directory joined with `c.lark`. Every
-/// component is a Lark name, so the path never holds `.`, `..`, an
-/// empty segment, a leading `/`, a backslash or a NUL.
-///
-/// As in Lark, the bundled grammar at an absolute import's path stands
-/// in when the frontend has no such file, but nothing stands in for a
-/// relative import's file. The bundled grammars make no relative imports
-/// of their own, so every relative import names a frontend file.
+/// Resolve an import to a file path, relative to `importer` for relative
+/// imports. `None` places the importer at the top level.
 pub fn import_path(stmt: &ImportStmt, importer: Option<&str>) -> String {
     let file = format!("{}.lark", stmt.path.join("/"));
     if stmt.relative {

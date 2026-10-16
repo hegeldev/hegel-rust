@@ -4995,49 +4995,34 @@ pub unsafe extern "C" fn hegel_owned_string_free(
     HEGEL_OK
 }
 
-/// A grammar's text and the files its `%import`s need, gathered before
-/// the grammar is compiled
+/// A grammar and its imported files, gathered before compilation.
 ///
-/// libhegel resolves every `%import` to a file path itself; the frontend
-/// only reads files. Create the builder with `hegel_grammar_builder_new`,
-/// then supply the files it asks for in a loop:
+/// Create with `hegel_grammar_builder_new`, then supply each requested file:
 ///
 /// ```c
 /// for (size_t i = 0;; i++) {
 ///     hegel_string_t path;
 ///     if (hegel_grammar_builder_file(ctx, b, i, &path) == HEGEL_E_NOT_FOUND)
 ///         break;
-///     // read `path`, then:
 ///     hegel_grammar_builder_provide(ctx, b, i, &text);  // or NULL
 /// }
 /// ```
 ///
-/// Supplying a file adds the files it imports to the end of the list, so
-/// the loop must look for the end on every iteration rather than count
-/// the files up front. Then pass the builder to `hegel_grammar_new`, and
-/// free it with `hegel_grammar_builder_free`.
+/// The list grows as files are provided. Once all are supplied, compile
+/// with `hegel_grammar_new` and free with `hegel_grammar_builder_free`.
 ///
 /// Paths: a path is slash-separated and relative, and ends in `.lark`.
-/// `%import a.b.X` needs `a/b.lark`. A relative import, `%import .c.X`,
-/// needs `c.lark` in the directory of the file that makes it, so
-/// `x/c.lark` from `x/y.lark`. The grammar text itself sits at the top
-/// level, so its relative imports need top-level files.
+/// `%import a.b.X` needs `a/b.lark`. A relative `%import .c.X` in
+/// `x/y.lark` needs `x/c.lark`. The root grammar sits at the top level.
 /// Every component of a path is a Lark name (`[_a-zA-Z][_a-zA-Z0-9]*`),
-/// so a path never contains `.` or `..` as a component, an empty
-/// component, a leading `/`, a backslash or a NUL: joined under a root
-/// directory, it always names a file inside it.
+/// excluding empty components, `.`, `..`, backslashes and NULs.
 ///
-/// A path is a file's identity: each distinct path is asked for once
-/// however many grammars import it, an import of a path already being
-/// imported is reported as circular, and errors name files by path.
+/// Each path is requested once. Cycles are errors, identified by file path.
 ///
-/// Files come from the frontend or from the grammars bundled with
-/// libhegel (Lark's `common.lark`, `lark.lark`, `python.lark` and
-/// `unicode.lark`). Every path is asked of the frontend first. When the
-/// frontend has no such file, the bundled grammar at that path stands in
-/// if only absolute imports name it, as in Lark; nothing stands in for
-/// the file of a relative import. There is no search path: a frontend
-/// serves one tree of files.
+/// The frontend serves one tree of files, with no search path. A missing
+/// file falls back to the bundled grammar at that path (`common.lark`,
+/// `lark.lark`, `python.lark` or `unicode.lark`) only when all imports of
+/// it are absolute. Relative imports require a frontend file.
 pub struct HegelGrammarBuilder {
     files: crate::native::lark::builder::GrammarFiles,
     /// The path of each file, borrowed by
@@ -5141,11 +5126,9 @@ pub unsafe extern "C" fn hegel_grammar_builder_file(
 /// Parameters:
 /// `builder`: The builder.
 /// `index`: Which file, as numbered by `hegel_grammar_builder_file`.
-/// `text`: The file's contents as a UTF-8 string; or NULL when there is
-///   no such file, in which case
-///   the grammar bundled with libhegel at that path stands in, unless a
-///   relative import names it. Pass a pointer to an empty `hegel_string_t`
-///   for a file that exists but is empty.
+/// `text`: UTF-8 file contents, or NULL for a missing file (see
+///   `hegel_grammar_builder_t` for fallback rules). A pointer to an empty
+///   `hegel_string_t` represents an existing empty file.
 ///
 /// Returns `HEGEL_OK`; `HEGEL_E_INVALID_HANDLE` for a NULL builder;
 /// `HEGEL_E_INVALID_ARG` for an `index` past the end of the list or of a

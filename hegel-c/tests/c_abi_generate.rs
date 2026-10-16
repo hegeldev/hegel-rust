@@ -1846,11 +1846,9 @@ unsafe fn grammar_builder(
         return Err(last_error(ctx));
     }
     for index in 0.. {
-        let mut path = hegel_string_t::default();
-        if unsafe { hegel_grammar_builder_file(ctx, b, index, &mut path) } == HEGEL_E_NOT_FOUND {
+        let Some(path) = (unsafe { builder_path(ctx, b, index) }) else {
             break;
-        }
-        let path = std::str::from_utf8(unsafe { test_bytes(path) }).unwrap();
+        };
         let rc = match files.iter().find(|(p, _)| *p == path) {
             Some((_, t)) => unsafe {
                 hegel_grammar_builder_provide(ctx, b, index, &hegel_string_t::from(*t))

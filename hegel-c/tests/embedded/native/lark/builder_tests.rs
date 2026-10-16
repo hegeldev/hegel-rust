@@ -33,23 +33,10 @@ fn paths(files: &GrammarFiles) -> Vec<&str> {
 #[test]
 fn circular_imports_report_the_cycle() {
     let sources = Sources(vec![
-        (
-            "a.lark",
-            "%import b.value
-",
-        ),
-        (
-            "b.lark",
-            "%import a.value
-",
-        ),
+        ("a.lark", "%import b.value\n"),
+        ("b.lark", "%import a.value\n"),
     ]);
-    let error = build_with(
-        "%import a.value
-start: value",
-        &sources,
-    )
-    .unwrap_err();
+    let error = build_with("%import a.value\nstart: value", &sources).unwrap_err();
     assert_eq!(
         error.message,
         "Circular grammar import: a.lark -> b.lark -> a.lark"
