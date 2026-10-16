@@ -399,11 +399,7 @@ fn e0283_diagnostic() {
 fn one_of_non_printable_draw_diagnostic() {
     let actual = compile_failing_case("tests/ui-printability/one_of_non_printable_draw.rs");
     let golden = if trait_help_has_source_pointer() {
-        if actual.contains("is conditionally implemented") {
-            "tests/ui-printability/one_of_non_printable_draw-current.stderr"
-        } else {
-            "tests/ui-printability/one_of_non_printable_draw-unconditional.stderr"
-        }
+        "tests/ui-printability/one_of_non_printable_draw-current.stderr"
     } else {
         "tests/ui-printability/one_of_non_printable_draw-msrv.stderr"
     };

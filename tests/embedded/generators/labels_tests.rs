@@ -4,15 +4,15 @@
 
 use super::*;
 use crate::ffi::sys as hegel_c;
-use std::ffi::CString;
 use std::ptr;
 
 fn engine_label_from_name(name: &str) -> u64 {
-    let name = CString::new(name).unwrap();
-    let mut label = 0u64;
-    let rc = unsafe {
-        hegel_c::hegel_label_from_name(ptr::null_mut(), test_view(name.as_ptr()), &mut label)
+    let name = hegel_c::hegel_string_t {
+        data: name.as_ptr().cast(),
+        len: name.len(),
     };
+    let mut label = 0u64;
+    let rc = unsafe { hegel_c::hegel_label_from_name(ptr::null_mut(), name, &mut label) };
     assert_eq!(rc, hegel_c::hegel_result_t::HEGEL_OK);
     label
 }
@@ -98,15 +98,4 @@ fn combining_distinguishes_order_and_arity() {
     assert_ne!(combine_labels(&[a]), a);
     assert_ne!(combine_labels(&[a]), combine_labels(&[a, a]));
     assert_ne!(combine_labels(&[]), combine_labels(&[a]));
-}
-
-unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
-    hegel_c::hegel_string_t {
-        data,
-        len: if data.is_null() {
-            0
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
-        },
-    }
 }
