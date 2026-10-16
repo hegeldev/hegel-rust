@@ -568,7 +568,7 @@ def run_coverage() -> Path:
     )
 
     _run_lcov_phase(
-        cargo_args=["-p", "hegeltest"],
+        cargo_args=["-p", "hegeltest", "--lib"],
         output=ffi_lcov,
         label="hegeltest default features, shared-library engine",
         target_dir=target_dir,
