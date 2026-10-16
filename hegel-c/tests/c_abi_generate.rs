@@ -9,6 +9,7 @@ mod common;
 
 use common::{last_error, make_settings_no_db, next_case, ok, start};
 use hegel_c::hegel_result_t::*;
+use hegel_c::hegel_string_t;
 use hegel_c::{
     HegelContext, HegelGrammar, HegelRun, HegelStringGenerator, HegelTestCase, hegel_context_free,
     hegel_context_new, hegel_generate_boolean, hegel_generate_bytes,
@@ -845,13 +846,12 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("min_size"));
 
-        let ebcdic = CString::new("ebcdic").unwrap();
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ebcdic.as_ptr())),
+                &"ebcdic".into(),
                 0,
                 u32::MAX,
                 ptr::null(),
@@ -866,13 +866,13 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("invalid codec"));
 
-        let bad_utf8: [c_char; 2] = [0xFFu8 as c_char, 0];
+        let bad_utf8 = [0xffu8];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(bad_utf8.as_ptr())),
+                &test_string(&bad_utf8),
                 0,
                 u32::MAX,
                 ptr::null(),
@@ -900,10 +900,7 @@ fn text_generator_constructor_validates_and_draws() {
                 0,
                 ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: (bad_include.as_ptr()).cast(),
-                    len: 1
-                },
+                test_string(&bad_include),
                 "".into(),
                 &mut g
             ),
@@ -934,7 +931,7 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("include_characters is null"));
 
-        let empty_cats: [*const c_char; 0] = [];
+        let empty_cats: [hegel_string_t; 0] = [];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -943,9 +940,7 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 u32::MAX,
-                test_views(empty_cats.as_ptr(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                empty_cats.as_ptr(),
                 0,
                 ptr::null(),
                 0,
@@ -957,7 +952,10 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("No valid characters"));
 
-        let null_cat: [*const c_char; 1] = [ptr::null()];
+        let null_cat = [hegel_string_t {
+            data: ptr::null(),
+            len: 1,
+        }];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -966,9 +964,7 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 u32::MAX,
-                test_views(null_cat.as_ptr(), 1)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                null_cat.as_ptr(),
                 1,
                 ptr::null(),
                 0,
@@ -980,7 +976,7 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("categories[0] is null"));
 
-        let bad_cat: [*const c_char; 1] = [bad_utf8.as_ptr()];
+        let bad_cat = [test_string(&bad_utf8)];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -989,9 +985,7 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 u32::MAX,
-                test_views(bad_cat.as_ptr(), 1)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                bad_cat.as_ptr(),
                 1,
                 ptr::null(),
                 0,
@@ -1003,7 +997,10 @@ fn text_generator_constructor_validates_and_draws() {
         );
         assert!(last_error(ctx).contains("categories[0] is not valid UTF-8"));
 
-        let null_excl_cat: [*const c_char; 1] = [ptr::null()];
+        let null_excl_cat = [hegel_string_t {
+            data: ptr::null(),
+            len: 1,
+        }];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
@@ -1014,9 +1011,7 @@ fn text_generator_constructor_validates_and_draws() {
                 u32::MAX,
                 ptr::null(),
                 0,
-                test_views(null_excl_cat.as_ptr(), 1)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                null_excl_cat.as_ptr(),
                 1,
                 "".into(),
                 "".into(),
@@ -1040,41 +1035,28 @@ fn text_generator_constructor_validates_and_draws() {
                 ptr::null(),
                 0,
                 "".into(),
-                hegel_c::hegel_string_t {
-                    data: (bad_exclude.as_ptr()).cast(),
-                    len: 1
-                },
+                test_string(&bad_exclude),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("exclude_characters is not valid UTF-8"));
 
-        let ascii = CString::new("ascii").unwrap();
-        let nd = CString::new("Nd").unwrap();
-        let cats: [*const c_char; 1] = [nd.as_ptr()];
+        let cats = ["Nd".into()];
         assert_eq!(
             hegel_string_generator_text(
                 ctx,
                 1,
                 8,
-                test_optional(&test_view(ascii.as_ptr())),
+                &"ascii".into(),
                 0,
                 u32::MAX,
-                test_views(cats.as_ptr(), 1)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                cats.as_ptr(),
                 1,
                 ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: (b"a".as_ptr()).cast(),
-                    len: 1
-                },
-                hegel_c::hegel_string_t {
-                    data: (b"0".as_ptr()).cast(),
-                    len: 1
-                },
+                test_string(b"a"),
+                test_string(b"0"),
                 &mut g
             ),
             HEGEL_OK
@@ -1143,10 +1125,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         assert_eq!(
             hegel_string_generator_regex(
                 ctx,
-                hegel_c::hegel_string_t {
-                    data: (bad_utf8.as_ptr()).cast(),
-                    len: bad_utf8.len()
-                },
+                test_string(&bad_utf8),
                 false,
                 ptr::null(),
                 &mut regex_g
@@ -1158,10 +1137,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         assert_eq!(
             hegel_string_generator_regex(
                 ctx,
-                hegel_c::hegel_string_t {
-                    data: (unclosed.as_ptr()).cast(),
-                    len: unclosed.len()
-                },
+                test_string(&unclosed),
                 false,
                 ptr::null(),
                 &mut regex_g
@@ -1173,10 +1149,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         assert_eq!(
             hegel_string_generator_regex(
                 ctx,
-                hegel_c::hegel_string_t {
-                    data: (pattern.as_ptr()).cast(),
-                    len: pattern.len()
-                },
+                test_string(&pattern),
                 false,
                 ptr::null(),
                 ptr::null_mut()
@@ -1219,31 +1192,13 @@ fn regex_email_url_domain_generators_draw_valid_values() {
         );
 
         assert_eq!(
-            hegel_string_generator_regex(
-                ctx,
-                hegel_c::hegel_string_t {
-                    data: (pattern.as_ptr()).cast(),
-                    len: pattern.len()
-                },
-                true,
-                email_g,
-                &mut regex_g
-            ),
+            hegel_string_generator_regex(ctx, test_string(&pattern), true, email_g, &mut regex_g),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("must be a text string generator"));
         let alphabet = text_generator(ctx, 0, 10);
         assert_eq!(
-            hegel_string_generator_regex(
-                ctx,
-                hegel_c::hegel_string_t {
-                    data: (pattern.as_ptr()).cast(),
-                    len: pattern.len()
-                },
-                true,
-                alphabet,
-                &mut regex_g
-            ),
+            hegel_string_generator_regex(ctx, test_string(&pattern), true, alphabet, &mut regex_g),
             HEGEL_OK
         );
 
@@ -1319,10 +1274,7 @@ fn regex_pattern_may_contain_nul() {
         assert_eq!(
             hegel_string_generator_regex(
                 ctx,
-                hegel_c::hegel_string_t {
-                    data: (pattern.as_ptr()).cast(),
-                    len: pattern.len()
-                },
+                test_string(&pattern),
                 true,
                 ptr::null(),
                 &mut regex_g
@@ -1881,27 +1833,18 @@ unsafe fn grammar(
     start: Option<&str>,
     explicit: &[&str],
 ) -> Result<*mut HegelGrammar, String> {
-    let text = CString::new(text).unwrap();
-    let start = start.map(|s| CString::new(s).unwrap());
-    let names: Vec<CString> = explicit
-        .iter()
-        .map(|name| CString::new(*name).unwrap())
-        .collect();
-    let name_ptrs: Vec<*const c_char> = names.iter().map(|n| n.as_ptr()).collect();
+    let start = start.map(hegel_string_t::from);
+    let names: Vec<hegel_string_t> = explicit.iter().map(|&name| name.into()).collect();
     let mut g: *mut HegelGrammar = ptr::null_mut();
     let rc = unsafe {
         hegel_grammar_new(
             ctx,
-            test_view(text.as_ptr()),
-            test_optional(&test_view(
-                start.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
-            )),
+            text.into(),
+            start.as_ref().map_or(ptr::null(), std::ptr::from_ref),
             0,
             0,
             ptr::null(),
-            test_views(name_ptrs.as_ptr(), explicit.len())
-                .as_ref()
-                .map_or(std::ptr::null(), |views| views.as_ptr()),
+            names.as_ptr(),
             explicit.len(),
             None,
             ptr::null_mut(),
@@ -2024,14 +1967,8 @@ fn grammar_placeholders_stand_for_explicit_terminals() {
         )
         .unwrap();
         let marker_of = |name: &str| {
-            let name = CString::new(name).unwrap();
             let mut marker = hegel_c::hegel_string_t::default();
-            ok(hegel_grammar_placeholder(
-                ctx,
-                g,
-                test_view(name.as_ptr()),
-                &mut marker,
-            ));
+            ok(hegel_grammar_placeholder(ctx, g, name.into(), &mut marker));
             std::str::from_utf8(test_bytes(marker)).unwrap().to_string()
         };
         let x = marker_of("X");
@@ -2054,15 +1991,15 @@ fn grammar_placeholders_stand_for_explicit_terminals() {
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
 
-        let name = CString::new("Z").unwrap();
+        let name = "Z";
         let mut marker = hegel_c::hegel_string_t::default();
         assert_eq!(
-            hegel_grammar_placeholder(ctx, g, test_view(name.as_ptr()), &mut marker),
+            hegel_grammar_placeholder(ctx, g, name.into(), &mut marker),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("'Z' is not an explicit terminal"));
         assert_eq!(
-            hegel_grammar_placeholder(ctx, ptr::null(), test_view(name.as_ptr()), &mut marker),
+            hegel_grammar_placeholder(ctx, ptr::null(), name.into(), &mut marker),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("grammar handle is null"));
@@ -2080,7 +2017,7 @@ fn grammar_placeholders_stand_for_explicit_terminals() {
         );
         assert!(last_error(ctx).contains("name is null"));
         assert_eq!(
-            hegel_grammar_placeholder(ctx, g, test_view(name.as_ptr()), ptr::null_mut()),
+            hegel_grammar_placeholder(ctx, g, name.into(), ptr::null_mut()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("out parameter is null"));
@@ -2110,13 +2047,13 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert!(err.contains("explicit terminal 'X'"), "{err}");
 
         let mut g: *mut HegelGrammar = ptr::null_mut();
-        let text = CString::new("start: \"a\"\n").unwrap();
+        let text = "start: \"a\"\n";
         let invalid = [0xffu8, 0];
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
-                test_optional(&test_view(invalid.as_ptr().cast::<c_char>())),
+                text.into(),
+                &test_string(&invalid[..1]),
                 0,
                 0,
                 ptr::null(),
@@ -2129,18 +2066,19 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("start is not valid UTF-8"));
-        let null_names: [*const c_char; 1] = [ptr::null()];
+        let null_names = [hegel_string_t {
+            data: ptr::null(),
+            len: 1,
+        }];
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(null_names.as_ptr(), 1)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                null_names.as_ptr(),
                 1,
                 None,
                 ptr::null_mut(),
@@ -2172,7 +2110,7 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 1,
                 0,
@@ -2189,7 +2127,7 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 0,
                 0,
@@ -2254,12 +2192,12 @@ fn grammar_imports_resolve_through_the_callback() {
         text: CString::new("rule: \"from lib\" INT\n%import .inner.INT\n").unwrap(),
     };
     unsafe {
-        let text = CString::new("%import .lib.rule\nstart: rule\n").unwrap();
+        let text = "%import .lib.rule\nstart: rule\n";
         let mut g: *mut HegelGrammar = ptr::null_mut();
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 0,
                 0,
@@ -2286,7 +2224,7 @@ fn grammar_imports_resolve_through_the_callback() {
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 0,
                 0,
@@ -2356,12 +2294,12 @@ fn grammar_imports_fall_back_to_the_bundled_grammars_and_read_text_lossily() {
         text: b"WORD: \"caf\xff\"\n".to_vec(),
     };
     unsafe {
-        let text = CString::new("%import common.INT\n%import lib.WORD\nstart: INT WORD\n").unwrap();
+        let text = "%import common.INT\n%import lib.WORD\nstart: INT WORD\n";
         let mut g: *mut HegelGrammar = ptr::null_mut();
         assert_eq!(
             hegel_grammar_new(
                 ctx,
-                test_view(text.as_ptr()),
+                text.into(),
                 ptr::null(),
                 0,
                 0,
@@ -2451,36 +2389,12 @@ fn generate_grammar_validates_handles_and_reports_stop_test() {
     }
     unsafe { ok(hegel_context_free(ctx)) };
 }
-unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
-    hegel_c::hegel_string_t {
-        data,
-        len: if data.is_null() {
-            0
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
-        },
+fn test_string(value: &(impl AsRef<[u8]> + ?Sized)) -> hegel_string_t {
+    let bytes = value.as_ref();
+    hegel_string_t {
+        data: bytes.as_ptr().cast(),
+        len: bytes.len(),
     }
-}
-
-unsafe fn test_views(
-    data: *const *const std::ffi::c_char,
-    len: usize,
-) -> Option<Vec<hegel_c::hegel_string_t>> {
-    if data.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { std::slice::from_raw_parts(data, len) }
-            .iter()
-            .map(|&p| {
-                if p.is_null() {
-                    hegel_c::hegel_string_t { data: p, len: 1 }
-                } else {
-                    unsafe { test_view(p) }
-                }
-            })
-            .collect(),
-    )
 }
 
 unsafe fn test_bytes(value: hegel_c::hegel_string_t) -> &'static [u8] {
@@ -2490,13 +2404,5 @@ unsafe fn test_bytes(value: hegel_c::hegel_string_t) -> &'static [u8] {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(value.data.cast(), value.len) }
-    }
-}
-
-fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
-    if value.data.is_null() && value.len == 0 {
-        std::ptr::null()
-    } else {
-        value
     }
 }
