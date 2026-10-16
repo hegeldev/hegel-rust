@@ -342,21 +342,12 @@ def _run_lcov_phase(
 ) -> None:
     """Run `cargo llvm-cov <cargo_args>`, emitting LCOV to `output`.
 
-    `target_dir` is where the whole cargo build (and therefore
-    cargo-llvm-cov's coverage tree, profile data, and the set of binary
-    objects it exports from) goes. Giving a phase its own directory makes
-    it hermetic: nothing another phase built can leak into its report.
+    Workspace artifacts and profiles are cleaned before each phase while
+    compiled dependencies remain available in the shared target directory.
     """
-    print(f"  Cleaning previous coverage data ({label})...")
-    # Fully remove the coverage build tree, not just the profile data
-    # (`cargo llvm-cov clean`), so a stale build with different
-    # instrumentation can never leak into this run's coverage.
-    import shutil
-
-    shutil.rmtree(target_dir / "llvm-cov-target", ignore_errors=True)
-
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(target_dir)
+    subprocess.run(["cargo", "llvm-cov", "clean", "--workspace"], env=env, check=True)
 
     print(f"  Running tests with coverage ({label})...")
     result = subprocess.run(
@@ -511,9 +502,9 @@ def run_coverage() -> Path:
     hegel-c's own embedded tests — instead of excluding hegel-c as a mere
     dependency, while still covering the hegeltest frontend.
 
-    A second pass then re-exports hegel-c's lib tests on their own, in a
-    hermetic target directory, and the two LCOV files are union-merged per
-    line. This is a correctness requirement, not belt-and-braces: the
+    A second pass then re-exports hegel-c's lib tests on their own, after
+    cleaning the workspace artifacts, and the two LCOV files are union-merged
+    per line. This is a correctness requirement, not belt-and-braces: the
     workspace pass links two distinct compilations of hegel-c (the shared
     rlib every other binary uses, and the crate's own `--test` build for its
     embedded tests), and every `#[no_mangle] hegel_*` function has the *same*
@@ -522,9 +513,9 @@ def run_coverage() -> Path:
     mapping from and silently drops the other compilation's counts — so a
     line inside a `no_mangle` function covered only by hegel-c's embedded
     tests deterministically shows as uncovered in the workspace export. The
-    isolated pass sees only the lib test's own object (the hermetic target
-    directory is what guarantees that), where those counts resolve
-    correctly; merging at the LCOV line level is immune to record-name
+    isolated pass sees only the lib test's own object after workspace
+    artifacts are cleaned, where those counts resolve correctly; merging at
+    the LCOV line level is immune to record-name
     collisions. Mangled functions are unaffected either way (their record
     names are unique per compilation).
 
@@ -551,6 +542,7 @@ def run_coverage() -> Path:
     ffi_lcov = Path("lcov-hegeltest-ffi.info")
     target_dir = cargo_target_dir()
 
+    subprocess.run(["cargo", "llvm-cov", "clean"], check=True)
     _ensure_smoke_cdylib(target_dir)
 
     _run_lcov_phase(
@@ -572,14 +564,14 @@ def run_coverage() -> Path:
         cargo_args=["-p", "hegeltest-c", "--lib"],
         output=hegel_c_lib_lcov,
         label="hegel-c lib tests, isolated no_mangle records",
-        target_dir=target_dir / "coverage-hegel-c-lib",
+        target_dir=target_dir,
     )
 
     _run_lcov_phase(
         cargo_args=["-p", "hegeltest"],
         output=ffi_lcov,
         label="hegeltest default features, shared-library engine",
-        target_dir=target_dir / "coverage-hegeltest-ffi",
+        target_dir=target_dir,
     )
 
     print("  Merging LCOV output...")
