@@ -73,73 +73,22 @@ fn groups_lay_out_inline_or_broken() {
     let ctx = hegel_context_new();
     unsafe {
         let p = new_printer(ctx, 20);
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "1,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "2");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         assert_eq!(value(ctx, p), "[1, 2]");
         ok(hegel_printer_free(ctx, p));
 
         let p = new_printer(ctx, 6);
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "1,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "2,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "3");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         assert_eq!(value(ctx, p), "[1,\n 2,\n 3]");
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
@@ -200,61 +149,25 @@ fn deferred_slot_roundtrip_and_death() {
         ok(hegel_printer_is_live(ctx, p, &mut live));
         assert!(!live, "resolve seals the main output too");
         assert_eq!(
-            hegel_printer_text(
-                ctx,
-                slot,
-                hegel_c::hegel_string_t {
-                    data: ("x".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_text(ctx, slot, "x".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("session ended"));
         assert_eq!(
-            hegel_printer_breakable(
-                ctx,
-                slot,
-                hegel_c::hegel_string_t {
-                    data: (" ".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_breakable(ctx, slot, " ".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_if_break(
-                ctx,
-                slot,
-                hegel_c::hegel_string_t {
-                    data: (",".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_if_break(ctx, slot, ",".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_printer_hard_break(ctx, slot), HEGEL_E_INVALID_HANDLE);
         assert_eq!(
-            hegel_printer_begin_group(
-                ctx,
-                slot,
-                0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                }
-            ),
+            hegel_printer_begin_group(ctx, slot, 0, "".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_end_group(
-                ctx,
-                slot,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                }
-            ),
+            hegel_printer_end_group(ctx, slot, "".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -347,24 +260,9 @@ fn comments_attach_to_line_ends_and_break_open_groups() {
     let ctx = hegel_context_new();
     unsafe {
         let p = new_printer(ctx, 79);
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "1,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "2");
         let comment = "  // or any other generated value";
         ok(hegel_printer_comment(
@@ -376,23 +274,9 @@ fn comments_attach_to_line_ends_and_break_open_groups() {
             },
         ));
         text(ctx, p, ",");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "3");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         assert_eq!(
             value(ctx, p),
             "[1,\n 2,  // or any other generated value\n 3\n]"
@@ -408,14 +292,7 @@ fn comment_arguments_are_validated() {
     unsafe {
         let p = new_printer(ctx, 79);
         assert_eq!(
-            hegel_printer_comment(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("a\nb".as_ptr()).cast(),
-                    len: 3
-                }
-            ),
+            hegel_printer_comment(ctx, p, "a\nb".into()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("must not contain newlines"));
@@ -431,41 +308,20 @@ fn comment_arguments_are_validated() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("text is null"));
-        ok(hegel_printer_comment(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
-        ));
+        ok(hegel_printer_comment(ctx, p, "".into()));
 
         let mut slot: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_printer_deferred(ctx, p, &mut slot));
         ok(hegel_printer_resolve(ctx, p));
         assert_eq!(
-            hegel_printer_comment(
-                ctx,
-                slot,
-                hegel_c::hegel_string_t {
-                    data: ("x".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_comment(ctx, slot, "x".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert!(last_error(ctx).contains("session ended"));
 
         let null: *mut HegelPrinter = ptr::null_mut();
         assert_eq!(
-            hegel_printer_comment(
-                ctx,
-                null,
-                hegel_c::hegel_string_t {
-                    data: ("x".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_comment(ctx, null, "x".into()),
             HEGEL_E_INVALID_HANDLE
         );
         ok(hegel_printer_free(ctx, slot));
@@ -492,14 +348,7 @@ fn text_arguments_are_validated() {
         );
         assert!(last_error(ctx).contains("not valid UTF-8"));
         assert_eq!(
-            hegel_printer_text(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("a\nb".as_ptr()).cast(),
-                    len: 3
-                }
-            ),
+            hegel_printer_text(ctx, p, "a\nb".into()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("must not contain newlines"));
@@ -515,57 +364,21 @@ fn text_arguments_are_validated() {
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("text is null"));
-        ok(hegel_printer_text(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
-        ));
+        ok(hegel_printer_text(ctx, p, "".into()));
         assert_eq!(
-            hegel_printer_breakable(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("\n".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_breakable(ctx, p, "\n".into()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_begin_group(
-                ctx,
-                p,
-                0,
-                hegel_c::hegel_string_t {
-                    data: ("\n".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_begin_group(ctx, p, 0, "\n".into()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_end_group(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("\n".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_end_group(ctx, p, "\n".into()),
             HEGEL_E_INVALID_ARG
         );
         assert_eq!(
-            hegel_printer_end_group(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                }
-            ),
+            hegel_printer_end_group(ctx, p, "".into()),
             HEGEL_E_INVALID_ARG
         );
         assert!(last_error(ctx).contains("without a matching begin_group"));
@@ -584,59 +397,16 @@ fn if_break_emits_trailing_text_only_in_the_broken_form() {
     unsafe {
         for (max_width, expected) in [(79, "{1, 2}"), (5, "{\n    1,\n    2,\n}")] {
             let p = new_printer(ctx, max_width);
-            ok(hegel_printer_begin_group(
-                ctx,
-                p,
-                0,
-                hegel_c::hegel_string_t {
-                    data: ("{".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_begin_group(ctx, p, 0, "{".into()));
             ok(hegel_printer_shift_indent(ctx, p, 4));
-            ok(hegel_printer_breakable(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("".as_ptr()).cast(),
-                    len: 0,
-                },
-            ));
+            ok(hegel_printer_breakable(ctx, p, "".into()));
             text(ctx, p, "1,");
-            ok(hegel_printer_breakable(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: (" ".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_breakable(ctx, p, " ".into()));
             text(ctx, p, "2");
             ok(hegel_printer_shift_indent(ctx, p, -4));
-            ok(hegel_printer_if_break(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: (",".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
-            ok(hegel_printer_breakable(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("".as_ptr()).cast(),
-                    len: 0,
-                },
-            ));
-            ok(hegel_printer_end_group(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("}".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_if_break(ctx, p, ",".into()));
+            ok(hegel_printer_breakable(ctx, p, "".into()));
+            ok(hegel_printer_end_group(ctx, p, "}".into()));
             assert_eq!(value(ctx, p), expected);
             ok(hegel_printer_free(ctx, p));
         }
@@ -685,60 +455,24 @@ fn null_handles_and_out_parameters_are_rejected() {
         ok(hegel_printer_options_free(ctx, ptr::null_mut()));
         let null: *mut HegelPrinter = ptr::null_mut();
         assert_eq!(
-            hegel_printer_text(
-                ctx,
-                null,
-                hegel_c::hegel_string_t {
-                    data: ("a".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_text(ctx, null, "a".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_breakable(
-                ctx,
-                null,
-                hegel_c::hegel_string_t {
-                    data: (" ".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_breakable(ctx, null, " ".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_if_break(
-                ctx,
-                null,
-                hegel_c::hegel_string_t {
-                    data: (",".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_if_break(ctx, null, ",".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(hegel_printer_hard_break(ctx, null), HEGEL_E_INVALID_HANDLE);
         assert_eq!(
-            hegel_printer_begin_group(
-                ctx,
-                null,
-                0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                }
-            ),
+            hegel_printer_begin_group(ctx, null, 0, "".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
-            hegel_printer_end_group(
-                ctx,
-                null,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                }
-            ),
+            hegel_printer_end_group(ctx, null, "".into()),
             HEGEL_E_INVALID_HANDLE
         );
         assert_eq!(
@@ -806,14 +540,7 @@ fn family_document_is_shared_and_survives_completion() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("note one\nsecond line".as_ptr()).cast(),
-                len: 20,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "note one\nsecond line".into()));
 
         let mut p1: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut p1));
@@ -841,20 +568,13 @@ fn family_document_is_shared_and_survives_completion() {
         ok(hegel_test_case_printer(ctx, clone, ptr::null(), &mut p2));
         text(ctx, p2, "from clone");
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "".into()));
 
         ok(hegel_mark_complete(
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
 
         ok(hegel_printer_resolve(ctx, p1));
@@ -886,28 +606,14 @@ fn note_during_a_speculative_draw_lands_after_the_value() {
         ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut p));
         ok(hegel_printer_begin_speculative(ctx, p));
         text(ctx, p, "let x = ");
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("mid-draw".as_ptr()).cast(),
-                len: 8,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "mid-draw".into()));
         text(ctx, p, "5;");
         ok(hegel_printer_hard_break(ctx, p));
         ok(hegel_printer_commit_speculative(ctx, p));
 
         ok(hegel_printer_begin_speculative(ctx, p));
         text(ctx, p, "let y = ");
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("rejected".as_ptr()).cast(),
-                len: 8,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "rejected".into()));
         ok(hegel_printer_abort_speculative(ctx, p));
 
         assert_eq!(value(ctx, p), "let x = 5;\nmid-draw\nrejected\n");
@@ -917,7 +623,7 @@ fn note_during_a_speculative_draw_lands_after_the_value() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -935,51 +641,16 @@ fn clone_regions_anchor_where_the_clone_was_made() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("before".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "before".into()));
         let mut clone: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, tc, &mut clone));
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("after".as_ptr()).cast(),
-                len: 5,
-            },
-        ));
-        ok(hegel_note(
-            ctx,
-            clone,
-            hegel_c::hegel_string_t {
-                data: ("inside".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "after".into()));
+        ok(hegel_note(ctx, clone, "inside".into()));
 
         let mut grandchild: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, clone, &mut grandchild));
-        ok(hegel_note(
-            ctx,
-            clone,
-            hegel_c::hegel_string_t {
-                data: ("inside two".as_ptr()).cast(),
-                len: 10,
-            },
-        ));
-        ok(hegel_note(
-            ctx,
-            grandchild,
-            hegel_c::hegel_string_t {
-                data: ("nested".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
+        ok(hegel_note(ctx, clone, "inside two".into()));
+        ok(hegel_note(ctx, grandchild, "nested".into()));
 
         let mut root: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut root));
@@ -994,7 +665,7 @@ fn clone_regions_anchor_where_the_clone_was_made() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, grandchild));
         ok(hegel_test_case_free(ctx, clone));
@@ -1014,47 +685,18 @@ fn first_explicit_width_configures_the_family_document() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("wide enough to break at ten".as_ptr()).cast(),
-                len: 27,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "wide enough to break at ten".into()));
 
         let narrow = max_width_options(ctx, 10);
         let mut p: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, tc, narrow, &mut p));
         ok(hegel_printer_options_free(ctx, narrow));
 
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "aaaa,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "bbbb");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
 
         let conflicting = max_width_options(ctx, 79);
         let mut p2: *mut HegelPrinter = ptr::null_mut();
@@ -1072,7 +714,7 @@ fn first_explicit_width_configures_the_family_document() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -1086,14 +728,7 @@ fn note_and_test_case_printer_validate_arguments() {
     let ctx = hegel_context_new();
     unsafe {
         assert_eq!(
-            hegel_note(
-                ctx,
-                ptr::null_mut(),
-                hegel_c::hegel_string_t {
-                    data: ("x".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_note(ctx, ptr::null_mut(), "x".into()),
             HEGEL_E_INVALID_HANDLE
         );
         let mut p: *mut HegelPrinter = ptr::null_mut();
@@ -1139,7 +774,7 @@ fn note_and_test_case_printer_validate_arguments() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -1155,35 +790,13 @@ fn null_options_lay_out_to_the_default_width_of_79() {
         for (element_width, expected_break) in [(74, false), (75, true)] {
             let mut p: *mut HegelPrinter = ptr::null_mut();
             ok(hegel_printer_new(ctx, ptr::null(), &mut p));
-            ok(hegel_printer_begin_group(
-                ctx,
-                p,
-                1,
-                hegel_c::hegel_string_t {
-                    data: ("[".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
             let element = "a".repeat(element_width);
             text(ctx, p, &element);
             text(ctx, p, ",");
-            ok(hegel_printer_breakable(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: (" ".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_breakable(ctx, p, " ".into()));
             text(ctx, p, "b");
-            ok(hegel_printer_end_group(
-                ctx,
-                p,
-                hegel_c::hegel_string_t {
-                    data: ("]".as_ptr()).cast(),
-                    len: 1,
-                },
-            ));
+            ok(hegel_printer_end_group(ctx, p, "]".into()));
             assert_eq!(value(ctx, p).contains('\n'), expected_break);
             ok(hegel_printer_free(ctx, p));
         }
@@ -1225,15 +838,7 @@ fn reflow_lays_out_a_flat_representation_through_the_groups() {
                 len: repr.len(),
             },
         ));
-        ok(hegel_printer_reflow(
-            ctx,
-            p,
-            options,
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
-        ));
+        ok(hegel_printer_reflow(ctx, p, options, "".into()));
         assert_eq!(value(ctx, p), "line one\nline two");
         ok(hegel_printer_free(ctx, p));
         ok(hegel_reflow_options_free(ctx, options));
@@ -1252,15 +857,7 @@ fn reflow_validates_its_arguments() {
         );
         assert!(last_error(ctx).contains("out parameter is null"));
         assert_eq!(
-            hegel_printer_reflow(
-                ctx,
-                ptr::null_mut(),
-                ptr::null(),
-                hegel_c::hegel_string_t {
-                    data: ("x".as_ptr()).cast(),
-                    len: 1
-                }
-            ),
+            hegel_printer_reflow(ctx, ptr::null_mut(), ptr::null(), "x".into()),
             HEGEL_E_INVALID_HANDLE
         );
         let p = new_printer(ctx, 79);
@@ -1295,15 +892,7 @@ fn reflow_validates_its_arguments() {
         ok(hegel_printer_deferred(ctx, p, &mut slot));
         ok(hegel_printer_resolve(ctx, p));
         assert_eq!(
-            hegel_printer_reflow(
-                ctx,
-                slot,
-                ptr::null(),
-                hegel_c::hegel_string_t {
-                    data: ("[1, 2]".as_ptr()).cast(),
-                    len: 6
-                }
-            ),
+            hegel_printer_reflow(ctx, slot, ptr::null(), "[1, 2]".into()),
             HEGEL_E_INVALID_HANDLE
         );
         ok(hegel_printer_free(ctx, slot));
@@ -1328,32 +917,10 @@ fn options_reject_a_zero_max_width() {
         ok(hegel_printer_new(ctx, options, &mut p));
         ok(hegel_printer_options_free(ctx, options));
         text(ctx, p, "aaa,");
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "b");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         assert_eq!(value(ctx, p), "aaa,[\n b]");
         ok(hegel_printer_free(ctx, p));
         ok(hegel_context_free(ctx));
@@ -1379,40 +946,19 @@ fn straggler_clones_share_their_parents_dead_region() {
         assert_eq!(value(ctx, root), "report");
 
         assert_eq!(
-            hegel_note(
-                ctx,
-                straggler,
-                hegel_c::hegel_string_t {
-                    data: ("late".as_ptr()).cast(),
-                    len: 4
-                }
-            ),
+            hegel_note(ctx, straggler, "late".into()),
             HEGEL_E_INVALID_HANDLE
         );
         let mut grandchild: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, straggler, &mut grandchild));
         assert_eq!(
-            hegel_note(
-                ctx,
-                grandchild,
-                hegel_c::hegel_string_t {
-                    data: ("later".as_ptr()).cast(),
-                    len: 5
-                }
-            ),
+            hegel_note(ctx, grandchild, "later".into()),
             HEGEL_E_INVALID_HANDLE
         );
         let mut block: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_block(ctx, straggler, 2, &mut block));
         assert_eq!(
-            hegel_note(
-                ctx,
-                block,
-                hegel_c::hegel_string_t {
-                    data: ("latest".as_ptr()).cast(),
-                    len: 6
-                }
-            ),
+            hegel_note(ctx, block, "latest".into()),
             HEGEL_E_INVALID_HANDLE
         );
 
@@ -1420,7 +966,7 @@ fn straggler_clones_share_their_parents_dead_region() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_printer_free(ctx, root));
         ok(hegel_test_case_free(ctx, block));
@@ -1442,25 +988,11 @@ fn block_handles_indent_their_region_and_share_the_stream() {
         let tc = next_case(ctx, run);
         assert!(!tc.is_null());
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("Step 1: add {".as_ptr()).cast(),
-                len: 13,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "Step 1: add {".into()));
         let mut block: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_block(ctx, tc, 2, &mut block));
         assert!(!block.is_null());
-        ok(hegel_note(
-            ctx,
-            block,
-            hegel_c::hegel_string_t {
-                data: ("inside".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
+        ok(hegel_note(ctx, block, "inside".into()));
 
         let mut drawn: i64 = 7;
         ok(hegel_generate_integer(ctx, block, 0, 0, &mut drawn));
@@ -1470,63 +1002,20 @@ fn block_handles_indent_their_region_and_share_the_stream() {
         let mut p: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, block, narrow, &mut p));
         ok(hegel_printer_options_free(ctx, narrow));
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "aaaa,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "bbbb");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         ok(hegel_printer_hard_break(ctx, p));
 
         let mut nested: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_block(ctx, block, 2, &mut nested));
-        ok(hegel_note(
-            ctx,
-            nested,
-            hegel_c::hegel_string_t {
-                data: ("deep".as_ptr()).cast(),
-                len: 4,
-            },
-        ));
+        ok(hegel_note(ctx, nested, "deep".into()));
         let mut clone: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, block, &mut clone));
-        ok(hegel_note(
-            ctx,
-            clone,
-            hegel_c::hegel_string_t {
-                data: ("cloned".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("}".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_note(ctx, clone, "cloned".into()));
+        ok(hegel_note(ctx, tc, "}".into()));
 
         let mut root: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, tc, ptr::null(), &mut root));
@@ -1552,7 +1041,7 @@ fn block_handles_indent_their_region_and_share_the_stream() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, clone));
         ok(hegel_test_case_free(ctx, nested));
@@ -1581,74 +1070,24 @@ fn worker_attribution_stamps_lines_recorded_through_the_handle() {
         let mut worker: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, tc, &mut worker));
         ok(hegel_test_case_set_worker(ctx, worker, 3));
-        ok(hegel_note(
-            ctx,
-            worker,
-            hegel_c::hegel_string_t {
-                data: ("Rule: boom {\nsecond".as_ptr()).cast(),
-                len: 19,
-            },
-        ));
+        ok(hegel_note(ctx, worker, "Rule: boom {\nsecond".into()));
 
         let mut block: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_block(ctx, worker, 2, &mut block));
         let mut p: *mut HegelPrinter = ptr::null_mut();
         ok(hegel_test_case_printer(ctx, block, ptr::null(), &mut p));
-        ok(hegel_printer_begin_group(
-            ctx,
-            p,
-            1,
-            hegel_c::hegel_string_t {
-                data: ("[".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_begin_group(ctx, p, 1, "[".into()));
         text(ctx, p, "aaaa,");
-        ok(hegel_printer_breakable(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: (" ".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_breakable(ctx, p, " ".into()));
         text(ctx, p, "bbbb");
-        ok(hegel_printer_end_group(
-            ctx,
-            p,
-            hegel_c::hegel_string_t {
-                data: ("]".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_printer_end_group(ctx, p, "]".into()));
         ok(hegel_printer_hard_break(ctx, p));
         let mut grandchild: *mut hegel_c::HegelTestCase = ptr::null_mut();
         ok(hegel_test_case_clone(ctx, block, &mut grandchild));
-        ok(hegel_note(
-            ctx,
-            grandchild,
-            hegel_c::hegel_string_t {
-                data: ("nested".as_ptr()).cast(),
-                len: 6,
-            },
-        ));
-        ok(hegel_note(
-            ctx,
-            worker,
-            hegel_c::hegel_string_t {
-                data: ("}".as_ptr()).cast(),
-                len: 1,
-            },
-        ));
+        ok(hegel_note(ctx, grandchild, "nested".into()));
+        ok(hegel_note(ctx, worker, "}".into()));
 
-        ok(hegel_note(
-            ctx,
-            tc,
-            hegel_c::hegel_string_t {
-                data: ("unattributed".as_ptr()).cast(),
-                len: 12,
-            },
-        ));
+        ok(hegel_note(ctx, tc, "unattributed".into()));
         ok(hegel_test_case_set_worker(ctx, tc, 0));
         text(ctx, root, "root line");
         ok(hegel_printer_hard_break(ctx, root));
@@ -1677,7 +1116,7 @@ fn worker_attribution_stamps_lines_recorded_through_the_handle() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, grandchild));
         ok(hegel_test_case_free(ctx, block));
@@ -1686,24 +1125,5 @@ fn worker_attribution_stamps_lines_recorded_through_the_handle() {
         ok(hegel_run_free(ctx, run));
         ok(hegel_settings_free(ctx, s));
         ok(hegel_context_free(ctx));
-    }
-}
-
-unsafe fn test_view(data: *const std::ffi::c_char) -> hegel_c::hegel_string_t {
-    hegel_c::hegel_string_t {
-        data,
-        len: if data.is_null() {
-            0
-        } else {
-            unsafe { std::ffi::CStr::from_ptr(data) }.to_bytes().len()
-        },
-    }
-}
-
-fn test_optional(value: &hegel_c::hegel_string_t) -> *const hegel_c::hegel_string_t {
-    if value.data.is_null() && value.len == 0 {
-        std::ptr::null()
-    } else {
-        value
     }
 }

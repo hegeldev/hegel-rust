@@ -624,22 +624,12 @@ fn invalid_arguments_return_error_not_abort() {
             test_optional(&test_view(bad_codec.as_ptr())),
             0,
             u32::MAX,
-            test_views(ptr::null(), 0)
-                .as_ref()
-                .map_or(std::ptr::null(), |views| views.as_ptr()),
+            ptr::null(),
             0,
-            test_views(ptr::null(), 0)
-                .as_ref()
-                .map_or(std::ptr::null(), |views| views.as_ptr()),
+            ptr::null(),
             0,
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
-            hegel_c::hegel_string_t {
-                data: ptr::null(),
-                len: 0,
-            },
+            "".into(),
+            "".into(),
             &mut g,
         );
         assert_eq!(
@@ -1113,9 +1103,7 @@ fn libhegel_state_machine_selects_registered_rules_with_swarm() {
             let rc = (a.new_state_machine)(
                 ctx,
                 tc,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 rule_groups.as_ptr(),
                 ptr::null(),
                 0,

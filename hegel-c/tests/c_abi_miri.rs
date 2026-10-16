@@ -113,7 +113,7 @@ fn clones_and_root_free_independently_in_any_order() {
                 ctx,
                 c2,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                test_optional(&test_view(ptr::null()))
+                ptr::null()
             ),
             HEGEL_OK
         );
@@ -167,7 +167,7 @@ fn two_clones_used_concurrently_then_freed() {
             ctx,
             root,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, c1));
         ok(hegel_test_case_free(ctx, c2));
@@ -208,7 +208,7 @@ fn concurrent_mark_complete_from_two_clones_is_safe() {
                         tctx,
                         cp.0,
                         hegel_status_t::HEGEL_STATUS_VALID as u32,
-                        test_optional(&test_view(ptr::null())),
+                        ptr::null(),
                     );
                     ok(hegel_context_free(tctx));
                     rc
@@ -258,9 +258,7 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
             rule_groups.as_ptr(),
             ptr::null(),
             1,
-            test_views(ptr::null(), 0)
-                .as_ref()
-                .map_or(std::ptr::null(), |views| views.as_ptr()),
+            ptr::null(),
             ptr::null(),
             0,
             1,
@@ -279,7 +277,7 @@ fn object_handles_outlive_the_run_and_free_in_any_order() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_test_case_free(ctx, tc));
         ok(hegel_run_free(ctx, run));
@@ -350,12 +348,7 @@ fn full_run_generates_fails_and_shrinks() {
             } else {
                 hegel_status_t::HEGEL_STATUS_OVERRUN as u32
             };
-            ok(hegel_mark_complete(
-                ctx,
-                tc,
-                status,
-                test_optional(&test_view(ptr::null())),
-            ));
+            ok(hegel_mark_complete(ctx, tc, status, ptr::null()));
             ok(hegel_test_case_free(ctx, tc));
         }
 

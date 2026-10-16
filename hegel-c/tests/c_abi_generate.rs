@@ -62,7 +62,7 @@ unsafe fn complete_valid(ctx: *mut HegelContext, tc: *mut HegelTestCase) {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
     }
@@ -637,7 +637,7 @@ fn float_draws_respect_spec_and_validate_arguments() {
                     ctx,
                     tc,
                     hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-                    test_optional(&test_view(ptr::null())),
+                    ptr::null(),
                 ));
                 ok(hegel_c::hegel_test_case_free(ctx, tc));
                 continue;
@@ -758,25 +758,15 @@ unsafe fn text_generator(
                 ctx,
                 min_size,
                 max_size,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0,
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0,
-                },
+                "".into(),
+                "".into(),
                 &mut g,
             )
         },
@@ -820,25 +810,15 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 ptr::null_mut()
             ),
             HEGEL_E_INVALID_ARG
@@ -850,25 +830,15 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 5,
                 4,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -884,22 +854,12 @@ fn text_generator_constructor_validates_and_draws() {
                 test_optional(&test_view(ebcdic.as_ptr())),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -915,22 +875,12 @@ fn text_generator_constructor_validates_and_draws() {
                 test_optional(&test_view(bad_utf8.as_ptr())),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -943,25 +893,18 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 hegel_c::hegel_string_t {
                     data: (bad_include.as_ptr()).cast(),
                     len: 1
                 },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -973,25 +916,18 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 hegel_c::hegel_string_t {
                     data: ptr::null(),
                     len: 1
                 },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -1004,25 +940,17 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
                 test_views(empty_cats.as_ptr(), 0)
                     .as_ref()
                     .map_or(std::ptr::null(), |views| views.as_ptr()),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -1035,25 +963,17 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
                 test_views(null_cat.as_ptr(), 1)
                     .as_ref()
                     .map_or(std::ptr::null(), |views| views.as_ptr()),
                 1,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -1066,25 +986,17 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
                 test_views(bad_cat.as_ptr(), 1)
                     .as_ref()
                     .map_or(std::ptr::null(), |views| views.as_ptr()),
                 1,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -1097,25 +1009,17 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 test_views(null_excl_cat.as_ptr(), 1)
                     .as_ref()
                     .map_or(std::ptr::null(), |views| views.as_ptr()),
                 1,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
+                "".into(),
                 &mut g
             ),
             HEGEL_E_INVALID_ARG
@@ -1128,21 +1032,14 @@ fn text_generator_constructor_validates_and_draws() {
                 ctx,
                 0,
                 10,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 u32::MAX,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
+                "".into(),
                 hegel_c::hegel_string_t {
                     data: (bad_exclude.as_ptr()).cast(),
                     len: 1
@@ -1168,9 +1065,7 @@ fn text_generator_constructor_validates_and_draws() {
                     .as_ref()
                     .map_or(std::ptr::null(), |views| views.as_ptr()),
                 1,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 hegel_c::hegel_string_t {
                     data: (b"a".as_ptr()).cast(),
@@ -1218,16 +1113,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
     unsafe {
         let mut regex_g: *mut HegelStringGenerator = ptr::null_mut();
         assert_eq!(
-            hegel_string_generator_regex(
-                ctx,
-                hegel_c::hegel_string_t {
-                    data: ptr::null(),
-                    len: 0
-                },
-                true,
-                ptr::null(),
-                &mut regex_g
-            ),
+            hegel_string_generator_regex(ctx, "".into(), true, ptr::null(), &mut regex_g),
             HEGEL_OK
         );
         let empty_settings = make_settings_no_db(ctx);
@@ -1397,7 +1283,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
                         ctx,
                         tc,
                         hegel_status_t::HEGEL_STATUS_VALID as u32,
-                        test_optional(&test_view(ptr::null())),
+                        ptr::null(),
                     ));
                 }
                 HEGEL_E_ASSUME => {
@@ -1405,7 +1291,7 @@ fn regex_email_url_domain_generators_draw_valid_values() {
                         ctx,
                         tc,
                         hegel_status_t::HEGEL_STATUS_INVALID as u32,
-                        test_optional(&test_view(ptr::null())),
+                        ptr::null(),
                     ));
                 }
                 other => panic!("unexpected rc from email draw: {other:?}"),
@@ -1456,7 +1342,7 @@ fn regex_pattern_may_contain_nul() {
                 ctx,
                 tc,
                 hegel_status_t::HEGEL_STATUS_VALID as u32,
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
             ));
             ok(hegel_c::hegel_test_case_free(ctx, tc));
         }
@@ -1512,7 +1398,7 @@ fn generate_string_validates_handles_and_reports_stop_test() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -1726,7 +1612,7 @@ fn structured_draws_produce_valid_values_and_validate_arguments() {
                     ctx,
                     tc,
                     hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-                    test_optional(&test_view(ptr::null())),
+                    ptr::null(),
                 ));
                 ok(hegel_c::hegel_test_case_free(ctx, tc));
             } else {
@@ -1810,7 +1696,7 @@ fn structured_draws_after_overrun_report_stop_test() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -1893,7 +1779,7 @@ fn typed_draws_after_overrun_report_stop_test() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2083,7 +1969,7 @@ fn grammar_draws_strings_of_the_grammar() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2115,7 +2001,7 @@ fn a_grammar_draw_may_be_capped_below_the_grammar() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2161,7 +2047,7 @@ fn grammar_placeholders_stand_for_explicit_terminals() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2234,9 +2120,7 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 None,
                 ptr::null_mut(),
@@ -2250,7 +2134,7 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
@@ -2272,13 +2156,11 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
                     data: ptr::null(),
                     len: 1
                 },
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 None,
                 ptr::null_mut(),
@@ -2291,13 +2173,11 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 1,
                 0,
                 digits,
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 None,
                 ptr::null_mut(),
@@ -2310,13 +2190,11 @@ fn grammar_new_validates_the_grammar_and_its_arguments() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 None,
                 ptr::null_mut(),
@@ -2382,13 +2260,11 @@ fn grammar_imports_resolve_through_the_callback() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 Some(import_lib),
                 (&raw mut imports).cast::<c_void>(),
@@ -2411,13 +2287,11 @@ fn grammar_imports_resolve_through_the_callback() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 Some(import_lib),
                 (&raw mut imports).cast::<c_void>(),
@@ -2436,7 +2310,7 @@ fn grammar_imports_resolve_through_the_callback() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2488,13 +2362,11 @@ fn grammar_imports_fall_back_to_the_bundled_grammars_and_read_text_lossily() {
             hegel_grammar_new(
                 ctx,
                 test_view(text.as_ptr()),
-                test_optional(&test_view(ptr::null())),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
-                test_views(ptr::null(), 0)
-                    .as_ref()
-                    .map_or(std::ptr::null(), |views| views.as_ptr()),
+                ptr::null(),
                 0,
                 Some(import_sloppy),
                 (&raw mut imports).cast::<c_void>(),
@@ -2516,7 +2388,7 @@ fn grammar_imports_fall_back_to_the_bundled_grammars_and_read_text_lossily() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_VALID as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
@@ -2569,7 +2441,7 @@ fn generate_grammar_validates_handles_and_reports_stop_test() {
             ctx,
             tc,
             hegel_status_t::HEGEL_STATUS_OVERRUN as u32,
-            test_optional(&test_view(ptr::null())),
+            ptr::null(),
         ));
         ok(hegel_c::hegel_test_case_free(ctx, tc));
         drain(ctx, run);
