@@ -75,13 +75,15 @@ check-coverage:
 
 # Build the libhegel C shared library + checked-in C header.
 c-build:
+    python scripts/check-release-rust.py
     cargo build -p hegeltest-c --release
 
 # Type-check and build the browser-oriented raw WebAssembly artifact.
 c-build-wasm:
-    cargo +$(cat hegel-c/wasm-toolchain) check -p hegeltest-c --target wasm32-unknown-unknown
-    cargo +$(cat hegel-c/wasm-toolchain) build -p hegeltest-c --release --target wasm32-unknown-unknown
-    cargo +$(cat hegel-c/wasm-toolchain) rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
+    rustup run stable python scripts/check-release-rust.py
+    cargo +stable check -p hegeltest-c --target wasm32-unknown-unknown
+    cargo +stable build -p hegeltest-c --release --target wasm32-unknown-unknown
+    cargo +stable rustc -p hegeltest-c --release --target wasm32-unknown-unknown --features wasm-static --crate-type staticlib
 
 # Run the hegel-c smoke tests (Rust integration test that dlopens
 # libhegel) and build + run every example C program against both the

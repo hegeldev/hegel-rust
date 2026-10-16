@@ -102,9 +102,9 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         run: |
-          wasm_rust="$(cat hegel-c/wasm-toolchain)"
-          rustup toolchain install "$wasm_rust" --profile minimal -c llvm-tools-preview
-          rustup default "$wasm_rust"
+          rustup toolchain install stable --profile minimal -c llvm-tools-preview
+          rustup default stable
+          python scripts/check-release-rust.py
           rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
@@ -516,6 +516,13 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Install Rust
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          python scripts/check-release-rust.py
+
       - name: Release
         if: steps.check.outputs.skip != 'true'
         env:
@@ -536,10 +543,6 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Install Rust
-        if: steps.check.outputs.skip != 'true'
-        run: rustup toolchain install stable --profile minimal
 
       - name: Authenticate with crates.io
         if: steps.check.outputs.skip != 'true'
@@ -669,6 +672,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+          python scripts/check-release-rust.py
           rustup target add ${{ matrix.target }}
 
       - name: Build libraries
@@ -771,9 +775,9 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         run: |
-          wasm_rust="$(cat hegel-c/wasm-toolchain)"
-          rustup toolchain install "$wasm_rust" --profile minimal
-          rustup default "$wasm_rust"
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          python scripts/check-release-rust.py
           rustup target add wasm32-unknown-unknown
       - name: Build WebAssembly artifact
         run: cargo build -p hegeltest-c --release --target wasm32-unknown-unknown

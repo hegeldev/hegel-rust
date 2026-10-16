@@ -9,4 +9,4 @@ hegel_string_t label_string = {label, label_len};
 hegel_event(ctx, tc, label_string);
 ```
 
-WebAssembly builds now use the Rust version pinned in `hegel-c/wasm-toolchain` (1.97.1). A by-value string is passed as the address of an eight-byte descriptor in linear memory; a returned string uses a hidden output address. Older Rust toolchains that flatten aggregates are unsupported for Wasm builds. Native builds retain the Rust 1.86 minimum.
+Release builds and Wasm CI now use the current stable Rust compiler, with a required minimum of Rust 1.89. Local Wasm builds also select stable and enforce this minimum. A by-value string is passed as the address of an eight-byte descriptor in linear memory; a returned string uses a hidden output address. Rust toolchains older than 1.89, which flatten aggregates, are unsupported for Wasm builds. Native builds retain the Rust 1.86 minimum.
