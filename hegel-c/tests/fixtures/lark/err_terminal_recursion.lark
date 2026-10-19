@@ -1,3 +1,0 @@
-start: A
-A: "a" B
-B: A | "b"

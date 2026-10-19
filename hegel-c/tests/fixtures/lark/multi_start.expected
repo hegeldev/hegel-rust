@@ -1,7 +1,0 @@
-start first second
-terminal S	0	"s"
-terminal __ANON_0	0	"1"
-terminal __ANON_1	0	"2"
-rule first
-rule second
-rule shared

@@ -1,9 +1,0 @@
-start start
-terminal NAME	0	"(?:(?:[A-Z]|[a-z])|_)(?:(?:(?:[A-Z]|[a-z])|[0-9]|_))*"
-terminal SH_COMMENT	0	"#[^\n]*"
-terminal WS_INLINE	0	"(?:(?:\\ |\t))+"
-terminal _NL	0	"(?:(?:\r?\n[\t ]*|#[^\n]*))+"
-ignore WS_INLINE
-ignore SH_COMMENT
-rule start
-rule tree

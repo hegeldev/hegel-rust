@@ -1,7 +1,0 @@
-start: a
-a: "a" | b
-b: "b"
-c: "c" UNUSED
-UNUSED: "u"
-KEPT: "k"
-%ignore KEPT
