@@ -1,5 +1,0 @@
-error: #[rule] weight must be finite and positive
- --> tests/ui/state_machine_zero_weight.rs:7:21
-  |
-7 |     #[rule(weight = 0.0)]
-  |                     ^^^

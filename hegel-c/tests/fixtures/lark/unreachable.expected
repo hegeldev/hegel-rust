@@ -1,8 +1,0 @@
-start start
-terminal A	0	"a"
-terminal B	0	"b"
-terminal KEPT	0	"k"
-ignore KEPT
-rule a
-rule b
-rule start

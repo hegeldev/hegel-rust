@@ -1,2 +1,0 @@
-start: "a"
-%override other: "b"

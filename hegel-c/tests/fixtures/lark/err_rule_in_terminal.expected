@@ -1,2 +1,0 @@
-error
-Rules aren't allowed inside terminals (NonTerminal('start') in A)

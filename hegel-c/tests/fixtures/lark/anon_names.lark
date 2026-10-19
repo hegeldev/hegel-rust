@@ -1,3 +1,0 @@
-start: "(" "if" "then" ")" "," "," /re/ /re/ "if" "." "SPLIT" IF2 "+1"
-IF2: "if2"
-SPLIT: "split"

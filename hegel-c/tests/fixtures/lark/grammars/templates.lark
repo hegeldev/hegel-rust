@@ -1,1 +1,0 @@
-sep{item, delim}: item (delim item)*

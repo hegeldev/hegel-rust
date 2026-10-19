@@ -1,6 +1,0 @@
-// corpus: no
-// An ambiguous grammar: a string of n "1"s has a Catalan number of
-// derivations, and an Earley parse of it, Lark's as much as the
-// engine's, is cubic in n.
-start: e
-e: e "+" e | "1"

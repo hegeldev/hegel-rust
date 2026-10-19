@@ -1,5 +1,0 @@
-start start
-terminal PLUS	0	"\\+"
-terminal __ANON_0	0	"1"
-rule e
-rule start

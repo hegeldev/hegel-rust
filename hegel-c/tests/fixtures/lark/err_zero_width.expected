@@ -1,2 +1,0 @@
-error
-("Dynamic Earley doesn't allow zero-width regexps", TerminalDef('A', '(?:a)?'))

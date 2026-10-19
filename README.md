@@ -1,54 +1,26 @@
-> [!IMPORTANT]
-> We're excited you're checking out Hegel! Hegel is in beta, and we'd love for you to try it and [report any feedback](https://github.com/hegeldev/hegel-rust/issues/new).
->
-> As part of our beta, we may make breaking changes if it makes Hegel a better property-based testing library. If that instability bothers you, please check back in a few months for a stable release!
->
-> See https://hegel.dev/compatibility for more details.
+# This repository has moved
 
-# Hegel for Rust
+Hegel for Rust now lives in the Hegel monorepo at **https://github.com/hegeldev/hegel**.
 
-* [Documentation](https://docs.rs/hegeltest)
-* [Website](https://hegel.dev)
+| What you're looking for | Where it is now |
+|---|---|
+| The `hegeltest` crate (Rust frontend) and its proc macros | [`frontends/rust/`](https://github.com/hegeldev/hegel/tree/main/frontends/rust) |
+| libhegel, the engine behind every Hegel frontend (`hegeltest-c`, formerly `hegel-c/` here) | [`libhegel/`](https://github.com/hegeldev/hegel/tree/main/libhegel) |
+| Prebuilt libhegel binaries and the C header | [Releases](https://github.com/hegeldev/hegel/releases) on the new repository, tagged `libhegel/<version>` |
+| Changelogs | [`frontends/rust/CHANGELOG.md`](https://github.com/hegeldev/hegel/blob/main/frontends/rust/CHANGELOG.md) and [`libhegel/CHANGELOG.md`](https://github.com/hegeldev/hegel/blob/main/libhegel/CHANGELOG.md) |
+| Bug reports and feature requests | [hegeldev/hegel issues](https://github.com/hegeldev/hegel/issues) |
 
-`hegel-rust` is a property-based testing library for Rust. `hegel-rust` is based on [Hypothesis](https://github.com/hypothesisworks/hypothesis), using the [Hegel](https://hegel.dev/) protocol.
+Nothing changes for users of the crates: `hegeltest`, `hegeltest-macros` and `hegeltest-c` keep their names on [crates.io](https://crates.io/crates/hegeltest), and the documentation is still at [docs.rs/hegeltest](https://docs.rs/hegeltest).
 
-## Installation
+## Tags and history
 
-To install: `cargo add --dev hegeltest`.
+The full history of this repository was merged into the monorepo unchanged, so every commit here exists there too. Releases are tagged by path and version in the new repository:
 
-## Quickstart
+| Here | In hegeldev/hegel |
+|---|---|
+| `v0.50.1` (the `hegeltest` crate) | `frontends/rust/0.50.1` |
+| `libhegel-v0.47.1` | `libhegel/0.47.1` |
 
-Here's a quick example of how to write a Hegel test:
+Releases made before the move, and the libhegel binaries attached to them, remain available under this repository's [releases](https://github.com/hegeldev/hegel-rust/releases) so that existing pins keep working. New releases are published only to hegeldev/hegel.
 
-```rust
-use hegel::generators as gs;
-use hegel::TestCase;
-
-fn my_sort(ls: &[i32]) -> Vec<i32> {
-    let mut result: Vec<i32> = ls.to_vec();
-    result.sort();
-    result.dedup();
-    result
-}
-
-#[hegel::test]
-fn test_matches_builtin(tc: TestCase) {
-    let mut vec1 = tc.draw(gs::vecs(gs::integers::<i32>()));
-    let vec2 = my_sort(&vec1);
-    vec1.sort();
-    assert_eq!(vec1, vec2);
-}
-```
-
-This test will fail when run with `cargo test`! Hegel will produce a minimal failing test case for us:
-
-```
----- test_matches_builtin stdout ----
-let vec1 = [0, 0];
-thread 'test_matches_builtin' (2) panicked at tests/readme.rs:16:5:
-assertion `left == right` failed
-  left: [0, 0]
- right: [0]
-```
-
-Hegel reports the minimal example showing that our sort is incorrectly dropping duplicates. If we remove `result.dedup()` from `my_sort()`, this test will then pass (because it's just comparing the standard sort against itself).
+For general information about Hegel, see https://hegel.dev.

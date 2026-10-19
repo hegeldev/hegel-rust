@@ -1,6 +1,0 @@
-start start
-terminal A	0	"(?:a){3}"
-terminal B	0	"(?:b){1,4}"
-terminal C	0	"(?:(?:cc|c))+(?:d)*"
-terminal D	0	"(?:(?:ee)?f|e|f)"
-rule start

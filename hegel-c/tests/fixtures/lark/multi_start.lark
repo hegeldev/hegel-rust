@@ -1,5 +1,0 @@
-// start: first second
-first: "1" shared
-second: "2" shared
-shared: "s"
-other: "o"

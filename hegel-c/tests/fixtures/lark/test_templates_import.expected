@@ -1,9 +1,0 @@
-start start
-terminal COMMA	0	","
-terminal LSQB	0	"\\["
-terminal NUMBER	0	"\\d+"
-terminal RSQB	0	"\\]"
-terminal __IGNORE_0	0	"\\ "
-ignore __IGNORE_0
-rule sep{NUMBER,COMMA}
-rule start
